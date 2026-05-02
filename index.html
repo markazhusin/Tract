@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Tract</title>
+  <style>
+    :root {
+      --bg: #0e1621;
+      --bg-header: #17212b;
+      --panel: #17212b;
+      --panel-input: #242f3d;
+      --line: #0d1218;
+      --text: #f5f5f5;
+      --muted: #708499;
+      --accent: #5288c1;
+      --accent-hover: #6b9bd4;
+      --bubble-in: #182533;
+      --bubble-out: #2b5278;
+      --online: #6ac258;
+      --danger: #e56565;
+      --call-bar: #1a2733;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-top: env(safe-area-inset-top, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
+    html, body {
+      height: 100%;
+      max-height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; border: none; background: none; color: inherit; }
+    #app {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) 1fr;
+      height: 100dvh;
+      max-height: 100dvh;
+      width: 100%;
+      overflow: hidden;
+    }
+    #sidebar {
+      border-right: 1px solid var(--line);
+      background: var(--bg-header);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+    }
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .section.compact { padding-top: 10px; padding-bottom: 10px; }
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: calc(10px + var(--safe-top)) 14px 12px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+    .meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .card { background: var(--panel); border-radius: 10px; padding: 12px; }
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { color: var(--muted); font-size: 12px; }
+    .field input {
+      background: var(--panel-input);
+      border: 1px solid transparent;
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 8px;
+    }
+    .field input:focus { outline: none; border-color: var(--accent); }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .btn {
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--panel-input);
+      color: var(--text);
+      font-weight: 500;
+      text-align: center;
+    }
+    .btn.primary { background: var(--accent); color: #fff; }
+    .btn.primary:active { background: var(--accent-hover); }
+    .btn.subtle { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+    .network-status { font-size: 12px; margin-top: 6px; }
+    .network-status.online { color: var(--online); }
+    .network-status.offline { color: var(--muted); }
+    .network-status.error { color: var(--danger); }
+    .network-status.warn { color: #e7a23d; }
+    .profile-title { font-size: 15px; font-weight: 600; }
+    #contacts { padding: 4px 6px 12px; }
+    .contact {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      color: var(--text);
+    }
+    .contact:hover, .contact.active { background: #2b527833; }
+    .contact-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+    }
+    .contact strong { font-weight: 500; font-size: 15px; flex: 1; min-width: 0; text-align: left; }
+    .unread-badge {
+      flex-shrink: 0;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 20px;
+      text-align: center;
+    }
+    @keyframes slideLeft { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideRight { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes msgAppear { from { opacity: 0; transform: translateY(8px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    
+    .sidebar-header {
+      flex-shrink: 0;
+      padding: calc(10px + var(--safe-top)) 12px 10px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    
+    .sidebar-header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+    
+    .sidebar-views {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .sidebar-view {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      transform: translateX(20px);
+      pointer-events: none;
+      transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    
+    .sidebar-view.active {
+      opacity: 1;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+    
+    .sidebar-view.prev {
+      transform: translateX(-20px);
+    }
+    
+    .sidebar-view-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 0;
+    }
+    
+    .sidebar-tabs {
+      flex-shrink: 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      padding: 0;
+      border-top: 1px solid var(--line);
+      background: var(--bg-header);
+    }
+    
+    .tab-btn {
+      padding: 10px 0;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid transparent;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+    
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    
+    .section-title {
+      padding: 12px 14px 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .section-content {
+      padding: 0 10px 8px;
+    }
+    
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .card-avatar {
+      width: 48px;
+      height: 48px;
+      min-width: 48px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 600;
+    }
+    
+    .card-profile {
+      flex: 1;
+    }
+    
+    .card-profile-name {
+      font-size: 15px;
+      font-weight: 600;
+      display: block;
+      margin-bottom: 4px;
+    }
+    
+    .card-profile-id {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      margin: 0;
+      font-size: 12px;
+      border-radius: 8px;
+      background: rgba(82, 136, 193, 0.1);
+      color: var(--accent);
+      transition: all 0.2s ease;
+    }
+    
+    .status-indicator.offline {
+      background: rgba(112, 132, 153, 0.1);
+      color: var(--muted);
+    }
+    
+    .status-indicator.error {
+      background: rgba(229, 101, 101, 0.1);
+      color: var(--danger);
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    
+    .contact-item {
+      padding: 10px 10px;
+      margin: 0 6px;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+    
+    .contact-item:hover {
+      background: rgba(82, 136, 193, 0.15);
+    }
+    
+    .contact-item.active {
+      background: rgba(82, 136, 193, 0.2);
+    }
+    
+    .contact-avatar {
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    
+    .contact-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .contact-name {
+      font-weight: 500;
+      font-size: 14px;
+      display: block;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    
+    .contact-status {
+      font-size: 12px;
+      color: var(--muted);
+      display: block;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    
+    .contact-status.online {
+      color: var(--online);
+    }
+    
+    .contact-badge {
+      width: 24px;
+      height: 24px;
+      min-width: 24px;
+      border-radius: 50%;
+      background: var(--online);
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .settings-section {
+      padding: 12px;
+      background: var(--panel);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .settings-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    
+    .settings-row:last-child {
+      border-bottom: none;
+    }
+    
+    .settings-label {
+      font-size: 14px;
+      color: var(--text);
+    }
+    
+    .settings-value {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    
+    .settings-view {
+      display: flex;
+      flex-direction: column;
+      padding: 12px 6px;
+      gap: 12px;
+    }
+    
+    .header-back-btn {
+      display: none;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      align-items: center;
+      justify-content: center;
+      background: var(--panel-input);
+      flex-shrink: 0;
+      font-size: 18px;
+      line-height: 1;
+      transition: all 0.2s ease;
+    }
+    
+    .header-back-btn:active {
+      opacity: 0.85;
+    }
+    
+    .header-actions {
+      display: flex;
+      gap: 6px;
+    }
+    
+    #chat {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      background: var(--bg);
+    }
+    #chatHeader {
+      flex-shrink: 0;
+      padding: calc(10px + var(--safe-top)) 12px 10px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #chatHeaderMain { flex: 1; min-width: 0; }
+    #chatTitle { font-size: 17px; font-weight: 600; }
+    #chatSubtitle { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    #chatTools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--panel-input);
+      flex-shrink: 0;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .icon-btn:active { opacity: 0.85; }
+    #messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 12px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .msg {
+      max-width: min(520px, 85%);
+      padding: 8px 12px 6px;
+      border-radius: 12px 12px 12px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      line-height: 1.4;
+      font-size: 15px;
+      animation: msgAppear 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    .msg.sent {
+      align-self: flex-end;
+      background: var(--bubble-out);
+      border-radius: 12px 12px 4px 12px;
+    }
+    .msg.received {
+      align-self: flex-start;
+      background: var(--bubble-in);
+    }
+    .msg time { color: var(--muted); font-size: 11px; align-self: flex-end; }
+    #chat.call-bar-visible #composer {
+      padding-bottom: calc(88px + var(--safe-bottom));
+    }
+    #composer {
+      flex-shrink: 0;
+      padding: 8px 10px calc(10px + var(--safe-bottom));
+      background: var(--bg-header);
+      border-top: 1px solid var(--line);
+    }
+    #composerRow { display: flex; gap: 8px; align-items: center; }
+    #messageInput {
+      flex: 1;
+      background: var(--panel-input);
+      border: 1px solid transparent;
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 20px;
+      min-width: 0;
+    }
+    #messageInput:focus { outline: none; border-color: var(--accent); }
+    #composerRow .btn.primary {
+      flex: 0 0 auto;
+      padding: 10px 16px;
+      border-radius: 20px;
+    }
+    .empty, .empty-chat { padding: 16px; color: var(--muted); line-height: 1.55; font-size: 14px; text-align: center; }
+    .share-hint { margin-top: 8px; line-height: 1.45; }
+    #authGate {
+      position: fixed;
+      inset: 0;
+      background: rgba(14, 22, 33, 0.92);
+      backdrop-filter: blur(12px);
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      z-index: 50;
+      animation: fadeIn 0.3s ease;
+    }
+    #authShell {
+      width: min(400px, 100%);
+      background: var(--bg-header);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      animation: slideUp 0.3s ease;
+    }
+    .auth-title {
+      font-size: 18px;
+      font-weight: 600;
+    }
+    .auth-hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    #authError { color: var(--danger); font-size: 13px; min-height: 18px; }
+    #callBar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 40;
+      background: var(--call-bar);
+      border-top: 1px solid var(--line);
+      padding: 12px 14px calc(12px + var(--safe-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.35);
+      animation: slideUp 0.3s ease;
+    }
+    #callBarLabel { font-size: 15px; font-weight: 500; }
+    #callBarActions { display: flex; gap: 8px; flex-wrap: wrap; }
+    #callBarActions .btn { flex: 1; min-width: 120px; }
+    audio#remoteAudio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+
+    @media (max-width: 768px) {
+      #app {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+      }
+      #sidebar {
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        height: 100%;
+        max-height: 100dvh;
+        transition: transform 0.3s ease;
+        transform: translateX(-100%);
+      }
+      #sidebar.show {
+        transform: translateX(0);
+      }
+      #chat {
+        position: relative;
+        z-index: 10;
+        height: 100dvh;
+        max-height: 100dvh;
+      }
+      .header-back-btn {
+        display: flex;
+      }
+      #app.mobile-sidebar #sidebar {
+        transform: translateX(0);
+      }
+      #app.mobile-sidebar #chat {
+        display: none;
+      }
+    }
+  </style>
+</head>
+  <audio id="remoteAudio" autoplay playsinline></audio>
+
+  <!-- AUTH GATE -->
+  <div id="authGate">
+    <div id="authShell">
+      <div class="stack">
+        <div class="auth-title" id="authTitle">Tract</div>
+        <div class="auth-hint" id="authHint">Локальный аккаунт. Пароль хранится только у вас.</div>
+      </div>
+      <div id="registerPanel" class="stack">
+        <div class="field">
+          <label>Имя</label>
+          <input id="registerName" type="text" placeholder="Как вас видят">
+        </div>
+        <div class="field">
+          <label>Пароль</label>
+          <input id="registerPassword" type="password" placeholder="Не короче 6 символов">
+        </div>
+        <div class="field">
+          <label>Повтор пароля</label>
+          <input id="registerPasswordConfirm" type="password" placeholder="Ещё раз">
+        </div>
+        <button class="btn primary" type="button" onclick="registerAccount()">Создать аккаунт</button>
+        <button class="btn subtle" type="button" onclick="showLogin()">Уже есть аккаунт</button>
+      </div>
+      <div id="loginPanel" class="stack" hidden>
+        <div class="auth-hint">ID: <span id="loginUserId">...</span></div>
+        <div class="field">
+          <label>Пароль</label>
+          <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="current-password">
+        </div>
+        <button class="btn primary" type="button" onclick="loginAccount()">Войти</button>
+        <button class="btn subtle" type="button" onclick="showRegister()">Новый аккаунт</button>
+      </div>
+      <div id="authError"></div>
+    </div>
+  </div>
+
+  <!-- CALL BAR -->
+  <div id="callBar" hidden>
+    <div id="callBarLabel"></div>
+    <div id="callBarActions"></div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="app">
+    <!-- SIDEBAR -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h1>Tract</h1>
+        <button type="button" class="btn subtle" onclick="logoutAccount()" title="Выйти" style="padding:6px 10px;font-size:12px;">Выйти</button>
+      </div>
+
+      <div class="sidebar-views">
+        <!-- CHATS VIEW -->
+        <div id="viewChats" class="sidebar-view active">
+          <div class="sidebar-view-scroll">
+            <!-- Profile Card Upper -->
+            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
+              <div id="profileCardChats" class="card stack" hidden>
+                <div class="card-header">
+                  <div class="card-avatar" id="profileAvatarChats">−</div>
+                  <div class="card-profile">
+                    <span class="card-profile-name" id="profileNameChats">−</span>
+                    <span class="card-profile-id" id="profileUserIdChats">...</span>
+                  </div>
+                </div>
+                <button type="button" class="btn primary" onclick="switchView('settings')">Профиль</button>
+              </div>
+            </div>
+
+            <!-- Handshake Section -->
+            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
+              <div class="section-title">Подключение</div>
+              <div class="section-content">
+                <button type="button" class="btn primary" id="btnConnect" style="width:100%; margin-bottom:8px;" onclick="connectHandshake()">Подключиться</button>
+                <div class="status-indicator offline" id="networkStatus">
+                  <span class="status-dot"></span>
+                  <span id="statusText">Не в сети</span>
+                </div>
+                <button type="button" class="btn subtle" style="width:100%; margin-top:8px;" onclick="copyAppShareLink()">Ссылка для друга</button>
+              </div>
+            </div>
+
+            <!-- Contacts Section -->
+            <div class="section" style="padding: 0; border-bottom: 1px solid var(--line);">
+              <div class="section-title">Контакты</div>
+              <div class="section-content">
+                <div id="contacts"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONTACTS VIEW -->
+        <div id="viewContacts" class="sidebar-view">
+          <div class="sidebar-view-scroll">
+            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
+              <div class="section-title">Добавить контакт</div>
+              <div class="section-content stack" style="gap: 8px;">
+                <div class="field">
+                  <label>User ID</label>
+                  <input id="addUserId" type="text" placeholder="ID контакта" autocomplete="off">
+                </div>
+                <button type="button" class="btn primary" onclick="addContactById()">Добавить</button>
+              </div>
+            </div>
+
+            <div class="section" style="padding: 0; border-bottom: 1px solid var(--line);">
+              <div class="section-title">Все контакты</div>
+              <div class="section-content">
+                <div id="contactsList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SETTINGS VIEW -->
+        <div id="viewSettings" class="sidebar-view">
+          <div class="sidebar-view-scroll">
+            <div class="settings-view">
+              <!-- Profile Card -->
+              <div id="profileCardSettings" class="settings-section stack">
+                <div class="card-header">
+                  <div class="card-avatar" id="profileAvatarSettings">−</div>
+                  <div class="card-profile">
+                    <span class="card-profile-name" id="profileNameSettings">−</span>
+                    <span class="card-profile-id" id="profileUserIdSettings">...</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Edit Profile -->
+              <div class="settings-section">
+                <div class="field">
+                  <label>Имя в чате</label>
+                  <input id="displayNameInput" type="text" placeholder="Ваше имя">
+                </div>
+                <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
+              </div>
+
+              <!-- Account Info -->
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label">User ID</span>
+                  <span class="settings-value" id="settingUserId">...</span>
+                </div>
+                <div class="settings-row">
+                  <span class="settings-label">Peer ID</span>
+                  <span class="settings-value" id="settingPeerId">...</span>
+                </div>
+              </div>
+
+              <!-- Connection Info -->
+              <div class="settings-section">
+                <div class="settings-row">
+                  <span class="settings-label">Статус соединения</span>
+                  <span class="settings-value" id="settingStatus">Не в сети</span>
+                </div>
+              </div>
+
+              <!-- Danger Zone -->
+              <div class="settings-section" style="border: 1px solid rgba(229, 101, 101, 0.3);">
+                <div class="field">
+                  <label style="color: var(--danger);">Опасная зона</label>
+                </div>
+                <button type="button" class="btn subtle" onclick="logoutAccount()">Выйти из аккаунта</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TABS -->
+      <div class="sidebar-tabs">
+        <button type="button" class="tab-btn active" id="tabChats" onclick="switchView('chats')">💬 Чаты</button>
+        <button type="button" class="tab-btn" id="tabContacts" onclick="switchView('contacts')">👥 Контакты</button>
+        <button type="button" class="tab-btn" id="tabSettings" onclick="switchView('settings')">⚙️ Профиль</button>
+      </div>
+    </aside>
+
+    <!-- CHAT MAIN -->
+    <main id="chat">
+      <header id="chatHeader">
+        <button type="button" class="header-back-btn" onclick="goBackFromChat()">←</button>
+        <div id="chatHeaderMain">
+          <div id="chatTitle">Чаты</div>
+          <div id="chatSubtitle">Выберите диалог</div>
+        </div>
+        <div class="header-actions">
+          <button type="button" class="icon-btn" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок">📞</button>
+        </div>
+      </header>
+
+      <section id="messages">
+        <div class="empty-chat">Войдите и нажмите «Подключиться»</div>
+      </section>
+
+      <footer id="composer">
+        <div id="composerRow">
+          <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
+            onkeydown="if(event.key==='Enter') sendCurrentMessage()">
+          <button type="button" class="btn primary" onclick="sendCurrentMessage()">→</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
