@@ -187,16 +187,42 @@ function getContactInitials(displayName) {
   return clean.slice(0, 2).toUpperCase();
 }
 
+function getAvatarUrl(userId) {
+  if (!userId) return null;
+  return localStorage.getItem(`tract.avatar.${userId}`);
+}
+
+function setAvatarHtml(el, userId, initials) {
+  const url = getAvatarUrl(userId);
+  if (url) {
+    el.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+  } else {
+    el.textContent = initials;
+  }
+}
+
+window.handleAvatarUpload = (event) => {
+  const file = event.target.files?.[0];
+  if (!file || !state.profile) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    localStorage.setItem(`tract.avatar.${state.profile.userId}`, e.target.result);
+    renderProfileCards();
+    renderContacts();
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+};
+
 function renderProfileCards() {
   if (!state.profile) return;
   
   const initials = getContactInitials(state.profile.displayName);
   
-  // Profile card in Settings view
   const avatarSettings = $('profileAvatarSettings');
   const nameSettings = $('profileNameSettings');
   const idSettings = $('profileUserIdSettings');
-  if (avatarSettings) avatarSettings.textContent = initials;
+  if (avatarSettings) setAvatarHtml(avatarSettings, state.profile.userId, initials);
   if (nameSettings) nameSettings.textContent = state.profile.displayName;
   if (idSettings) idSettings.textContent = state.profile.userId;
 }
@@ -673,7 +699,8 @@ window.connectHandshake = async () => {
       activePeerId: fromPeerId,
       online: true,
       roomId,
-      lastMsg: packet.content
+      lastMsg: packet.content,
+      lastTime: packet.timestamp
     });
   });
 
@@ -742,7 +769,8 @@ window.clearCurrentHistory = async (scope = 'me') => {
   if (contact) {
     await upsertContact(chatId, {
       ...contact,
-      lastMsg: ''
+      lastMsg: '',
+      lastTime: 0
     });
   }
   await renderChatHistory(chatId);
@@ -882,7 +910,8 @@ window.sendCurrentMessage = async () => {
   packet._dbId = dbKey;
   await upsertContact(chatId, {
     ...contact,
-    lastMsg: text
+    lastMsg: text,
+    lastTime: packet.timestamp
   });
   if (state.currentChatId === chatId) {
     addMessageToUI(packet, true, { pending: true });
@@ -905,7 +934,8 @@ async function deliverOutgoingMessage(chatId, packet) {
       ...contact,
       activePeerId: targetPeerId,
       online: true,
-      lastMsg: packet.content
+      lastMsg: packet.content,
+      lastTime: packet.timestamp
     });
     markMessageDelivered(packet._dbId || packet.id);
   } catch (error) {
@@ -990,16 +1020,22 @@ function renderContacts() {
     for (const [id, contact] of items) {
       const unread = state.unreadCounts.get(id) || 0;
       const initials = getContactInitials(contact.displayName || id);
+      const preview = contact.lastMsg ? truncate(contact.lastMsg, 40) : (contact.online ? 'В сети' : '');
+      const time = contact.lastTime ? formatDate(contact.lastTime) : '';
       
       const btn = document.createElement('button');
       btn.className = `contact-item ${id === state.currentChatId ? 'active' : ''}`;
+      
       btn.innerHTML = `
-        <div class="contact-avatar">${initials}</div>
+        <div class="contact-avatar">${getAvatarHtml(id, initials)}</div>
         <div class="contact-info">
-          <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
-          <span class="contact-status ${contact.online ? 'online' : ''}">${contact.online ? 'В сети' : 'Не в сети'}</span>
+          <div class="contact-name-row">
+            <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(getContactLabel(contact))}</span>
+            <span class="contact-time">${time}</span>
+          </div>
+          <span class="contact-preview${unread > 0 ? ' has-unread' : ''}">${escapeHtml(preview)}</span>
         </div>
-        ${unread > 0 ? `<div class="contact-badge">${unread > 99 ? '99+' : unread}</div>` : ''}
+        ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
       `;
       btn.onclick = () => openChat(id);
       container.appendChild(btn);
@@ -1008,6 +1044,14 @@ function renderContacts() {
   
   render(container1, true);
   render(container2, false);
+}
+
+function getAvatarHtml(userId, initials) {
+  const url = getAvatarUrl(userId);
+  if (url) {
+    return `<img src="${escapeHtml(url)}" alt="">`;
+  }
+  return initials;
 }
 
 function escapeHtml(s) {
@@ -1174,7 +1218,8 @@ async function handleMessageControl(packet, fromPeerId) {
   if (contact) {
     await upsertContact(chatId, {
       ...contact,
-      lastMsg: ''
+      lastMsg: '',
+      lastTime: 0
     });
   }
 }
@@ -1584,6 +1629,22 @@ function formatTime(timestamp) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function formatDate(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (diffDays === 1) return 'Вчера';
+  if (diffDays < 7) {
+    return date.toLocaleDateString([], { weekday: 'short' });
+  }
+  return date.toLocaleDateString([], { day: 'numeric', month: 'short' });
 }
 
 init();
