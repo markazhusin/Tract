@@ -1193,12 +1193,14 @@ function updateCallBar() {
   if (!ac) {
     bar.hidden = true;
     if (chat) chat.classList.remove('call-bar-visible');
+    updateMobileLayout();
     renderChatHeader();
     return;
   }
 
   bar.hidden = false;
   if (chat) chat.classList.add('call-bar-visible');
+  updateMobileLayout();
   const label = $('callBarLabel');
   const actions = $('callBarActions');
   const contact = state.contacts.get(ac.peerUserId);
@@ -1263,8 +1265,8 @@ function updateMobileLayout() {
   const narrow = window.matchMedia('(max-width: 768px)').matches;
   
   if (narrow) {
-    // On mobile: sidebar visible by default, hide when chat is open
-    sidebar.classList.toggle('chat-open', !!state.currentChatId);
+    // On mobile: sidebar visible by default, hide when chat is open or call is active
+    sidebar.classList.toggle('chat-open', !!(state.currentChatId || state.activeCall));
   } else {
     sidebar.classList.remove('chat-open');
   }
@@ -1273,11 +1275,7 @@ function updateMobileLayout() {
 window.startVoiceCall = async () => {
   if (!state.currentChatId || !state.transport || !state.multiplexer || !state.profile) return;
   const contact = state.contacts.get(state.currentChatId);
-  let peerId = contact?.activePeerId;
-  if (!peerId) {
-    peerId = await resolvePeerForUser(state.currentChatId);
-  }
-  if (!peerId) {
+  if (!contact?.activePeerId) {
     setStatus('error', 'Собеседник не в сети');
     return;
   }
@@ -1287,7 +1285,7 @@ window.startVoiceCall = async () => {
   state.activeCall = {
     callId,
     peerUserId: state.currentChatId,
-    remotePeerId: peerId,
+    remotePeerId: contact.activePeerId,
     status: 'ringing',
     role: 'caller'
   };
@@ -1295,7 +1293,7 @@ window.startVoiceCall = async () => {
   updateCallBar();
 
   try {
-    await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
+    await state.transport.startAudioCallWithLocalMedia(contact.activePeerId, { asOfferer: false });
   } catch (e) {
     console.warn('Caller audio setup failed:', e);
   }
@@ -1309,7 +1307,7 @@ window.startVoiceCall = async () => {
         senderId: state.profile.userId,
         senderName: state.profile.displayName
       },
-      peerId
+      contact.activePeerId
     );
   } catch (e) {
     console.warn('Invite failed:', e);
