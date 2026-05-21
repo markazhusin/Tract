@@ -11,6 +11,7 @@ export class WebRTCTransport {
   onMessageCallback = null;
   onPeerDiscoveryCallback = null;
   onPeerOfflineCallback = null;
+  onPeerConnectedCallback = null;
   onRemoteAudioStreamCallback = null;
   discoveryTimer = null;
 
@@ -356,6 +357,7 @@ export class WebRTCTransport {
       if (peer) {
         peer.connected = true;
       }
+      this.onPeerConnectedCallback?.(peerId);
     };
 
     channel.onclose = () => {
@@ -396,11 +398,7 @@ export class WebRTCTransport {
     peer.channel.send(JSON.stringify(packet));
   }
 
-  async waitForOpenPeer(peerId, timeoutMs = 8000) {
-    if (!this.peers.has(peerId) && this.onlinePeers.has(peerId) && this.shouldInitiateConnection(peerId)) {
-      this.connectToPeer(peerId);
-    }
-
+  async waitForOpenPeer(peerId, timeoutMs = 20000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peer = this.peers.get(peerId);
@@ -408,7 +406,12 @@ export class WebRTCTransport {
         return peer;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Initiate connection if peer is online and not yet connected
+      if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
+        this.connectToPeer(peerId);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
     const peer = this.peers.get(peerId);
@@ -428,6 +431,10 @@ export class WebRTCTransport {
 
   onPeerOffline(callback) {
     this.onPeerOfflineCallback = callback;
+  }
+
+  onPeerConnected(callback) {
+    this.onPeerConnectedCallback = callback;
   }
 
   onRemoteAudioStream(callback) {

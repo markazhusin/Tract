@@ -605,6 +605,26 @@ window.connectHandshake = async () => {
     });
   });
 
+  state.transport.onPeerConnected(async (peerId) => {
+    const userId = findUserIdByPeerId(peerId);
+    if (!userId) return;
+    // Retry pending messages now that data channel is open
+    try {
+      const pending = await messageDB.getUndeliveredMessages(userId);
+      for (const msg of pending) {
+        try {
+          await state.multiplexer.send(msg, peerId);
+          await messageDB.markMessageSent(msg.id);
+          markMessageDelivered(msg.id);
+        } catch (e) {
+          console.warn('onPeerConnected send failed:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('onPeerConnected retry failed:', e);
+    }
+  });
+
   state.transport.onRemoteAudioStream((_peerId, stream) => {
     bindRemoteAudioStream(stream);
   });
