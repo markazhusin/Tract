@@ -1,13 +1,15 @@
 import QRCode from 'qrcode';
 import {
   clearSessionPeerId,
+  fetchIdentityFromServer,
   getLegacyIdentityMetadata,
   getOrCreateSessionPeerId,
   getStoredIdentityMetadata,
   registerIdentity,
   unlockIdentity,
   updateStoredDisplayName,
-  unlockSimpleIdentity
+  unlockSimpleIdentity,
+  uploadIdentityToServer
 } from './app/core/keypair.js';
 import { Multiplexer } from './app/core/multiplexer.js';
 import { WebRTCTransport } from './app/transports/webrtc.js';
@@ -34,7 +36,8 @@ const state = {
   activeCall: null,
   unreadCounts: new Map(),
   micMuted: false,
-  selectedMessageIds: new Set()
+  selectedMessageIds: new Set(),
+  ringTone: null
 };
 
 function defaultSignalingUrl() {
@@ -299,14 +302,9 @@ window.showRegister = () => openGate('register', {
 });
 window.showLogin = () => {
   const identity = getStoredIdentityMetadata();
-  if (!identity) {
-    $('authError').textContent = 'Сначала создайте аккаунт.';
-    return;
-  }
-
-  $('loginUserId').textContent = identity.userId;
+  $('loginUserId').textContent = identity?.userId || '@login';
   const loginInput = $('loginName');
-  if (loginInput) loginInput.value = identity.userId;
+  if (loginInput && identity?.userId) loginInput.value = identity.userId;
   openGate('login', {
     title: 'Вход в Tract',
     hint: 'Введите логин и пароль.'
@@ -345,6 +343,7 @@ window.registerAccount = async () => {
     const auth = await registerIdentity(password, login, { reuseLegacy: true, userId: login });
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
+    await uploadIdentityToServer(resolveSignalingUrl());
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
     console.error('Register failed:', error);
@@ -359,10 +358,24 @@ window.loginAccount = async () => {
     return;
   }
   const storedIdentity = getStoredIdentityMetadata();
-  if (storedIdentity && storedIdentity.simple) {
+  const login = normalizeLogin($('loginName')?.value || $('loginUserId')?.textContent);
+  const password = $('loginPassword').value;
+
+  if (!isValidLogin(login)) {
+    $('authError').textContent = 'Введите логин вида @login';
+    return;
+  }
+
+  if (!password) {
+    $('authError').textContent = 'Введите пароль';
+    return;
+  }
+
+  if (storedIdentity && storedIdentity.simple && normalizeLogin(storedIdentity.userId) === login) {
     // simple identity: no password required
     try {
       const auth = unlockSimpleIdentity();
+      await uploadIdentityToServer(resolveSignalingUrl());
       await bootstrapAuthenticatedSession(auth);
     } catch (e) {
       console.error('Simple login failed:', e);
@@ -371,23 +384,25 @@ window.loginAccount = async () => {
     return;
   }
 
-  const login = normalizeLogin($('loginName')?.value || $('loginUserId')?.textContent);
-  const password = $('loginPassword').value;
-  if (storedIdentity?.userId && login !== normalizeLogin(storedIdentity.userId)) {
-    $('authError').textContent = 'На этом устройстве сохранён другой логин';
-    return;
-  }
-  if (!password) {
-    $('authError').textContent = 'Введите пароль';
-    return;
-  }
-
   $('authError').textContent = '';
 
   try {
-    const auth = await unlockIdentity(password);
+    const sameLocalLogin = storedIdentity?.userId && normalizeLogin(storedIdentity.userId) === login;
+    let auth;
+    if (sameLocalLogin) {
+      auth = await unlockIdentity(password);
+    } else {
+      const serverUrl = resolveSignalingUrl();
+      const fetched = await fetchIdentityFromServer(serverUrl, login);
+      if (fetched) {
+        auth = await unlockIdentity(password);
+      } else {
+        auth = await registerIdentity(password, login, { reuseLegacy: false, userId: login });
+      }
+    }
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
+    await uploadIdentityToServer(resolveSignalingUrl());
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
     console.error('Login failed:', error);
@@ -434,6 +449,7 @@ async function bootstrapAuthenticatedSession(auth) {
 window.logoutAccount = async () => {
   sessionStorage.removeItem(SESSION_PASSWORD_KEY);
   localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+  stopRingTone();
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
   state.activeCall = null;
@@ -1032,6 +1048,52 @@ async function hangupCallAudio(peerId) {
   }
 }
 
+function startRingTone(kind) {
+  stopRingTone();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    const ctx = new AudioContextClass();
+    const gain = ctx.createGain();
+    gain.gain.value = kind === 'incoming' ? 0.08 : 0.045;
+    gain.connect(ctx.destination);
+
+    let stopped = false;
+    const playPulse = () => {
+      if (stopped) return;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(kind === 'incoming' ? 880 : 520, now);
+      osc.frequency.exponentialRampToValueAtTime(kind === 'incoming' ? 660 : 620, now + 0.18);
+      osc.connect(gain);
+      osc.start(now);
+      osc.stop(now + 0.32);
+    };
+
+    ctx.resume?.().catch(() => {});
+    playPulse();
+    const intervalMs = kind === 'incoming' ? 900 : 1300;
+    const timer = window.setInterval(playPulse, intervalMs);
+    state.ringTone = {
+      stop: () => {
+        stopped = true;
+        window.clearInterval(timer);
+        ctx.close().catch(() => {});
+      }
+    };
+  } catch (error) {
+    console.warn('Ring tone failed:', error);
+  }
+}
+
+function stopRingTone() {
+  if (!state.ringTone) return;
+  state.ringTone.stop();
+  state.ringTone = null;
+}
+
 async function handleCallControl(packet, fromPeerId) {
   const { action, callId } = packet;
   const peerUserId = packet.senderId || findUserIdByPeerId(fromPeerId);
@@ -1057,13 +1119,14 @@ async function handleCallControl(packet, fromPeerId) {
     try {
       navigator.vibrate?.(100);
     } catch {}
+    startRingTone('incoming');
     updateCallBar();
     updateMobileLayout();
     return;
   }
 
   if (action === 'accept' && callId && state.activeCall?.role === 'caller' && state.activeCall.callId === callId) {
-    state.transport?.expectVoiceAnswer(fromPeerId);
+    stopRingTone();
     state.activeCall.status = 'active';
     updateCallBar();
     queueMicrotask(() => playRemoteAudioIfReady());
@@ -1071,12 +1134,14 @@ async function handleCallControl(packet, fromPeerId) {
   }
 
   if (action === 'reject' && callId && state.activeCall?.callId === callId) {
+    stopRingTone();
     state.activeCall = null;
     updateCallBar();
     return;
   }
 
   if (action === 'end' && callId && state.activeCall?.callId === callId) {
+    stopRingTone();
     await hangupCallAudio(fromPeerId);
     state.activeCall = null;
     state.micMuted = false;
@@ -1245,7 +1310,14 @@ window.startVoiceCall = async () => {
     status: 'ringing',
     role: 'caller'
   };
+  startRingTone('outgoing');
   updateCallBar();
+
+  try {
+    await state.transport.startAudioCallWithLocalMedia(contact.activePeerId, { asOfferer: false });
+  } catch (e) {
+    console.warn('Caller audio setup failed:', e);
+  }
 
   try {
     await state.multiplexer.send(
@@ -1260,6 +1332,7 @@ window.startVoiceCall = async () => {
     );
   } catch (e) {
     console.warn('Invite failed:', e);
+    stopRingTone();
     state.activeCall = null;
     updateCallBar();
     setStatus('error', 'Не удалось позвонить');
@@ -1275,6 +1348,7 @@ window.answerVoiceCall = async () => {
   if (!peerId) return;
 
   try {
+    stopRingTone();
     await state.multiplexer.send(
       {
         type: 'call',
@@ -1290,6 +1364,7 @@ window.answerVoiceCall = async () => {
     await playRemoteAudioIfReady();
   } catch (e) {
     console.warn('Answer failed:', e);
+    stopRingTone();
     state.activeCall = null;
     updateCallBar();
     setStatus('error', 'Не удалось ответить');
@@ -1300,6 +1375,7 @@ window.declineVoiceCall = async () => {
   const ac = state.activeCall;
   if (!ac || ac.status !== 'incoming' || !state.multiplexer || !state.profile) return;
 
+  stopRingTone();
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
   if (peerId) {
@@ -1321,6 +1397,7 @@ window.declineVoiceCall = async () => {
 
 window.endVoiceCall = async () => {
   const ac = state.activeCall;
+  stopRingTone();
   if (!ac || !state.multiplexer || !state.profile) {
     state.activeCall = null;
     state.micMuted = false;

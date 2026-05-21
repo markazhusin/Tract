@@ -159,6 +159,11 @@ export class WebRTCTransport {
 
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
     await this.ready;
+
+    if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
+      this.connectToPeer(peerId);
+    }
+
     const peerState = await this.waitForPeerState(peerId, 12000);
     if (!peerState?.pc || !peerState.audioTransceiver) {
       throw new Error('Peer connection not ready for audio');
@@ -220,7 +225,7 @@ export class WebRTCTransport {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peerState = this.peers.get(peerId);
-      if (peerState?.channel?.readyState === 'open') {
+      if (peerState && peerState.pc && peerState.audioTransceiver) {
         return peerState;
       }
       await new Promise((r) => setTimeout(r, 120));
@@ -271,8 +276,7 @@ export class WebRTCTransport {
       try {
         await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
 
-        if (peerState.expectVoiceAnswer && !peerState.localAudioStream) {
-          peerState.expectVoiceAnswer = false;
+        if (!peerState.localAudioStream) {
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true },
             video: false

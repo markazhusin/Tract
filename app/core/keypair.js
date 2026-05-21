@@ -199,8 +199,52 @@ export function getOrCreateSessionPeerId(baseId) {
     return saved;
   }
 
-  const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 4);
+  const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
   const peerId = `${baseId}-${suffix}`;
   localStorage.setItem(SESSION_PEER_KEY, peerId);
   return peerId;
+}
+
+/**
+ * Отправить локальный identity-блоб на сервер.
+ * Позволяет восстановить аккаунт из другого браузерного контекста
+ * (например, из home screen PWA на iOS).
+ */
+export async function uploadIdentityToServer(serverUrl) {
+  const blob = localStorage.getItem(IDENTITY_KEY);
+  if (!blob) return;
+  const meta = JSON.parse(blob);
+  try {
+    const res = await fetch(`${serverUrl.replace(/\/$/, '')}/identity/store`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: meta.userId, identityBlob: blob })
+    });
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    console.log(`[Identity] Uploaded to server for ${meta.userId}`);
+  } catch (err) {
+    console.warn('[Identity] Failed to upload to server:', err);
+  }
+}
+
+/**
+ * Загрузить identity-блоб с сервера и сохранить в localStorage.
+ * Возвращает true, если блоб был найден и сохранён.
+ */
+export async function fetchIdentityFromServer(serverUrl, userId) {
+  try {
+    const res = await fetch(`${serverUrl.replace(/\/$/, '')}/identity/${encodeURIComponent(userId)}`);
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    const data = await res.json();
+    if (data.identityBlob) {
+      localStorage.setItem(IDENTITY_KEY, data.identityBlob);
+      console.log(`[Identity] Fetched from server for ${userId}`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn('[Identity] Failed to fetch from server:', err);
+    return false;
+  }
 }

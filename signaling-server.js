@@ -9,6 +9,7 @@ const app = express();
 const server = http.createServer(app);
 const peers = new Map();
 const signalingChannels = new Map();
+const identityStore = new Map();
 const PEER_TTL_MS = 15000;
 
 app.use((req, res, next) => {
@@ -151,8 +152,33 @@ app.get('/health', (req, res) => {
     status: 'ok',
     peers: peers.size,
     rooms: new Set(Array.from(peers.values()).map((peer) => peer.roomId)).size,
+    identities: identityStore.size,
     timestamp: Date.now()
   });
+});
+
+/**
+ * Хранилище identity-блобов (зашифрованы на клиенте, сервер не расшифровывает).
+ * Позволяет одному и тому же аккаунту быть доступным из разных браузерных контекстов
+ * (например, Safari и home screen PWA на iOS, у которых изолированное localStorage).
+ */
+app.post('/identity/store', (req, res) => {
+  const { userId, identityBlob } = req.body;
+  if (!userId || !identityBlob) {
+    return res.status(400).json({ error: 'userId and identityBlob are required' });
+  }
+  identityStore.set(userId, { blob: identityBlob, updatedAt: Date.now() });
+  console.log(`[Identity] Stored for ${userId}`);
+  res.json({ status: 'ok' });
+});
+
+app.get('/identity/:userId', (req, res) => {
+  const { userId } = req.params;
+  const record = identityStore.get(userId);
+  if (!record) {
+    return res.status(404).json({ error: 'identity not found' });
+  }
+  res.json({ identityBlob: record.blob, updatedAt: record.updatedAt });
 });
 
 const distDir = path.join(__dirname, 'dist');
