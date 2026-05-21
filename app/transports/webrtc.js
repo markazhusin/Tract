@@ -50,7 +50,7 @@ export class WebRTCTransport {
   }
 
   async refreshPeers() {
-    const peers = await this.signaling.listPeers();
+    const peers = (await this.signaling.listPeers()).filter((peer) => this.isAllowedPeer(peer));
     const nextOnline = new Set(peers.map((peer) => peer.peerId));
 
     for (const peer of peers) {
@@ -77,6 +77,19 @@ export class WebRTCTransport {
       this.closePeer(peerId);
       this.onPeerOfflineCallback?.(peerId, peerMeta);
     }
+  }
+
+  isAllowedPeer(peer) {
+    const allowed = this.options.allowedUserIds;
+    if (!allowed || allowed.size === 0) return false;
+    return allowed.has(peer.userId);
+  }
+
+  setAllowedUserIds(userIds) {
+    this.options.allowedUserIds = new Set(userIds || []);
+    this.refreshPeers().catch((error) => {
+      console.warn('Allowed peer refresh failed:', error);
+    });
   }
 
   shouldInitiateConnection(peerId) {

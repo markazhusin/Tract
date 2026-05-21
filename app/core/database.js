@@ -100,6 +100,30 @@ export class MessageDatabase {
     });
   }
 
+  async deleteMessages(messageIds) {
+    if (!messageIds?.length) return;
+    const db = await this.getDB();
+    const transaction = db.transaction(['messages'], 'readwrite');
+    const store = transaction.objectStore('messages');
+
+    await Promise.all(messageIds.map((id) => new Promise((resolve, reject) => {
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    })));
+  }
+
+  async deleteMessagesByPacketIds(chatId, packetIds) {
+    const ids = new Set((packetIds || []).filter(Boolean));
+    if (!ids.size) return;
+    const messages = await this.getMessages(chatId);
+    const localIds = messages
+      .filter((message) => ids.has(message.packetId))
+      .map((message) => message.id)
+      .filter((id) => id !== undefined);
+    await this.deleteMessages(localIds);
+  }
+
   async deleteChat(chatId) {
     const db = await this.getDB();
     const transaction = db.transaction(['messages'], 'readwrite');

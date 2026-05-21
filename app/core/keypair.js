@@ -98,7 +98,7 @@ export function getLegacyIdentityMetadata() {
 export async function registerIdentity(password, displayName, options = {}) {
   const legacyIdentity = options.reuseLegacy !== false ? getLegacyIdentityMetadata() : null;
   const keyPair = legacyIdentity?.keyPair || await generateKeyPair();
-  const userId = getUserIdFromKeyPair(keyPair);
+  const userId = options.userId || getUserIdFromKeyPair(keyPair);
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const aesKey = await deriveAesKey(password, salt);
@@ -189,6 +189,7 @@ export function updateStoredDisplayName(displayName) {
 
 export function clearSessionPeerId() {
   sessionStorage.removeItem(SESSION_PEER_KEY);
+  localStorage.removeItem(SESSION_PEER_KEY);
 }
 
 export function getOrCreateSessionPeerId(baseId) {

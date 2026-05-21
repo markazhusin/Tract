@@ -7,7 +7,6 @@ import {
   registerIdentity,
   unlockIdentity,
   updateStoredDisplayName,
-  createSimpleIdentity,
   unlockSimpleIdentity
 } from './app/core/keypair.js';
 import { Multiplexer } from './app/core/multiplexer.js';
@@ -17,9 +16,11 @@ import { messageDB } from './app/core/database.js';
 const SIGNALING_URL_KEY = 'tract.signaling.url';
 const ROOM_ID_KEY = 'tract.room.id';
 const SESSION_PASSWORD_KEY = 'tract.session.unlockPassword';
-/** Общая «комната» по умолчанию: все с одной ссылкой и «Подключиться» видят друг друга. */
+const REMEMBER_PASSWORD_KEY = 'tract.session.rememberedPassword';
+/** Внутреннее единое пространство. В UI комнат больше нет. */
 const DEFAULT_ROOM_ID = 'tract-public';
 const SESSION_ID_PATTERN = /^[a-f0-9]{12}-[a-f0-9]{4}$/i;
+const LOGIN_PATTERN = /^@[a-z0-9_]{3,32}$/i;
 
 const state = {
   keyPair: null,
@@ -32,7 +33,8 @@ const state = {
   contacts: new Map(),
   activeCall: null,
   unreadCounts: new Map(),
-  micMuted: false
+  micMuted: false,
+  selectedMessageIds: new Set()
 };
 
 function defaultSignalingUrl() {
@@ -106,6 +108,16 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function normalizeLogin(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  return raw.startsWith('@') ? raw : `@${raw}`;
+}
+
+function isValidLogin(value) {
+  return LOGIN_PATTERN.test(value);
+}
+
 async function bindRemoteAudioStream(stream) {
   const el = $('remoteAudio');
   if (!el || !stream) return;
@@ -164,11 +176,12 @@ window.switchView = (viewName) => {
 };
 
 function getContactInitials(displayName) {
-  const parts = (displayName || '?').split(' ');
+  const clean = (displayName || '?').replace(/^@/, '');
+  const parts = clean.split(' ');
   if (parts.length >= 2) {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
-  return displayName.slice(0, 2).toUpperCase();
+  return clean.slice(0, 2).toUpperCase();
 }
 
 function renderProfileCards() {
@@ -218,7 +231,7 @@ async function init() {
 
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
-  const sessionPw = sessionStorage.getItem(SESSION_PASSWORD_KEY);
+  const sessionPw = localStorage.getItem(REMEMBER_PASSWORD_KEY) || sessionStorage.getItem(SESSION_PASSWORD_KEY);
 
   if (identity && sessionPw) {
     try {
@@ -232,9 +245,11 @@ async function init() {
 
   if (identity) {
     $('loginUserId').textContent = identity.userId;
+    const loginInput = $('loginName');
+    if (loginInput) loginInput.value = identity.userId;
     openGate('login', {
       title: 'Вход в Tract',
-      hint: 'Введите пароль, чтобы разблокировать существующий локальный аккаунт.'
+      hint: 'Введите логин и пароль.'
     });
   } else if (legacyIdentity) {
     $('registerName').value = legacyIdentity.profile.displayName;
@@ -245,7 +260,7 @@ async function init() {
   } else {
     openGate('register', {
       title: 'Регистрация в Tract',
-      hint: 'Сначала создаётся локальный аккаунт устройства. Если аккаунт уже есть, переключитесь на вход.'
+      hint: 'Создайте логин вида @login и пароль.'
     });
   }
 
@@ -284,19 +299,21 @@ function closeGate() {
 
 window.showRegister = () => openGate('register', {
   title: 'Регистрация в Tract',
-  hint: 'Создайте локальный аккаунт устройства. Приватный ключ останется в браузере.'
+  hint: 'Создайте логин вида @login и пароль.'
 });
 window.showLogin = () => {
   const identity = getStoredIdentityMetadata();
   if (!identity) {
-    $('authError').textContent = 'Старый локальный аккаунт нужно сначала зашифровать паролем через регистрацию.';
+    $('authError').textContent = 'Сначала создайте аккаунт.';
     return;
   }
 
   $('loginUserId').textContent = identity.userId;
+  const loginInput = $('loginName');
+  if (loginInput) loginInput.value = identity.userId;
   openGate('login', {
     title: 'Вход в Tract',
-    hint: 'Введите пароль, чтобы разблокировать аккаунт.'
+    hint: 'Введите логин и пароль.'
   });
 };
 
@@ -307,28 +324,15 @@ window.registerAccount = async () => {
     return;
   }
 
-  const displayName = $('registerName').value.trim() || '';
+  const login = normalizeLogin($('registerName').value);
   const password = $('registerPassword').value;
   const confirm = $('registerPasswordConfirm').value;
 
-  // If no password provided, create a simple identity (latin+digits only)
-  if (!password) {
-    if (!/^[a-zA-Z0-9]{3,32}$/.test(displayName)) {
-      $('authError').textContent = 'Имя должно содержать только латиницу и цифры (3-32 символа)';
-      return;
-    }
-    $('authError').textContent = '';
-    try {
-      const auth = await createSimpleIdentity(displayName);
-      await bootstrapAuthenticatedSession(auth);
-    } catch (error) {
-      console.error('Simple register failed:', error);
-      $('authError').textContent = 'Не удалось создать простой аккаунт';
-    }
+  if (!isValidLogin(login)) {
+    $('authError').textContent = 'Логин должен быть вида @login: латиница, цифры или _, 3-32 символа';
     return;
   }
 
-  // Normal secure registration with password
   if (password.length < 6) {
     $('authError').textContent = 'Пароль должен быть не короче 6 символов';
     return;
@@ -342,8 +346,9 @@ window.registerAccount = async () => {
   $('authError').textContent = '';
 
   try {
-    const auth = await registerIdentity(password, displayName || 'Anonymous', { reuseLegacy: true });
+    const auth = await registerIdentity(password, login, { reuseLegacy: true, userId: login });
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
+    localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
     console.error('Register failed:', error);
@@ -357,8 +362,8 @@ window.loginAccount = async () => {
       'Нужен HTTPS (или localhost). Откройте страницу по https:// (см. npm run start).';
     return;
   }
-  const stored = getStoredIdentityMetadata();
-  if (stored && stored.simple) {
+  const storedIdentity = getStoredIdentityMetadata();
+  if (storedIdentity && storedIdentity.simple) {
     // simple identity: no password required
     try {
       const auth = unlockSimpleIdentity();
@@ -370,7 +375,12 @@ window.loginAccount = async () => {
     return;
   }
 
+  const login = normalizeLogin($('loginName')?.value || $('loginUserId')?.textContent);
   const password = $('loginPassword').value;
+  if (storedIdentity?.userId && login !== normalizeLogin(storedIdentity.userId)) {
+    $('authError').textContent = 'На этом устройстве сохранён другой логин';
+    return;
+  }
   if (!password) {
     $('authError').textContent = 'Введите пароль';
     return;
@@ -381,6 +391,7 @@ window.loginAccount = async () => {
   try {
     const auth = await unlockIdentity(password);
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
+    localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
     console.error('Login failed:', error);
@@ -393,6 +404,7 @@ async function bootstrapAuthenticatedSession(auth) {
   state.profile = auth.profile;
   state.myPeerId = getOrCreateSessionPeerId(state.profile.userId);
   state.currentChatId = null;
+  state.selectedMessageIds.clear();
 
   if (state.transport) {
     await state.transport.stop();
@@ -414,7 +426,7 @@ async function bootstrapAuthenticatedSession(auth) {
   renderProfile();
   renderContacts();
   renderChatHeader();
-  $('messages').innerHTML = '<div class="empty-chat">Откройте чат или создайте invite link</div>';
+  $('messages').innerHTML = '<div class="empty-chat">Найдите контакт по логину над списком чатов</div>';
   setStatus('offline', 'Аккаунт разблокирован, сеть не подключена');
   await updateInviteArtifacts();
   updateMobileLayout();
@@ -425,6 +437,7 @@ async function bootstrapAuthenticatedSession(auth) {
 
 window.logoutAccount = async () => {
   sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+  localStorage.removeItem(REMEMBER_PASSWORD_KEY);
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
   state.activeCall = null;
@@ -440,6 +453,7 @@ window.logoutAccount = async () => {
   state.keyPair = null;
   state.profile = null;
   state.currentChatId = null;
+  state.selectedMessageIds.clear();
   state.contacts.clear();
   clearSessionPeerId();
   renderContacts();
@@ -451,6 +465,8 @@ window.logoutAccount = async () => {
   const legacyIdentity = getLegacyIdentityMetadata();
   if (identity) {
     $('loginUserId').textContent = identity.userId;
+    const loginInput = $('loginName');
+    if (loginInput) loginInput.value = identity.userId;
     openGate('login', {
       title: 'Вход в Tract',
       hint: 'Введите пароль, чтобы снова войти в аккаунт.'
@@ -532,7 +548,8 @@ window.connectHandshake = async () => {
     serverUrl,
     roomId,
     userId: state.profile.userId,
-    displayName: state.profile.displayName
+    displayName: state.profile.displayName,
+    allowedUserIds: new Set(state.contacts.keys())
   });
   state.multiplexer.register(state.transport);
 
@@ -553,6 +570,7 @@ window.connectHandshake = async () => {
 
   state.transport.onPeerDiscovery(async (_peerId, peerMeta) => {
     if (peerMeta.userId === state.profile.userId) return;
+    if (!state.contacts.has(peerMeta.userId)) return;
 
     await upsertContact(peerMeta.userId, {
       displayName: peerMeta.displayName || peerMeta.userId,
@@ -573,8 +591,9 @@ window.connectHandshake = async () => {
           console.warn('Resend failed for', msg, e);
         }
       }
+      await flushPendingMessageControls(chatId, peerMeta.peerId);
     } catch (e) {
-      console.warn('Resend pending messages failed:', e);
+      console.warn('Resend pending chat actions failed:', e);
     }
   });
 
@@ -596,6 +615,11 @@ window.connectHandshake = async () => {
   });
 
   state.multiplexer.onMessage(async (packet, fromPeerId) => {
+    if (packet.type === 'message_control') {
+      await handleMessageControl(packet, fromPeerId);
+      return;
+    }
+
     if (packet.type === 'call') {
       await handleCallControl(packet, fromPeerId);
       return;
@@ -614,7 +638,8 @@ window.connectHandshake = async () => {
     state.receivedPacketIds.add(pktId);
 
     const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
-    await messageDB.saveMessage(packet, chatId, false);
+    const savedId = await messageDB.saveMessage(packet, chatId, false);
+    packet._dbId = savedId;
 
     if (state.currentChatId !== chatId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
@@ -632,15 +657,11 @@ window.connectHandshake = async () => {
       roomId,
       lastMsg: packet.content
     });
-
-    if (state.currentChatId === chatId) {
-      addMessageToUI(packet, false);
-    }
   });
 
   try {
     await state.transport.ready;
-    setStatus('online', `В сети · ${roomId}`);
+    setStatus('online', 'В сети');
     await updateInviteArtifacts();
   } catch (error) {
     console.error('Handshake connect failed:', error);
@@ -654,14 +675,23 @@ window.connectHandshake = async () => {
 };
 
 window.addContactById = async () => {
-  const userId = $('addUserId').value.trim();
+  const primaryInput = $('addUserId');
+  const secondaryInput = $('addUserIdContacts');
+  const sourceInput = currentView === 'contacts' && secondaryInput ? secondaryInput : primaryInput;
+  const userId = normalizeLogin(sourceInput?.value);
   if (!userId || !state.profile) return;
+  if (!isValidLogin(userId)) {
+    setStatus('warn', 'Введите логин вида @login');
+    return;
+  }
   if (userId === state.profile.userId) return;
 
   await upsertContact(userId, {
     displayName: state.contacts.get(userId)?.displayName || userId,
-    lastMsg: state.contacts.get(userId)?.lastMsg || 'Контакт добавлен вручную'
+    lastMsg: state.contacts.get(userId)?.lastMsg || 'Контакт добавлен'
   });
+
+  state.transport?.setAllowedUserIds?.(state.contacts.keys());
 
   if (state.transport) {
     const peer = await state.transport.findPeerByUserId(userId).catch(() => null);
@@ -675,8 +705,10 @@ window.addContactById = async () => {
     }
   }
 
-  $('addUserId').value = '';
+  if (primaryInput) primaryInput.value = '';
+  if (secondaryInput) secondaryInput.value = '';
   renderContacts();
+  await openChat(userId);
 };
 
 window.copyAppShareLink = async () => {
@@ -701,8 +733,19 @@ window.renameCurrentContact = async () => {
 
 window.clearCurrentHistory = async () => {
   if (!state.currentChatId) return;
-  if (!window.confirm('Удалить историю этого чата?')) return;
+  const scope = window.prompt('Очистить историю: "у меня" или "у всех"?', 'у меня');
+  if (scope === null) return;
+  const forEveryone = scope.trim().toLowerCase() === 'у всех';
+  if (!forEveryone && scope.trim().toLowerCase() !== 'у меня') {
+    setStatus('warn', 'Выберите: у меня или у всех');
+    return;
+  }
+  if (!window.confirm(forEveryone ? 'Очистить историю у всех?' : 'Очистить историю у меня?')) return;
+  if (forEveryone) {
+    await sendMessageControl({ action: 'clear_chat' });
+  }
   await messageDB.deleteChat(state.currentChatId);
+  state.selectedMessageIds.clear();
   const contact = state.contacts.get(state.currentChatId);
   if (contact) {
     await upsertContact(state.currentChatId, {
@@ -713,17 +756,117 @@ window.clearCurrentHistory = async () => {
   await renderChatHistory(state.currentChatId);
 };
 
+window.selectCurrentChatMessages = () => {
+  if (!state.currentChatId) return;
+  setStatus('online', 'Нажмите на сообщения, которые нужно выбрать');
+};
+
+window.clearMessageSelection = () => {
+  state.selectedMessageIds.clear();
+  updateSelectionUI();
+};
+
+window.deleteSelectedMessages = async (scope = 'me') => {
+  if (!state.currentChatId || state.selectedMessageIds.size === 0) return;
+  const ids = Array.from(state.selectedMessageIds);
+  const messages = await messageDB.getMessages(state.currentChatId);
+  const selected = messages.filter((message) => ids.includes(message.id));
+  const packetIds = selected.map((message) => message.packetId).filter(Boolean);
+
+  if (scope === 'all') {
+    await sendMessageControl({ action: 'delete_messages', packetIds });
+  }
+
+  await messageDB.deleteMessages(ids);
+  state.selectedMessageIds.clear();
+  await renderChatHistory(state.currentChatId);
+};
+
+async function sendMessageControl(payload) {
+  if (!state.currentChatId || !state.multiplexer || !state.profile) return false;
+  const packet = {
+    type: 'message_control',
+    senderId: state.profile.userId,
+    timestamp: Date.now(),
+    ...payload
+  };
+  const targetPeerId = await resolvePeerForUser(state.currentChatId);
+  if (!targetPeerId) {
+    await queuePendingMessageControl(state.currentChatId, packet);
+    setStatus('warn', 'Действие сохранено и применится у собеседника при доставке');
+    return true;
+  }
+  try {
+    await state.multiplexer.send(packet, targetPeerId);
+  } catch (error) {
+    await queuePendingMessageControl(state.currentChatId, packet);
+    setStatus('warn', 'Действие сохранено и отправится позже');
+  }
+  return true;
+}
+
+function pendingControlsKey(chatId) {
+  return `pendingMessageControls:${chatId}`;
+}
+
+async function queuePendingMessageControl(chatId, packet) {
+  const key = pendingControlsKey(chatId);
+  const pending = await messageDB.getSetting(key) || [];
+  pending.push({
+    ...packet,
+    controlId: packet.controlId || crypto.randomUUID()
+  });
+  await messageDB.saveSetting(key, pending);
+}
+
+async function flushPendingMessageControls(chatId, targetPeerId) {
+  if (!state.multiplexer || !targetPeerId) return;
+  const key = pendingControlsKey(chatId);
+  const pending = await messageDB.getSetting(key) || [];
+  if (!pending.length) return;
+
+  const remaining = [];
+  for (const packet of pending) {
+    try {
+      await state.multiplexer.send(packet, targetPeerId);
+    } catch (error) {
+      remaining.push(packet);
+    }
+  }
+  await messageDB.saveSetting(key, remaining);
+}
+
 window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
   if (!window.confirm('Удалить чат и контакт?')) return;
   await messageDB.deleteChat(state.currentChatId);
   await messageDB.deleteContact(state.currentChatId);
   state.contacts.delete(state.currentChatId);
+  state.transport?.setAllowedUserIds?.(state.contacts.keys());
   state.currentChatId = null;
   renderContacts();
   renderChatHeader();
   $('messages').innerHTML = '<div class="empty-chat">Чат удалён</div>';
 };
+
+async function resolvePeerForUser(userId) {
+  const contact = state.contacts.get(userId);
+  let targetPeerId = contact?.activePeerId;
+
+  if (!targetPeerId && state.transport?.findPeerByUserId) {
+    const resolvedPeer = await state.transport.findPeerByUserId(userId).catch(() => null);
+    if (resolvedPeer?.peerId) {
+      targetPeerId = resolvedPeer.peerId;
+      await upsertContact(userId, {
+        ...contact,
+        activePeerId: targetPeerId,
+        online: true
+      });
+    }
+  }
+
+  return targetPeerId;
+}
 
 window.sendCurrentMessage = async () => {
   const input = $('messageInput');
@@ -731,19 +874,7 @@ window.sendCurrentMessage = async () => {
   if (!text || !state.currentChatId || !state.multiplexer || !state.profile) return;
 
   const contact = state.contacts.get(state.currentChatId);
-  let targetPeerId = contact?.activePeerId;
-
-  if (!targetPeerId && state.transport?.findPeerByUserId) {
-    const resolvedPeer = await state.transport.findPeerByUserId(state.currentChatId).catch(() => null);
-    if (resolvedPeer?.peerId) {
-      targetPeerId = resolvedPeer.peerId;
-      await upsertContact(state.currentChatId, {
-        ...contact,
-        activePeerId: targetPeerId,
-        online: true
-      });
-    }
-  }
+  const targetPeerId = await resolvePeerForUser(state.currentChatId);
 
   const packet = {
     packetId: crypto.randomUUID(),
@@ -757,7 +888,8 @@ window.sendCurrentMessage = async () => {
   try {
     if (targetPeerId) {
       await state.multiplexer.send(packet, targetPeerId);
-      await messageDB.saveMessage(packet, state.currentChatId, true);
+      const dbKey = await messageDB.saveMessage(packet, state.currentChatId, true);
+      packet._dbId = dbKey;
       await upsertContact(state.currentChatId, {
         ...contact,
         activePeerId: targetPeerId,
@@ -863,7 +995,7 @@ function renderContacts() {
         <div class="contact-avatar">${initials}</div>
         <div class="contact-info">
           <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
-          <span class="contact-status ${contact.online ? 'online' : ''}">${contact.online ? '🟢 В сети' : '⚫ Не в сети'}</span>
+          <span class="contact-status ${contact.online ? 'online' : ''}">${contact.online ? 'В сети' : 'Не в сети'}</span>
         </div>
         ${unread > 0 ? `<div class="contact-badge">${unread > 99 ? '99+' : unread}</div>` : ''}
       `;
@@ -891,6 +1023,7 @@ function truncate(s, max) {
 
 async function openChat(id) {
   state.currentChatId = id;
+  state.selectedMessageIds.clear();
   state.unreadCounts.delete(id);
   refreshDocTitle();
   renderContacts();
@@ -901,8 +1034,10 @@ async function openChat(id) {
 
 window.goBackFromChat = () => {
   state.currentChatId = null;
+  state.selectedMessageIds.clear();
   renderContacts();
   renderChatHeader();
+  updateSelectionUI();
   $('messages').innerHTML = '<div class="empty-chat">Выберите чат</div>';
   updateMobileLayout();
 };
@@ -964,6 +1099,43 @@ async function handleCallControl(packet, fromPeerId) {
     state.activeCall = null;
     state.micMuted = false;
     updateCallBar();
+  }
+}
+
+async function handleMessageControl(packet, fromPeerId) {
+  const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
+  if (packet.action === 'delete_messages') {
+    await messageDB.deleteMessagesByPacketIds(chatId, packet.packetIds || []);
+  } else if (packet.action === 'clear_chat') {
+    await messageDB.deleteChat(chatId);
+  } else {
+    return;
+  }
+
+  if (state.currentChatId === chatId) {
+    state.selectedMessageIds.clear();
+    await renderChatHistory(chatId);
+  }
+
+  const contact = state.contacts.get(chatId);
+  if (contact) {
+    await upsertContact(chatId, {
+      ...contact,
+      lastMsg: ''
+    });
+  }
+}
+
+function updateSelectionUI() {
+  const count = state.selectedMessageIds.size;
+  const bar = $('selectionBar');
+  const countEl = $('selectionCount');
+  if (bar) bar.hidden = count === 0;
+  if (countEl) countEl.textContent = String(count);
+
+  for (const node of document.querySelectorAll('.msg')) {
+    const id = Number(node.dataset.messageId);
+    node.classList.toggle('selected', state.selectedMessageIds.has(id));
   }
 }
 
@@ -1183,11 +1355,15 @@ function renderChatHeader() {
   const title = $('chatTitle');
   const subtitle = $('chatSubtitle');
   const btnCall = $('btnCall');
+  const btnSelect = $('btnSelectMessages');
+  const btnClear = $('btnClearHistory');
   
   if (btnCall) {
     const contact = state.currentChatId ? state.contacts.get(state.currentChatId) : null;
     btnCall.hidden = !state.currentChatId || !contact?.online || Boolean(state.activeCall);
   }
+  if (btnSelect) btnSelect.hidden = !state.currentChatId;
+  if (btnClear) btnClear.hidden = !state.currentChatId;
 
   if (!state.currentChatId) {
     if (title) title.textContent = 'Чаты';
@@ -1217,12 +1393,14 @@ async function restoreContacts() {
 }
 
 async function renderChatHistory(chatId) {
+  state.selectedMessageIds.clear();
   const messages = await messageDB.getMessages(chatId);
   const container = $('messages');
   container.innerHTML = '';
 
   if (messages.length === 0) {
     container.innerHTML = '<div class="empty-chat">Сообщений пока нет</div>';
+    updateSelectionUI();
     return;
   }
 
@@ -1233,17 +1411,35 @@ async function renderChatHistory(chatId) {
     const pending = message.senderId === state.profile?.userId && !message.isSent;
     addMessageToUI(message, isOutgoing, { pending });
   }
+  updateSelectionUI();
 }
 
 function addMessageToUI(packet, isSent, options = {}) {
   const div = $('messages');
+  const empty = div.querySelector('.empty-chat');
+  if (empty) empty.remove();
   const message = document.createElement('div');
   message.className = `msg ${isSent ? 'sent' : 'received'}${options.pending ? ' pending' : ''}`;
+  const messageId = packet.id ?? packet._dbId;
+  if (messageId !== undefined) {
+    message.dataset.messageId = String(messageId);
+  }
   message.innerHTML = `
-    <span>${packet.content}</span>
+    <span>${escapeHtml(packet.content)}</span>
     <time>${formatTime(packet.timestamp)}</time>
   `;
+  message.onclick = () => {
+    if (messageId === undefined) return;
+    const id = Number(messageId);
+    if (state.selectedMessageIds.has(id)) {
+      state.selectedMessageIds.delete(id);
+    } else {
+      state.selectedMessageIds.add(id);
+    }
+    updateSelectionUI();
+  };
   div.appendChild(message);
+  updateSelectionUI();
   div.scrollTop = div.scrollHeight;
 }
 

@@ -422,9 +422,10 @@
     
     .header-back-btn {
       display: none;
-      width: 40px;
+      min-width: 64px;
+      padding: 0 10px;
       height: 40px;
-      border-radius: 50%;
+      border-radius: 8px;
       align-items: center;
       justify-content: center;
       background: var(--panel-input);
@@ -509,7 +510,21 @@
       opacity: 0.8;
       border: 1px dashed var(--muted);
     }
+    .msg.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .msg time { color: var(--muted); font-size: 11px; align-self: flex-end; }
+    #selectionBar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--bg-header);
+      border-top: 1px solid var(--line);
+    }
+    #selectionBar .meta { flex: 1; }
     #chat.call-bar-visible #composer {
       padding-bottom: calc(88px + var(--safe-bottom));
     }
@@ -634,8 +649,8 @@
       </div>
       <div id="registerPanel" class="stack">
         <div class="field">
-          <label>Имя</label>
-          <input id="registerName" type="text" placeholder="Как вас видят">
+          <label>Логин</label>
+          <input id="registerName" type="text" placeholder="@login" autocomplete="username">
         </div>
         <div class="field">
           <label>Пароль</label>
@@ -649,7 +664,11 @@
         <button class="btn subtle" type="button" onclick="showLogin()">Уже есть аккаунт</button>
       </div>
       <div id="loginPanel" class="stack" hidden>
-        <div class="auth-hint">ID: <span id="loginUserId">...</span></div>
+        <div class="auth-hint">Аккаунт: <span id="loginUserId">...</span></div>
+        <div class="field">
+          <label>Логин</label>
+          <input id="loginName" type="text" placeholder="@login" autocomplete="username">
+        </div>
         <div class="field">
           <label>Пароль</label>
           <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="current-password">
@@ -703,7 +722,18 @@
                   <span class="status-dot"></span>
                   <span id="statusText">Не в сети</span>
                 </div>
-                <button type="button" class="btn subtle" style="width:100%; margin-top:8px;" onclick="copyAppShareLink()">Ссылка для друга</button>
+                <button type="button" class="btn subtle" style="width:100%; margin-top:8px;" onclick="copyAppShareLink()">Скопировать ссылку</button>
+              </div>
+            </div>
+
+            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
+              <div class="section-title">Поиск</div>
+              <div class="section-content stack" style="gap: 8px;">
+                <div class="field">
+                  <label>Логин</label>
+                  <input id="addUserId" type="text" placeholder="@login" autocomplete="off">
+                </div>
+                <button type="button" class="btn primary" onclick="addContactById()">Найти и добавить</button>
               </div>
             </div>
 
@@ -724,8 +754,8 @@
               <div class="section-title">Добавить контакт</div>
               <div class="section-content stack" style="gap: 8px;">
                 <div class="field">
-                  <label>User ID</label>
-                  <input id="addUserId" type="text" placeholder="ID контакта" autocomplete="off">
+                  <label>Логин</label>
+                  <input id="addUserIdContacts" type="text" placeholder="@login" autocomplete="off">
                 </div>
                 <button type="button" class="btn primary" onclick="addContactById()">Добавить</button>
               </div>
@@ -758,8 +788,8 @@
               <!-- Edit Profile -->
               <div class="settings-section">
                 <div class="field">
-                  <label>Имя в чате</label>
-                  <input id="displayNameInput" type="text" placeholder="Ваше имя">
+                  <label>Отображаемое имя</label>
+                  <input id="displayNameInput" type="text" placeholder="@login">
                 </div>
                 <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
               </div>
@@ -767,7 +797,7 @@
               <!-- Account Info -->
               <div class="settings-section">
                 <div class="settings-row">
-                  <span class="settings-label">User ID</span>
+                  <span class="settings-label">Логин</span>
                   <span class="settings-value" id="settingUserId">...</span>
                 </div>
                 <div class="settings-row">
@@ -798,34 +828,43 @@
 
       <!-- TABS -->
       <div class="sidebar-tabs">
-        <button type="button" class="tab-btn active" id="tabChats" onclick="switchView('chats')">💬 Чаты</button>
-        <button type="button" class="tab-btn" id="tabContacts" onclick="switchView('contacts')">👥 Контакты</button>
-        <button type="button" class="tab-btn" id="tabSettings" onclick="switchView('settings')">⚙️ Профиль</button>
+        <button type="button" class="tab-btn active" id="tabChats" onclick="switchView('chats')">Чаты</button>
+        <button type="button" class="tab-btn" id="tabContacts" onclick="switchView('contacts')">Контакты</button>
+        <button type="button" class="tab-btn" id="tabSettings" onclick="switchView('settings')">Профиль</button>
       </div>
     </aside>
 
     <!-- CHAT MAIN -->
     <main id="chat">
       <header id="chatHeader">
-        <button type="button" class="header-back-btn" onclick="goBackFromChat()">←</button>
+        <button type="button" class="header-back-btn" onclick="goBackFromChat()">Назад</button>
         <div id="chatHeaderMain">
           <div id="chatTitle">Чаты</div>
           <div id="chatSubtitle">Выберите диалог</div>
         </div>
         <div class="header-actions">
-          <button type="button" class="icon-btn" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок">📞</button>
+          <button type="button" class="btn subtle" id="btnSelectMessages" hidden onclick="selectCurrentChatMessages()">Выбрать</button>
+          <button type="button" class="btn subtle" id="btnClearHistory" hidden onclick="clearCurrentHistory()">Очистить</button>
+          <button type="button" class="btn subtle" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок">Звонок</button>
         </div>
       </header>
 
       <section id="messages">
-        <div class="empty-chat">Войдите и нажмите «Подключиться»</div>
+        <div class="empty-chat">Войдите и найдите контакт по логину</div>
       </section>
+
+      <div id="selectionBar" hidden>
+        <span class="meta">Выбрано: <span id="selectionCount">0</span></span>
+        <button type="button" class="btn subtle" onclick="deleteSelectedMessages('me')">У меня</button>
+        <button type="button" class="btn subtle" onclick="deleteSelectedMessages('all')">У всех</button>
+        <button type="button" class="btn subtle" onclick="clearMessageSelection()">Снять</button>
+      </div>
 
       <footer id="composer">
         <div id="composerRow">
           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
             onkeydown="if(event.key==='Enter') sendCurrentMessage()">
-          <button type="button" class="btn primary" onclick="sendCurrentMessage()">→</button>
+          <button type="button" class="btn primary" onclick="sendCurrentMessage()">Отпр.</button>
         </div>
       </footer>
     </main>
