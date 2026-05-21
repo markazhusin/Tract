@@ -1,4 +1,4 @@
-const DEFAULT_POLL_INTERVAL = 1000;
+const DEFAULT_POLL_INTERVAL = 5000;
 const DEFAULT_PRESENCE_INTERVAL = 3000;
 
 export class HostedSignaling {
@@ -10,11 +10,13 @@ export class HostedSignaling {
     this.listeners = new Map();
     this.pollTimer = null;
     this.presenceTimer = null;
+    this.eventSource = null;
     this.stopped = false;
   }
 
   async start() {
     await this.register();
+    this.startEventSource();
     this.startPolling();
     this.startPresence();
     this.bindLifecycle();
@@ -51,6 +53,29 @@ export class HostedSignaling {
         console.warn('Heartbeat failed:', error);
       });
     }, DEFAULT_PRESENCE_INTERVAL);
+  }
+
+  startEventSource() {
+    const url = new URL(`/events/${encodeURIComponent(this.peerId)}`, this.serverUrl);
+    url.searchParams.set('roomId', this.roomId);
+    this.eventSource = new EventSource(url);
+
+    this.eventSource.onmessage = (event) => {
+      if (event.data === 'connected' || event.data.startsWith(':')) return;
+      try {
+        const message = JSON.parse(event.data);
+        if (!message || !message.type) return;
+        const callbacks = this.listeners.get(message.type);
+        if (!callbacks) return;
+        for (const cb of callbacks) cb(message);
+      } catch (e) {
+        console.warn('SSE message error:', e);
+      }
+    };
+
+    this.eventSource.onerror = () => {
+      // EventSource auto-reconnects; polling is backup
+    };
   }
 
   bindLifecycle() {
@@ -138,6 +163,10 @@ export class HostedSignaling {
     this.stopped = true;
     clearInterval(this.pollTimer);
     clearInterval(this.presenceTimer);
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
     await this.post('/peer/unregister', {
       peerId: this.peerId,
       roomId: this.roomId

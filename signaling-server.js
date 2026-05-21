@@ -11,6 +11,7 @@ const app = express();
 const server = http.createServer(app);
 const peers = new Map();
 const signalingChannels = new Map();
+const sseClients = new Map(); // key (roomId:peerId) -> Set<res>
 const identityStore = new Map();
 const PEER_TTL_MS = 15000;
 
@@ -64,6 +65,10 @@ function ensureQueue(key) {
     signalingChannels.set(key, []);
   }
   return signalingChannels.get(key);
+}
+
+function safeWrite(res, data) {
+  try { res.write(data); } catch (e) { /* client may have disconnected */ }
 }
 
 function cleanupExpiredPeers() {
@@ -144,6 +149,36 @@ app.get('/peers/by-user/:userId', (req, res) => {
   res.json({ peer: match || null });
 });
 
+app.get('/events/:peerId', (req, res) => {
+  const { peerId } = req.params;
+  const { roomId } = req.query;
+  const key = peerKey(roomId, peerId);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  safeWrite(res, ':ok\n\n');
+
+  if (!sseClients.has(key)) sseClients.set(key, new Set());
+  sseClients.get(key).add(res);
+
+  const keepAlive = setInterval(() => safeWrite(res, ':keepalive\n\n'), 15000);
+
+  const cleanup = () => {
+    clearInterval(keepAlive);
+    const set = sseClients.get(key);
+    if (set) {
+      set.delete(res);
+      if (set.size === 0) sseClients.delete(key);
+    }
+  };
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+});
+
 app.post('/signal', (req, res) => {
   const { from, to, roomId, type, payload } = req.body;
   if (!from || !to || !roomId || !type) {
@@ -151,15 +186,25 @@ app.post('/signal', (req, res) => {
   }
 
   const targetKey = peerKey(roomId, to);
-  const queue = ensureQueue(targetKey);
-  queue.push({
-    from,
-    to,
-    roomId,
-    type,
-    payload,
-    timestamp: Date.now()
-  });
+  const clients = sseClients.get(targetKey);
+
+  if (clients && clients.size > 0) {
+    const message = JSON.stringify({ from, type, payload });
+    for (const client of clients) {
+      safeWrite(client, `data: ${message}\n\n`);
+    }
+  } else {
+    // Fallback: queue for HTTP polling
+    const queue = ensureQueue(targetKey);
+    queue.push({
+      from,
+      to,
+      roomId,
+      type,
+      payload,
+      timestamp: Date.now()
+    });
+  }
 
   res.json({ status: 'queued' });
 });
