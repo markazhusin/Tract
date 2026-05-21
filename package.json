@@ -5,7 +5,7 @@
     "dev": "vite",
     "build": "vite build",
     "signaling": "node scripts/free-port.mjs 8877 && node signaling-server.js",
-    "start": "concurrently \"npm run signaling\" \"npm run dev\"",
+    "start": "node signaling-server.js",
     "tunnel": "cloudflared tunnel --protocol quic --url http://127.0.0.1:8877",
     "preshare": "node scripts/check-cloudflared.mjs",
     "share": "npm run build && node scripts/run-share.mjs"
