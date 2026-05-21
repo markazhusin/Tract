@@ -290,13 +290,6 @@
       justify-content: center;
     }
 
-    /* Profile Card in Chats */
-    #profileCardChats.card {
-      margin: 8px 10px;
-      background: var(--panel-input);
-      border-radius: 12px;
-    }
-
     /* Stack */
     .stack { display: flex; flex-direction: column; gap: 10px; }
 
@@ -505,6 +498,12 @@
       padding: 10px 18px;
       border-radius: 22px;
     }
+    @media (max-width: 768px) {
+      #sendBtn {
+        padding: 8px 14px;
+        font-size: 13px;
+      }
+    }
 
     /* ===== AUTH ===== */
     #authGate {
@@ -604,9 +603,9 @@
         width: 100%;
         min-width: 0;
         transition: transform 0.3s ease;
-        transform: translateX(-100%);
+        transform: translateX(0);
       }
-      #sidebar.show { transform: translateX(0); }
+      #sidebar.chat-open { transform: translateX(-100%); }
       #chat { position: relative; z-index: 10; }
       .header-back-btn { display: flex; }
       .contact-avatar { width: 48px; height: 48px; min-width: 48px; font-size: 18px; }
@@ -691,26 +690,12 @@
       <div class="sidebar-tabs">
         <button type="button" class="tab-btn active" id="tabChats" onclick="switchView('chats')">Чаты</button>
         <button type="button" class="tab-btn" id="tabContacts" onclick="switchView('contacts')">Контакты</button>
-        <button type="button" class="tab-btn" id="tabSettings" onclick="switchView('settings')">Профиль</button>
       </div>
 
       <div class="sidebar-views">
         <!-- CHATS VIEW -->
         <div id="viewChats" class="sidebar-view active">
           <div class="sidebar-view-scroll">
-            <!-- Profile Card -->
-            <div id="profileCardChats" class="card" hidden>
-              <div class="card-header">
-                <div class="card-avatar" id="profileAvatarChats">−</div>
-                <div class="card-profile">
-                  <span class="card-profile-name" id="profileNameChats">−</span>
-                  <span class="card-profile-id" id="profileUserIdChats">...</span>
-                </div>
-              </div>
-              <div style="margin-top:8px;">
-                <button type="button" class="btn primary" onclick="switchView('settings')" style="width:100%;">Профиль</button>
-              </div>
-            </div>
             <!-- Contacts rendered here -->
             <div id="contacts"></div>
           </div>
@@ -801,7 +786,7 @@
         <div id="composerRow">
           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
             onkeydown="if(event.key==='Enter') sendCurrentMessage()">
-          <button type="button" class="btn primary" onclick="sendCurrentMessage()">Отправить</button>
+          <button type="button" class="btn primary" id="sendBtn" onclick="sendCurrentMessage()">Отпр.</button>
         </div>
       </footer>
     </main>

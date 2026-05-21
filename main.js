@@ -192,18 +192,6 @@ function renderProfileCards() {
   
   const initials = getContactInitials(state.profile.displayName);
   
-  // Profile card in Chats view
-  const cardChats = $('profileCardChats');
-  if (cardChats) {
-    cardChats.hidden = false;
-    const avatarChats = $('profileAvatarChats');
-    const nameChats = $('profileNameChats');
-    const idChats = $('profileUserIdChats');
-    if (avatarChats) avatarChats.textContent = initials;
-    if (nameChats) nameChats.textContent = state.profile.displayName;
-    if (idChats) idChats.textContent = state.profile.userId;
-  }
-  
   // Profile card in Settings view
   const avatarSettings = $('profileAvatarSettings');
   const nameSettings = $('profileNameSettings');
@@ -945,8 +933,6 @@ function renderProfile() {
   const isAuthenticated = Boolean(state.profile);
   
   if (!isAuthenticated) {
-    const profileCard = $('profileCardChats');
-    if (profileCard) profileCard.hidden = true;
     return;
   }
 
@@ -1277,22 +1263,21 @@ function updateMobileLayout() {
   const narrow = window.matchMedia('(max-width: 768px)').matches;
   
   if (narrow) {
-    // On mobile: show sidebar at init, show chat when chat is selected
-    if (state.currentChatId) {
-      sidebar.classList.remove('show');
-    } else {
-      sidebar.classList.add('show');
-    }
+    // On mobile: sidebar visible by default, hide when chat is open
+    sidebar.classList.toggle('chat-open', !!state.currentChatId);
   } else {
-    // On desktop: always show sidebar
-    sidebar.classList.remove('show');
+    sidebar.classList.remove('chat-open');
   }
 }
 
 window.startVoiceCall = async () => {
   if (!state.currentChatId || !state.transport || !state.multiplexer || !state.profile) return;
   const contact = state.contacts.get(state.currentChatId);
-  if (!contact?.activePeerId) {
+  let peerId = contact?.activePeerId;
+  if (!peerId) {
+    peerId = await resolvePeerForUser(state.currentChatId);
+  }
+  if (!peerId) {
     setStatus('error', 'Собеседник не в сети');
     return;
   }
@@ -1302,7 +1287,7 @@ window.startVoiceCall = async () => {
   state.activeCall = {
     callId,
     peerUserId: state.currentChatId,
-    remotePeerId: contact.activePeerId,
+    remotePeerId: peerId,
     status: 'ringing',
     role: 'caller'
   };
@@ -1310,7 +1295,7 @@ window.startVoiceCall = async () => {
   updateCallBar();
 
   try {
-    await state.transport.startAudioCallWithLocalMedia(contact.activePeerId, { asOfferer: false });
+    await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
   } catch (e) {
     console.warn('Caller audio setup failed:', e);
   }
@@ -1324,7 +1309,7 @@ window.startVoiceCall = async () => {
         senderId: state.profile.userId,
         senderName: state.profile.displayName
       },
-      contact.activePeerId
+      peerId
     );
   } catch (e) {
     console.warn('Invite failed:', e);
