@@ -37,3 +37,6 @@ coverage/
 # Misc
 *.pem
 .tunnel-url
+
+# Server data
+data/

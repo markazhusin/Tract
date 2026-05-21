@@ -1,15 +1,44 @@
 import http from 'http';
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const IDENTITY_STORE_PATH = path.join(__dirname, 'data', 'identity-store.json');
 
 const app = express();
 const server = http.createServer(app);
 const peers = new Map();
 const signalingChannels = new Map();
 const identityStore = new Map();
+
+function loadIdentityStore() {
+  try {
+    if (fs.existsSync(IDENTITY_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(IDENTITY_STORE_PATH, 'utf8'));
+      for (const [userId, record] of Object.entries(data)) {
+        identityStore.set(userId, record);
+      }
+      console.log(`[Identity] Loaded ${identityStore.size} identities from disk`);
+    }
+  } catch (err) {
+    console.warn('[Identity] Failed to load from disk:', err.message);
+  }
+}
+
+function saveIdentityStore() {
+  try {
+    const dir = path.dirname(IDENTITY_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const data = Object.fromEntries(identityStore);
+    fs.writeFileSync(IDENTITY_STORE_PATH, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    console.warn('[Identity] Failed to save to disk:', err.message);
+  }
+}
+
+loadIdentityStore();
 const PEER_TTL_MS = 15000;
 
 app.use((req, res, next) => {
@@ -168,6 +197,7 @@ app.post('/identity/store', (req, res) => {
     return res.status(400).json({ error: 'userId and identityBlob are required' });
   }
   identityStore.set(userId, { blob: identityBlob, updatedAt: Date.now() });
+  saveIdentityStore();
   console.log(`[Identity] Stored for ${userId}`);
   res.json({ status: 'ok' });
 });
