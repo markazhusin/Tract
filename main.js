@@ -6,7 +6,9 @@ import {
   getStoredIdentityMetadata,
   registerIdentity,
   unlockIdentity,
-  updateStoredDisplayName
+  updateStoredDisplayName,
+  createSimpleIdentity,
+  unlockSimpleIdentity
 } from './app/core/keypair.js';
 import { Multiplexer } from './app/core/multiplexer.js';
 import { WebRTCTransport } from './app/transports/webrtc.js';
@@ -304,11 +306,29 @@ window.registerAccount = async () => {
     return;
   }
 
-  const displayName = $('registerName').value.trim() || 'Anonymous';
+  const displayName = $('registerName').value.trim() || '';
   const password = $('registerPassword').value;
   const confirm = $('registerPasswordConfirm').value;
 
-  if (!password || password.length < 6) {
+  // If no password provided, create a simple identity (latin+digits only)
+  if (!password) {
+    if (!/^[a-zA-Z0-9]{3,32}$/.test(displayName)) {
+      $('authError').textContent = 'Имя должно содержать только латиницу и цифры (3-32 символа)';
+      return;
+    }
+    $('authError').textContent = '';
+    try {
+      const auth = await createSimpleIdentity(displayName);
+      await bootstrapAuthenticatedSession(auth);
+    } catch (error) {
+      console.error('Simple register failed:', error);
+      $('authError').textContent = 'Не удалось создать простой аккаунт';
+    }
+    return;
+  }
+
+  // Normal secure registration with password
+  if (password.length < 6) {
     $('authError').textContent = 'Пароль должен быть не короче 6 символов';
     return;
   }
@@ -321,7 +341,7 @@ window.registerAccount = async () => {
   $('authError').textContent = '';
 
   try {
-    const auth = await registerIdentity(password, displayName, { reuseLegacy: true });
+    const auth = await registerIdentity(password, displayName || 'Anonymous', { reuseLegacy: true });
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
@@ -334,6 +354,18 @@ window.loginAccount = async () => {
   if (!window.isSecureContext) {
     $('authError').textContent =
       'Нужен HTTPS (или localhost). Откройте страницу по https:// (см. npm run start).';
+    return;
+  }
+  const stored = getStoredIdentityMetadata();
+  if (stored && stored.simple) {
+    // simple identity: no password required
+    try {
+      const auth = unlockSimpleIdentity();
+      await bootstrapAuthenticatedSession(auth);
+    } catch (e) {
+      console.error('Simple login failed:', e);
+      $('authError').textContent = 'Не удалось войти в простой аккаунт';
+    }
     return;
   }
 
@@ -449,6 +481,18 @@ window.saveOwnProfile = async () => {
 
 window.connectHandshake = async () => {
   if (!state.profile || !state.keyPair) {
+    const stored = getStoredIdentityMetadata();
+    if (stored && stored.simple) {
+      try {
+        const auth = unlockSimpleIdentity();
+        await bootstrapAuthenticatedSession(auth);
+      } catch (e) {
+        console.warn('Auto-unlock simple identity failed:', e);
+        openGate(getStoredIdentityMetadata() ? 'login' : 'register');
+      }
+      return;
+    }
+
     openGate(getStoredIdentityMetadata() ? 'login' : 'register');
     return;
   }

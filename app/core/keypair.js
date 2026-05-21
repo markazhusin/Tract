@@ -124,6 +124,23 @@ export async function registerIdentity(password, displayName, options = {}) {
   return { keyPair, profile: { userId, displayName } };
 }
 
+// Create a simple identity without password encryption (convenience mode).
+// Stores private key hex directly in localStorage. DisplayName must be latin+digits.
+export async function createSimpleIdentity(displayName) {
+  const keyPair = await generateKeyPair();
+  const privateKeyHex = bytesToHex(keyPair.privateKey);
+  const payload = {
+    version: 0,
+    simple: true,
+    userId: displayName,
+    publicKeyHex: bytesToHex(keyPair.publicKey),
+    displayName,
+    privateKeyHex
+  };
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify(payload));
+  return { keyPair, profile: { userId: displayName, displayName } };
+}
+
 export async function unlockIdentity(password) {
   const stored = getStoredIdentityMetadata();
   if (!stored) {
@@ -152,6 +169,17 @@ export async function unlockIdentity(password) {
   };
 }
 
+export function unlockSimpleIdentity() {
+  const stored = getStoredIdentityMetadata();
+  if (!stored || !stored.simple) throw new Error('No simple identity');
+  const privateKey = hexToBytes(stored.privateKeyHex);
+  const publicKey = secp.getPublicKey(privateKey);
+  return {
+    keyPair: { privateKey, publicKey },
+    profile: { userId: stored.userId, displayName: stored.displayName }
+  };
+}
+
 export function updateStoredDisplayName(displayName) {
   const stored = getStoredIdentityMetadata();
   if (!stored) return;
@@ -164,13 +192,14 @@ export function clearSessionPeerId() {
 }
 
 export function getOrCreateSessionPeerId(baseId) {
-  const saved = sessionStorage.getItem(SESSION_PEER_KEY);
+  // Persist peerId across browser sessions for simpler login experience
+  const saved = localStorage.getItem(SESSION_PEER_KEY);
   if (saved) {
     return saved;
   }
 
   const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 4);
   const peerId = `${baseId}-${suffix}`;
-  sessionStorage.setItem(SESSION_PEER_KEY, peerId);
+  localStorage.setItem(SESSION_PEER_KEY, peerId);
   return peerId;
 }
