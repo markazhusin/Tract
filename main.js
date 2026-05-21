@@ -243,9 +243,9 @@ async function init() {
       hint: `Найдена старая локальная identity ${legacyIdentity.profile.userId}. Задайте пароль, чтобы сохранить этот аккаунт в новой модели входа.`
     });
   } else {
-    openGate('register', {
-      title: 'Регистрация в Tract',
-      hint: 'Создайте логин вида @login и пароль.'
+    openGate('login', {
+      title: 'Вход в Tract',
+      hint: 'Введите логин и пароль. Если у вас ещё нет аккаунта, нажмите "Новый аккаунт".'
     });
   }
 
@@ -383,7 +383,8 @@ window.loginAccount = async () => {
       if (fetched) {
         auth = await unlockIdentity(password);
       } else {
-        auth = await registerIdentity(password, login, { reuseLegacy: false, userId: login });
+        $('authError').textContent = 'Аккаунт не найден на сервере. Сначала создайте аккаунт.';
+        return;
       }
     }
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
@@ -402,6 +403,7 @@ async function bootstrapAuthenticatedSession(auth) {
   state.myPeerId = getOrCreateSessionPeerId(state.profile.userId);
   state.currentChatId = null;
   state.selectedMessageIds.clear();
+  await messageDB.initForUser(state.profile.userId);
 
   if (state.transport) {
     await state.transport.stop();
@@ -453,6 +455,7 @@ window.logoutAccount = async () => {
   state.currentChatId = null;
   state.selectedMessageIds.clear();
   state.contacts.clear();
+  await messageDB.initForUser(null);
   clearSessionPeerId();
   renderContacts();
   renderProfile();
@@ -487,6 +490,7 @@ window.saveOwnProfile = async () => {
   const displayName = $('displayNameInput').value.trim() || 'Anonymous';
   state.profile.displayName = displayName;
   updateStoredDisplayName(displayName);
+  await uploadIdentityToServer(resolveSignalingUrl());
   renderProfile();
   if (state.transport?.signaling) {
     state.transport.options.displayName = displayName;

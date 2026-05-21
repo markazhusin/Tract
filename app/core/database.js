@@ -1,11 +1,21 @@
 export class MessageDatabase {
   constructor() {
     this.db = null;
+    this.dbName = 'TractDB';
+  }
+
+  async initForUser(userId) {
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
+    this.dbName = userId ? `TractDB_${userId}` : 'TractDB';
+    return this.getDB();
   }
 
   async initDB() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('TractDB', 3);
+      const request = indexedDB.open(this.dbName, 3);
 
       request.onerror = () => reject(request.error);
       request.onupgradeneeded = (event) => {
