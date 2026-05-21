@@ -603,8 +603,8 @@ window.connectHandshake = async () => {
 
     if (packet.type !== 'text') return;
 
-    // Deduplicate by packet.id (added on send). If missing, use fingerprint.
-    let pktId = packet.id;
+    // Deduplicate by packet.packetId (added on send). If missing, use fingerprint.
+    let pktId = packet.packetId;
     if (!pktId) {
       pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${packet.content}`;
     }
@@ -731,16 +731,22 @@ window.sendCurrentMessage = async () => {
   if (!text || !state.currentChatId || !state.multiplexer || !state.profile) return;
 
   const contact = state.contacts.get(state.currentChatId);
-  if (!contact?.activePeerId) {
-    setStatus(
-      'error',
-      'Собеседник не в сети. Оба нажмите «Подключиться» и откройте одну ссылку (одна «комната» уже выбрана автоматически).'
-    );
-    return;
+  let targetPeerId = contact?.activePeerId;
+
+  if (!targetPeerId && state.transport?.findPeerByUserId) {
+    const resolvedPeer = await state.transport.findPeerByUserId(state.currentChatId).catch(() => null);
+    if (resolvedPeer?.peerId) {
+      targetPeerId = resolvedPeer.peerId;
+      await upsertContact(state.currentChatId, {
+        ...contact,
+        activePeerId: targetPeerId,
+        online: true
+      });
+    }
   }
 
   const packet = {
-    id: crypto.randomUUID(),
+    packetId: crypto.randomUUID(),
     type: 'text',
     content: text,
     senderId: state.profile.userId,
@@ -749,21 +755,23 @@ window.sendCurrentMessage = async () => {
   };
 
   try {
-    if (contact?.activePeerId) {
-      await state.multiplexer.send(packet, contact.activePeerId);
+    if (targetPeerId) {
+      await state.multiplexer.send(packet, targetPeerId);
       await messageDB.saveMessage(packet, state.currentChatId, true);
       await upsertContact(state.currentChatId, {
         ...contact,
+        activePeerId: targetPeerId,
+        online: true,
         lastMsg: text
       });
       addMessageToUI(packet, true);
     } else {
-      // Save as undelivered; will be resent when peer appears
-      await messageDB.saveMessage(packet, state.currentChatId, false);
+      const dbKey = await messageDB.saveMessage(packet, state.currentChatId, false);
       await upsertContact(state.currentChatId, {
         ...contact,
         lastMsg: text
       });
+      packet._dbId = dbKey;
       addMessageToUI(packet, true, { pending: true });
       setStatus('warn', 'Собеседник не в сети — сообщение сохранено и отправится позже');
     }
@@ -1219,14 +1227,18 @@ async function renderChatHistory(chatId) {
   }
 
   for (const message of messages) {
-    addMessageToUI(message, message.isSent);
+    const isOutgoing = message.senderId
+      ? message.senderId === state.profile?.userId
+      : Boolean(message.isSent);
+    const pending = message.senderId === state.profile?.userId && !message.isSent;
+    addMessageToUI(message, isOutgoing, { pending });
   }
 }
 
-function addMessageToUI(packet, isSent) {
+function addMessageToUI(packet, isSent, options = {}) {
   const div = $('messages');
   const message = document.createElement('div');
-  message.className = `msg ${isSent ? 'sent' : 'received'}`;
+  message.className = `msg ${isSent ? 'sent' : 'received'}${options.pending ? ' pending' : ''}`;
   message.innerHTML = `
     <span>${packet.content}</span>
     <time>${formatTime(packet.timestamp)}</time>
