@@ -676,8 +676,7 @@
       <div class="sidebar-header">
         <h1>Tract</h1>
         <div class="sidebar-header-right">
-          <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Профиль">⚙</button>
-          <button type="button" class="sidebar-header-btn" onclick="logoutAccount()" title="Выйти">⏻</button>
+          <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки">⚙</button>
         </div>
       </div>
 
@@ -720,15 +719,6 @@
         <!-- CONTACTS VIEW -->
         <div id="viewContacts" class="sidebar-view">
           <div class="sidebar-view-scroll">
-            <div class="section">
-              <div class="section-title">Добавить контакт</div>
-              <div class="section-content" style="padding: 4px 12px 12px;">
-                <div class="search-row">
-                  <input id="addUserIdContacts" type="text" placeholder="@login" autocomplete="off">
-                  <button type="button" class="search-btn" onclick="addContactById()">Добавить</button>
-                </div>
-              </div>
-            </div>
             <div class="section-title">Все контакты</div>
             <div id="contactsList"></div>
           </div>
@@ -761,10 +751,6 @@
                 <div class="settings-row">
                   <span class="settings-label">Логин</span>
                   <span class="settings-value" id="settingUserId">...</span>
-                </div>
-                <div class="settings-row">
-                  <span class="settings-label">Peer ID</span>
-                  <span class="settings-value" id="settingPeerId">...</span>
                 </div>
               </div>
 

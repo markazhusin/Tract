@@ -192,6 +192,19 @@ function renderProfileCards() {
   
   const initials = getContactInitials(state.profile.displayName);
   
+  // Profile card in Chats view
+  const cardChats = $('profileCardChats');
+  if (cardChats) {
+    cardChats.hidden = false;
+    const avatarChats = $('profileAvatarChats');
+    const nameChats = $('profileNameChats');
+    const idChats = $('profileUserIdChats');
+    if (avatarChats) avatarChats.textContent = initials;
+    if (nameChats) nameChats.textContent = state.profile.displayName;
+    if (idChats) idChats.textContent = state.profile.userId;
+  }
+  
+  // Profile card in Settings view
   const avatarSettings = $('profileAvatarSettings');
   const nameSettings = $('profileNameSettings');
   const idSettings = $('profileUserIdSettings');
@@ -204,7 +217,8 @@ function updateSettingsPanel() {
   if (!state.profile) return;
   
   $('settingUserId').textContent = state.profile.userId;
-  $('settingPeerId').textContent = state.myPeerId || '...';
+  const peerIdEl = $('settingPeerId');
+  if (peerIdEl) peerIdEl.textContent = state.myPeerId || '...';
 }
 
 async function init() {
@@ -661,8 +675,7 @@ window.connectHandshake = async () => {
 
 window.addContactById = async () => {
   const primaryInput = $('addUserId');
-  const secondaryInput = $('addUserIdContacts');
-  const sourceInput = currentView === 'contacts' && secondaryInput ? secondaryInput : primaryInput;
+  const sourceInput = primaryInput;
   const userId = normalizeLogin(sourceInput?.value);
   if (!userId || !state.profile) return;
   if (!isValidLogin(userId)) {
@@ -691,7 +704,6 @@ window.addContactById = async () => {
   }
 
   if (primaryInput) primaryInput.value = '';
-  if (secondaryInput) secondaryInput.value = '';
   renderContacts();
   await openChat(userId);
 };
@@ -961,40 +973,26 @@ function renderContacts() {
       });
 
     if (items.length === 0) {
-      container.innerHTML = '<div class="empty-chat" style="padding: 40px 20px;"><div style="font-size: 48px; opacity: 0.3; margin-bottom: 12px;">👥</div>Нет контактов</div>';
+      container.innerHTML = '<div class="empty" style="padding: 16px; text-align: center; color: var(--muted); font-size: 13px;">Нет контактов</div>';
       return;
     }
-
-    const avatarColors = ['#e17076', '#7bc862', '#65aadd', '#a695e7', '#ee7aae', '#6ec9cb', '#faa774'];
 
     for (const [id, contact] of items) {
       const unread = state.unreadCounts.get(id) || 0;
       const initials = getContactInitials(contact.displayName || id);
-      const colorIdx = Math.abs(hashCode(id)) % avatarColors.length;
-      const bgColor = avatarColors[colorIdx];
-      const lastMsg = contact.lastMsg ? truncate(contact.lastMsg, 40) : '';
-      const time = contact.updatedAt ? formatTimeShort(contact.updatedAt) : '';
       
-      const div = document.createElement('div');
-      div.className = `chat-item${id === state.currentChatId ? ' active' : ''}${unread > 0 ? ' unread' : ''}`;
-      div.innerHTML = `
-        <div class="chat-avatar" style="background: ${bgColor};">
-          ${initials}
-          ${contact.online ? '<div class="online-dot"></div>' : ''}
+      const btn = document.createElement('button');
+      btn.className = `contact-item ${id === state.currentChatId ? 'active' : ''}`;
+      btn.innerHTML = `
+        <div class="contact-avatar">${initials}</div>
+        <div class="contact-info">
+          <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
+          <span class="contact-status ${contact.online ? 'online' : ''}">${contact.online ? 'В сети' : 'Не в сети'}</span>
         </div>
-        <div class="chat-info">
-          <div class="chat-info-top">
-            <span class="chat-name">${escapeHtml(getContactLabel(contact))}</span>
-            <span class="chat-time">${time}</span>
-          </div>
-          <div class="chat-info-bottom">
-            <span class="chat-last-msg">${escapeHtml(lastMsg)}</span>
-            ${unread > 0 ? `<span class="chat-badge">${unread > 99 ? '99+' : unread}</span>` : ''}
-          </div>
-        </div>
+        ${unread > 0 ? `<div class="contact-badge">${unread > 99 ? '99+' : unread}</div>` : ''}
       `;
-      div.onclick = () => openChat(id);
-      container.appendChild(div);
+      btn.onclick = () => openChat(id);
+      container.appendChild(btn);
     }
   };
   
