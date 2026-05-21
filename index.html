@@ -2,168 +2,228 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Tract</title>
   <style>
     :root {
-      --bg: #0e1621;
-      --bg-header: #17212b;
-      --panel: #17212b;
-      --panel-input: #242f3d;
-      --line: #0d1218;
-      --text: #f5f5f5;
-      --muted: #708499;
-      --accent: #5288c1;
-      --accent-hover: #6b9bd4;
-      --bubble-in: #182533;
-      --bubble-out: #2b5278;
-      --online: #6ac258;
-      --danger: #e56565;
-      --call-bar: #1a2733;
-      --safe-bottom: env(safe-area-inset-bottom, 0px);
-      --safe-top: env(safe-area-inset-top, 0px);
+      --tg-bg: #17212b;
+      --tg-sidebar: #0e1621;
+      --tg-header: #17212b;
+      --tg-input: #242f3d;
+      --tg-line: #0d1218;
+      --tg-text: #f5f5f5;
+      --tg-text-secondary: #708499;
+      --tg-accent: #5288c1;
+      --tg-accent-hover: #6b9bd4;
+      --tg-bubble-in: #182533;
+      --tg-bubble-out: #2b5278;
+      --tg-online: #4dcd5e;
+      --tg-danger: #e56565;
+      --tg-badge: #3e546a;
+      --tg-badge-active: #5288c1;
+      --tg-search-bg: #242f3d;
+      --tg-hover: rgba(255,255,255,0.04);
+      --tg-active: rgba(82,136,193,0.15);
+      --tg-safe-bottom: env(safe-area-inset-bottom, 0px);
+      --tg-safe-top: env(safe-area-inset-top, 0px);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
     html, body {
       height: 100%;
-      max-height: 100%;
       overflow: hidden;
       overscroll-behavior: none;
+      background: var(--tg-bg);
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: var(--tg-text);
+      font-size: 15px;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
     }
     button, input { font: inherit; }
     button { cursor: pointer; border: none; background: none; color: inherit; }
+    input { background: none; border: none; color: inherit; }
+
+    /* ===== AUTH GATE ===== */
+    #authGate {
+      position: fixed;
+      inset: 0;
+      background: var(--tg-sidebar);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 100;
+    }
+    .auth-logo {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: var(--tg-accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 48px;
+      font-weight: 700;
+      margin-bottom: 24px;
+      color: #fff;
+    }
+    .auth-title {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .auth-hint {
+      color: var(--tg-text-secondary);
+      font-size: 14px;
+      text-align: center;
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+    .auth-form {
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .auth-field {
+      position: relative;
+    }
+    .auth-field input {
+      width: 100%;
+      padding: 14px 16px;
+      background: var(--tg-input);
+      border-radius: 12px;
+      font-size: 16px;
+      color: var(--tg-text);
+    }
+    .auth-field input::placeholder { color: var(--tg-text-secondary); }
+    .auth-field input:focus { outline: none; box-shadow: 0 0 0 2px var(--tg-accent); }
+    .auth-btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      text-align: center;
+      transition: opacity 0.2s;
+    }
+    .auth-btn.primary {
+      background: var(--tg-accent);
+      color: #fff;
+    }
+    .auth-btn.primary:active { opacity: 0.8; }
+    .auth-btn.secondary {
+      background: transparent;
+      color: var(--tg-accent);
+    }
+    .auth-btn.secondary:active { opacity: 0.6; }
+    #authError {
+      color: var(--tg-danger);
+      font-size: 14px;
+      text-align: center;
+      min-height: 20px;
+      margin-top: 8px;
+    }
+
+    /* ===== APP LAYOUT ===== */
     #app {
-      display: grid;
-      grid-template-columns: minmax(280px, 360px) 1fr;
+      display: flex;
       height: 100dvh;
-      max-height: 100dvh;
       width: 100%;
       overflow: hidden;
     }
+
+    /* ===== SIDEBAR ===== */
     #sidebar {
-      border-right: 1px solid var(--line);
-      background: var(--bg-header);
+      width: 380px;
+      min-width: 320px;
+      max-width: 420px;
+      background: var(--tg-sidebar);
       display: flex;
       flex-direction: column;
-      min-height: 0;
-      min-width: 0;
-    }
-    .sidebar-scroll {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-    .section.compact { padding-top: 10px; padding-bottom: 10px; }
-    .brand {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: calc(10px + var(--safe-top)) 14px 12px;
-      background: var(--bg-header);
-      border-bottom: 1px solid var(--line);
-    }
-    .brand h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
-    .meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .card { background: var(--panel); border-radius: 10px; padding: 12px; }
-    .stack { display: flex; flex-direction: column; gap: 10px; }
-    .field { display: flex; flex-direction: column; gap: 5px; }
-    .field label { color: var(--muted); font-size: 12px; }
-    .field input {
-      background: var(--panel-input);
-      border: 1px solid transparent;
-      color: var(--text);
-      padding: 10px 12px;
-      border-radius: 8px;
-    }
-    .field input:focus { outline: none; border-color: var(--accent); }
-    .row { display: flex; gap: 8px; }
-    .row > * { flex: 1; }
-    .btn {
-      border-radius: 8px;
-      padding: 10px 14px;
-      background: var(--panel-input);
-      color: var(--text);
-      font-weight: 500;
-      text-align: center;
-    }
-    .btn.primary { background: var(--accent); color: #fff; }
-    .btn.primary:active { background: var(--accent-hover); }
-    .btn.subtle { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
-    .network-status { font-size: 12px; margin-top: 6px; }
-    .network-status.online { color: var(--online); }
-    .network-status.offline { color: var(--muted); }
-    .network-status.error { color: var(--danger); }
-    .network-status.warn { color: #e7a23d; }
-    .profile-title { font-size: 15px; font-weight: 600; }
-    #contacts { padding: 4px 6px 12px; }
-    .contact {
-      width: 100%;
-      text-align: left;
-      background: transparent;
-      border: none;
-      border-radius: 8px;
-      padding: 10px 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      color: var(--text);
-    }
-    .contact:hover, .contact.active { background: #2b527833; }
-    .contact-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      width: 100%;
-    }
-    .contact strong { font-weight: 500; font-size: 15px; flex: 1; min-width: 0; text-align: left; }
-    .unread-badge {
+      border-right: 1px solid var(--tg-line);
       flex-shrink: 0;
-      min-width: 20px;
-      height: 20px;
-      padding: 0 6px;
-      border-radius: 10px;
-      background: var(--accent);
-      color: #fff;
-      font-size: 12px;
-      font-weight: 600;
-      line-height: 20px;
-      text-align: center;
     }
-    @keyframes slideLeft { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-    @keyframes slideRight { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-    @keyframes msgAppear { from { opacity: 0; transform: translateY(8px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-    
     .sidebar-header {
-      flex-shrink: 0;
-      padding: calc(10px + var(--safe-top)) 12px 10px;
-      border-bottom: 1px solid var(--line);
+      padding: calc(8px + var(--tg-safe-top)) 12px 8px;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      gap: 12px;
+      background: var(--tg-header);
     }
-    
-    .sidebar-header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
-    
+    .sidebar-menu-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .sidebar-menu-btn:active { background: var(--tg-hover); }
+    .sidebar-search {
+      flex: 1;
+      position: relative;
+    }
+    .sidebar-search input {
+      width: 100%;
+      padding: 10px 12px 10px 36px;
+      background: var(--tg-search-bg);
+      border-radius: 22px;
+      font-size: 14px;
+      color: var(--tg-text);
+    }
+    .sidebar-search input::placeholder { color: var(--tg-text-secondary); }
+    .sidebar-search input:focus { outline: none; }
+    .sidebar-search::before {
+      content: '🔍';
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      opacity: 0.5;
+    }
+
+    /* Sidebar Tabs */
+    .sidebar-tabs {
+      display: flex;
+      padding: 0 8px;
+      gap: 4px;
+      background: var(--tg-header);
+      padding-bottom: 8px;
+    }
+    .sidebar-tab {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--tg-text-secondary);
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .sidebar-tab.active {
+      background: var(--tg-accent);
+      color: #fff;
+    }
+    .sidebar-tab:active { opacity: 0.7; }
+
+    /* Sidebar Views */
     .sidebar-views {
       flex: 1;
       min-height: 0;
       position: relative;
       overflow: hidden;
     }
-    
     .sidebar-view {
       position: absolute;
       inset: 0;
@@ -172,535 +232,546 @@
       opacity: 0;
       transform: translateX(20px);
       pointer-events: none;
-      transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      transition: all 0.25s ease;
     }
-    
     .sidebar-view.active {
       opacity: 1;
       transform: translateX(0);
       pointer-events: auto;
     }
-    
-    .sidebar-view.prev {
-      transform: translateX(-20px);
-    }
-    
     .sidebar-view-scroll {
       flex: 1;
-      min-height: 0;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+    }
+
+    /* Chat List */
+    .chat-list {
       padding: 0;
     }
-    
-    .sidebar-tabs {
-      flex-shrink: 0;
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0;
-      padding: 0;
-      border-top: 1px solid var(--line);
-      background: var(--bg-header);
-    }
-    
-    .tab-btn {
-      padding: 10px 0;
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      border-bottom: 2px solid transparent;
-      transition: all 0.3s ease;
-      cursor: pointer;
-    }
-    
-    .tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
-    }
-    
-    .section-title {
-      padding: 12px 14px 6px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .section-content {
-      padding: 0 10px 8px;
-    }
-    
-    .card-header {
+    .chat-item {
       display: flex;
       align-items: center;
+      padding: 8px 12px;
       gap: 12px;
-      margin-bottom: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      position: relative;
     }
-    
-    .card-avatar {
-      width: 48px;
-      height: 48px;
-      min-width: 48px;
+    .chat-item:active { background: var(--tg-hover); }
+    .chat-item.active { background: var(--tg-active); }
+    .chat-avatar {
+      width: 54px;
+      height: 54px;
+      min-width: 54px;
       border-radius: 50%;
-      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+      position: relative;
+    }
+    .chat-avatar .online-dot {
+      position: absolute;
+      bottom: 1px;
+      right: 1px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--tg-online);
+      border: 2px solid var(--tg-sidebar);
+    }
+    .chat-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .chat-info-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .chat-name {
+      font-weight: 600;
+      font-size: 15px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-time {
+      font-size: 12px;
+      color: var(--tg-text-secondary);
+      flex-shrink: 0;
+    }
+    .chat-item.unread .chat-time { color: var(--tg-accent); }
+    .chat-info-bottom {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .chat-last-msg {
+      font-size: 14px;
+      color: var(--tg-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    .chat-item.unread .chat-last-msg { color: var(--tg-text); }
+    .chat-badge {
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      border-radius: 11px;
+      background: var(--tg-badge);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .chat-item.unread .chat-badge { background: var(--tg-badge-active); }
+
+    /* Add Contact Section */
+    .add-contact-section {
+      padding: 12px;
+      border-bottom: 1px solid var(--tg-line);
+    }
+    .add-contact-row {
+      display: flex;
+      gap: 8px;
+    }
+    .add-contact-row input {
+      flex: 1;
+      padding: 10px 14px;
+      background: var(--tg-input);
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    .add-contact-row input::placeholder { color: var(--tg-text-secondary); }
+    .add-contact-row input:focus { outline: none; box-shadow: 0 0 0 2px var(--tg-accent); }
+    .add-contact-btn {
+      padding: 10px 16px;
+      background: var(--tg-accent);
+      color: #fff;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .add-contact-btn:active { opacity: 0.8; }
+
+    /* Settings View */
+    .settings-view {
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .settings-card {
+      background: var(--tg-input);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .settings-profile {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .settings-avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 24px;
       font-weight: 600;
+      color: #fff;
+      flex-shrink: 0;
     }
-    
-    .card-profile {
+    .settings-profile-info {
       flex: 1;
+      min-width: 0;
     }
-    
-    .card-profile-name {
-      font-size: 15px;
+    .settings-profile-name {
+      font-size: 18px;
       font-weight: 600;
-      display: block;
       margin-bottom: 4px;
     }
-    
-    .card-profile-id {
-      font-size: 12px;
-      color: var(--muted);
+    .settings-profile-id {
+      font-size: 13px;
+      color: var(--tg-text-secondary);
     }
-    
-    .status-indicator {
+    .settings-field {
       display: flex;
-      align-items: center;
+      flex-direction: column;
       gap: 6px;
-      padding: 8px 12px;
-      margin: 0;
-      font-size: 12px;
-      border-radius: 8px;
-      background: rgba(82, 136, 193, 0.1);
-      color: var(--accent);
-      transition: all 0.2s ease;
     }
-    
-    .status-indicator.offline {
-      background: rgba(112, 132, 153, 0.1);
-      color: var(--muted);
+    .settings-field label {
+      font-size: 13px;
+      color: var(--tg-text-secondary);
     }
-    
-    .status-indicator.error {
-      background: rgba(229, 101, 101, 0.1);
-      color: var(--danger);
+    .settings-field input {
+      padding: 10px 14px;
+      background: var(--tg-bg);
+      border-radius: 10px;
+      font-size: 15px;
     }
-    
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: currentColor;
-      animation: pulse 2s infinite;
+    .settings-field input:focus { outline: none; box-shadow: 0 0 0 2px var(--tg-accent); }
+    .settings-btn {
+      padding: 12px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      text-align: center;
     }
-    
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    
-    .contact-item {
-      padding: 10px 10px;
-      margin: 0 6px;
-      background: transparent;
-      border: none;
-      border-radius: 8px;
+    .settings-btn.primary { background: var(--tg-accent); color: #fff; }
+    .settings-btn.primary:active { opacity: 0.8; }
+    .settings-btn.danger { background: rgba(229,101,101,0.15); color: var(--tg-danger); }
+    .settings-btn.danger:active { opacity: 0.8; }
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row-label { font-size: 14px; }
+    .settings-row-value { font-size: 13px; color: var(--tg-text-secondary); }
+
+    /* ===== CHAT AREA ===== */
+    #chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: var(--tg-bg);
+      position: relative;
+    }
+    .chat-bg {
+      position: absolute;
+      inset: 0;
+      opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      pointer-events: none;
+    }
+
+    /* Chat Header */
+    #chatHeader {
+      flex-shrink: 0;
+      padding: calc(8px + var(--tg-safe-top)) 12px 8px;
+      background: var(--tg-header);
+      border-bottom: 1px solid var(--tg-line);
       display: flex;
       align-items: center;
       gap: 10px;
-      color: var(--text);
-      text-align: left;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      width: 100%;
+      z-index: 5;
     }
-    
-    .contact-item:hover {
-      background: rgba(82, 136, 193, 0.15);
-    }
-    
-    .contact-item.active {
-      background: rgba(82, 136, 193, 0.2);
-    }
-    
-    .contact-avatar {
+    .chat-back-btn {
       width: 40px;
       height: 40px;
-      min-width: 40px;
       border-radius: 50%;
-      background: var(--accent);
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
-      font-size: 16px;
-      font-weight: 600;
+      font-size: 20px;
+      flex-shrink: 0;
     }
-    
-    .contact-info {
+    .chat-back-btn:active { background: var(--tg-hover); }
+    .chat-header-info {
       flex: 1;
       min-width: 0;
     }
-    
-    .contact-name {
-      font-weight: 500;
-      font-size: 14px;
-      display: block;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      overflow: hidden;
-    }
-    
-    .contact-status {
-      font-size: 12px;
-      color: var(--muted);
-      display: block;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      overflow: hidden;
-    }
-    
-    .contact-status.online {
-      color: var(--online);
-    }
-    
-    .contact-badge {
-      width: 24px;
-      height: 24px;
-      min-width: 24px;
-      border-radius: 50%;
-      background: var(--online);
-      font-size: 11px;
+    .chat-header-name {
+      font-size: 16px;
       font-weight: 600;
-      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-header-status {
+      font-size: 13px;
+      color: var(--tg-text-secondary);
+    }
+    .chat-header-status.online { color: var(--tg-online); }
+    .chat-header-actions {
       display: flex;
-      align-items: center;
-      justify-content: center;
+      gap: 4px;
     }
-    
-    .settings-section {
-      padding: 12px;
-      background: var(--panel);
-      border-radius: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    
-    .settings-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    
-    .settings-row:last-child {
-      border-bottom: none;
-    }
-    
-    .settings-label {
-      font-size: 14px;
-      color: var(--text);
-    }
-    
-    .settings-value {
-      font-size: 12px;
-      color: var(--muted);
-    }
-    
-    .settings-view {
-      display: flex;
-      flex-direction: column;
-      padding: 12px 6px;
-      gap: 12px;
-    }
-    
-    .header-back-btn {
-      display: none;
-      min-width: 64px;
-      padding: 0 10px;
-      height: 40px;
-      border-radius: 8px;
-      align-items: center;
-      justify-content: center;
-      background: var(--panel-input);
-      flex-shrink: 0;
-      font-size: 18px;
-      line-height: 1;
-      transition: all 0.2s ease;
-    }
-    
-    .header-back-btn:active {
-      opacity: 0.85;
-    }
-    
-    .header-actions {
-      display: flex;
-      gap: 6px;
-      position: relative;
-    }
-    
-    #chat {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 0;
-      background: var(--bg);
-    }
-    #chatHeader {
-      flex-shrink: 0;
-      padding: calc(10px + var(--safe-top)) 12px 10px;
-      background: var(--bg-header);
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    #chatHeaderMain { flex: 1; min-width: 0; }
-    #chatTitle { font-size: 17px; font-weight: 600; }
-    #chatSubtitle { color: var(--muted); font-size: 13px; margin-top: 2px; }
-    #chatTools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-    .icon-btn {
+    .chat-header-btn {
       width: 40px;
       height: 40px;
       border-radius: 50%;
-      display: grid;
-      place-items: center;
-      background: var(--panel-input);
-      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 18px;
-      line-height: 1;
     }
-    .icon-btn:active { opacity: 0.85; }
+    .chat-header-btn:active { background: var(--tg-hover); }
+
+    /* Messages */
     #messages {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
-      padding: 12px 12px 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .msg {
-      max-width: min(520px, 85%);
-      padding: 8px 12px 6px;
-      border-radius: 12px 12px 12px 4px;
+      padding: 12px 16px;
       display: flex;
       flex-direction: column;
       gap: 4px;
-      line-height: 1.4;
-      font-size: 15px;
-      animation: msgAppear 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      position: relative;
+      z-index: 1;
     }
+    .msg {
+      max-width: min(480px, 75%);
+      padding: 7px 11px 5px;
+      border-radius: 12px;
+      font-size: 15px;
+      line-height: 1.35;
+      word-wrap: break-word;
+      position: relative;
+      animation: msgAppear 0.2s ease;
+    }
+    @keyframes msgAppear { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
     .msg.sent {
       align-self: flex-end;
-      background: var(--bubble-out);
-      border-radius: 12px 12px 4px 12px;
+      background: var(--tg-bubble-out);
+      border-radius: 12px 4px 12px 12px;
     }
     .msg.received {
       align-self: flex-start;
-      background: var(--bubble-in);
+      background: var(--tg-bubble-in);
+      border-radius: 4px 12px 12px 12px;
     }
-    .msg.pending {
-      opacity: 0.8;
-      border: 1px dashed var(--muted);
+    .msg.pending { opacity: 0.6; }
+    .msg.selected { box-shadow: 0 0 0 2px var(--tg-accent); }
+    .msg-content {
+      margin-right: 52px;
     }
-    .msg.selected {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
+    .msg-meta {
+      float: right;
+      margin-left: 10px;
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
     }
-    .msg time { color: var(--muted); font-size: 11px; align-self: flex-end; }
+    .msg-time {
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+    }
+    .msg.sent .msg-time { color: rgba(255,255,255,0.55); }
+    .msg-check {
+      font-size: 14px;
+      line-height: 1;
+    }
+    .msg-check.sent { color: rgba(255,255,255,0.45); }
+    .msg-check.delivered { color: rgba(255,255,255,0.7); }
+
+    .empty-chat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      color: var(--tg-text-secondary);
+      font-size: 15px;
+      text-align: center;
+      padding: 40px 20px;
+    }
+    .empty-chat-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+
+    /* Composer */
+    #composer {
+      flex-shrink: 0;
+      padding: 8px 10px calc(8px + var(--tg-safe-bottom));
+      background: var(--tg-header);
+      border-top: 1px solid var(--tg-line);
+      z-index: 5;
+    }
+    #composerRow {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    #messageInput {
+      flex: 1;
+      padding: 10px 16px;
+      background: var(--tg-input);
+      border-radius: 22px;
+      font-size: 15px;
+      min-height: 42px;
+      max-height: 120px;
+      resize: none;
+      line-height: 1.4;
+    }
+    #messageInput::placeholder { color: var(--tg-text-secondary); }
+    #messageInput:focus { outline: none; }
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--tg-accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+    }
+    .send-btn:active { transform: scale(0.9); }
+
+    /* Selection Bar */
     #selectionBar {
       flex-shrink: 0;
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 10px;
-      background: var(--bg-header);
-      border-top: 1px solid var(--line);
+      padding: 8px 12px;
+      background: var(--tg-header);
+      border-top: 1px solid var(--tg-line);
     }
-    #selectionBar .meta { flex: 1; }
+    #selectionBar .sel-count { flex: 1; font-size: 14px; color: var(--tg-text-secondary); }
+    .sel-btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .sel-btn.danger { color: var(--tg-danger); }
+
+    /* Chat Menu */
+    .chat-menu-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+    }
     .chat-menu {
       position: absolute;
-      right: 0;
-      top: calc(100% + 8px);
-      width: 220px;
-      background: var(--bg-header);
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      right: 12px;
+      top: 56px;
+      width: 200px;
+      background: var(--tg-input);
+      border-radius: 12px;
       padding: 6px;
-      z-index: 30;
-      box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+      z-index: 51;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     }
     .chat-menu button {
       width: 100%;
-      padding: 10px 12px;
-      border-radius: 6px;
+      padding: 12px 14px;
+      border-radius: 8px;
       text-align: left;
       font-size: 14px;
     }
-    .chat-menu button:hover {
-      background: var(--panel-input);
-    }
-    .chat-menu .danger {
-      color: var(--danger);
-    }
-    #chat.call-bar-visible #composer {
-      padding-bottom: calc(88px + var(--safe-bottom));
-    }
-    #composer {
-      flex-shrink: 0;
-      padding: 8px 10px calc(10px + var(--safe-bottom));
-      background: var(--bg-header);
-      border-top: 1px solid var(--line);
-    }
-    #composerRow { display: flex; gap: 8px; align-items: center; }
-    #messageInput {
-      flex: 1;
-      background: var(--panel-input);
-      border: 1px solid transparent;
-      color: var(--text);
-      padding: 10px 14px;
-      border-radius: 20px;
-      min-width: 0;
-    }
-    #messageInput:focus { outline: none; border-color: var(--accent); }
-    #composerRow .btn.primary {
-      flex: 0 0 auto;
-      padding: 10px 16px;
-      border-radius: 20px;
-    }
-    .empty, .empty-chat { padding: 16px; color: var(--muted); line-height: 1.55; font-size: 14px; text-align: center; }
-    .share-hint { margin-top: 8px; line-height: 1.45; }
-    #authGate {
-      position: fixed;
-      inset: 0;
-      background: rgba(14, 22, 33, 0.92);
-      backdrop-filter: blur(12px);
-      display: grid;
-      place-items: center;
-      padding: 20px;
-      z-index: 50;
-      animation: fadeIn 0.3s ease;
-    }
-    #authShell {
-      width: min(400px, 100%);
-      background: var(--bg-header);
-      border-radius: 12px;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      animation: slideUp 0.3s ease;
-    }
-    .auth-title {
-      font-size: 18px;
-      font-weight: 600;
-    }
-    .auth-hint {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-    #authError { color: var(--danger); font-size: 13px; min-height: 18px; }
+    .chat-menu button:active { background: var(--tg-hover); }
+    .chat-menu .danger { color: var(--tg-danger); }
+
+    /* Call Bar */
     #callBar {
       position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
       z-index: 40;
-      background: var(--call-bar);
-      border-top: 1px solid var(--line);
-      padding: 12px 14px calc(12px + var(--safe-bottom));
+      background: var(--tg-header);
+      border-top: 1px solid var(--tg-line);
+      padding: 12px 16px calc(12px + var(--tg-safe-bottom));
       display: flex;
       flex-direction: column;
       gap: 10px;
-      box-shadow: 0 -4px 24px rgba(0,0,0,0.35);
-      animation: slideUp 0.3s ease;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.3);
     }
     #callBarLabel { font-size: 15px; font-weight: 500; }
-    #callBarActions { display: flex; gap: 8px; flex-wrap: wrap; }
-    #callBarActions .btn { flex: 1; min-width: 120px; }
+    #callBarActions { display: flex; gap: 8px; }
+    #callBarActions .btn {
+      flex: 1;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      text-align: center;
+    }
+    #callBarActions .btn.primary { background: var(--tg-accent); color: #fff; }
+    #callBarActions .btn.secondary { background: var(--tg-input); color: var(--tg-text); }
+
     audio#remoteAudio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
 
+    /* ===== MOBILE ===== */
     @media (max-width: 768px) {
-      #app {
-        grid-template-columns: 1fr;
-        grid-template-rows: 1fr;
-      }
       #sidebar {
         position: absolute;
         inset: 0;
         z-index: 20;
-        height: 100%;
-        max-height: 100dvh;
-        transition: transform 0.3s ease;
+        width: 100%;
+        max-width: none;
+        transition: transform 0.25s ease;
         transform: translateX(-100%);
       }
-      #sidebar.show {
-        transform: translateX(0);
-      }
-      #chat {
-        position: relative;
-        z-index: 10;
-        height: 100dvh;
-        max-height: 100dvh;
-      }
-      .header-back-btn {
-        display: flex;
-      }
-      #app.mobile-sidebar #sidebar {
-        transform: translateX(0);
-      }
-      #app.mobile-sidebar #chat {
-        display: none;
-      }
+      #sidebar.show { transform: translateX(0); }
+      #chat { position: relative; z-index: 10; }
+      .chat-back-btn { display: flex; }
+      #app:has(#sidebar.show) #chat { display: none; }
+      .msg { max-width: 85%; }
+      .chat-avatar { width: 48px; height: 48px; min-width: 48px; font-size: 18px; }
     }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
   </style>
 </head>
+<body>
   <audio id="remoteAudio" autoplay playsinline></audio>
 
   <!-- AUTH GATE -->
   <div id="authGate">
-    <div id="authShell">
-      <div class="stack">
-        <div class="auth-title" id="authTitle">Tract</div>
-        <div class="auth-hint" id="authHint">Локальный аккаунт. Пароль хранится только у вас.</div>
-      </div>
-      <div id="registerPanel" class="stack">
-        <div class="field">
-          <label>Логин</label>
+    <div class="auth-logo">T</div>
+    <div class="auth-title" id="authTitle">Tract</div>
+    <div class="auth-hint" id="authHint">Локальный аккаунт. Пароль хранится только у вас.</div>
+    <div class="auth-form">
+      <div id="registerPanel">
+        <div class="auth-field">
           <input id="registerName" type="text" placeholder="@login" autocomplete="username">
         </div>
-        <div class="field">
-          <label>Пароль</label>
-          <input id="registerPassword" type="password" placeholder="Не короче 6 символов">
+        <div class="auth-field">
+          <input id="registerPassword" type="password" placeholder="Пароль (мин. 6 символов)">
         </div>
-        <div class="field">
-          <label>Повтор пароля</label>
-          <input id="registerPasswordConfirm" type="password" placeholder="Ещё раз">
+        <div class="auth-field">
+          <input id="registerPasswordConfirm" type="password" placeholder="Повторите пароль">
         </div>
-        <button class="btn primary" type="button" onclick="registerAccount()">Создать аккаунт</button>
-        <button class="btn subtle" type="button" onclick="showLogin()">Уже есть аккаунт</button>
+        <button class="auth-btn primary" type="button" onclick="registerAccount()">Создать аккаунт</button>
+        <button class="auth-btn secondary" type="button" onclick="showLogin()">Уже есть аккаунт</button>
       </div>
-      <div id="loginPanel" class="stack" hidden>
-        <div class="auth-hint">Аккаунт: <span id="loginUserId">...</span></div>
-        <div class="field">
-          <label>Логин</label>
+      <div id="loginPanel" hidden>
+        <div class="auth-hint" style="margin-bottom: 16px;">Аккаунт: <strong id="loginUserId">...</strong></div>
+        <div class="auth-field">
           <input id="loginName" type="text" placeholder="@login" autocomplete="username">
         </div>
-        <div class="field">
-          <label>Пароль</label>
+        <div class="auth-field">
           <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="current-password">
         </div>
-        <button class="btn primary" type="button" onclick="loginAccount()">Войти</button>
-        <button class="btn subtle" type="button" onclick="showRegister()">Новый аккаунт</button>
+        <button class="auth-btn primary" type="button" onclick="loginAccount()">Войти</button>
+        <button class="auth-btn secondary" type="button" onclick="showRegister()">Новый аккаунт</button>
       </div>
       <div id="authError"></div>
     </div>
@@ -717,69 +788,42 @@
     <!-- SIDEBAR -->
     <aside id="sidebar">
       <div class="sidebar-header">
-        <h1>Tract</h1>
-        <button type="button" class="btn subtle" onclick="logoutAccount()" title="Выйти" style="padding:6px 10px;font-size:12px;">Выйти</button>
+        <button type="button" class="sidebar-menu-btn" onclick="logoutAccount()" title="Выйти">☰</button>
+        <div class="sidebar-search">
+          <input type="text" placeholder="Поиск" readonly>
+        </div>
+      </div>
+
+      <div class="sidebar-tabs">
+        <button type="button" class="sidebar-tab active" id="tabChats" onclick="switchView('chats')">Все</button>
+        <button type="button" class="sidebar-tab" id="tabContacts" onclick="switchView('contacts')">Контакты</button>
+        <button type="button" class="sidebar-tab" id="tabSettings" onclick="switchView('settings')">Профиль</button>
       </div>
 
       <div class="sidebar-views">
         <!-- CHATS VIEW -->
         <div id="viewChats" class="sidebar-view active">
           <div class="sidebar-view-scroll">
-            <!-- Profile Card Upper -->
-            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
-              <div id="profileCardChats" class="card stack" hidden>
-                <div class="card-header">
-                  <div class="card-avatar" id="profileAvatarChats">−</div>
-                  <div class="card-profile">
-                    <span class="card-profile-name" id="profileNameChats">−</span>
-                    <span class="card-profile-id" id="profileUserIdChats">...</span>
-                  </div>
-                </div>
-                <button type="button" class="btn primary" onclick="switchView('settings')">Профиль</button>
+            <div class="add-contact-section">
+              <div class="add-contact-row">
+                <input id="addUserId" type="text" placeholder="@login" autocomplete="off">
+                <button type="button" class="add-contact-btn" onclick="addContactById()">Найти</button>
               </div>
             </div>
-
-            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
-              <div class="section-title">Поиск</div>
-              <div class="section-content stack" style="gap: 8px;">
-                <div class="field">
-                  <label>Логин</label>
-                  <input id="addUserId" type="text" placeholder="@login" autocomplete="off">
-                </div>
-                <button type="button" class="btn primary" onclick="addContactById()">Найти и добавить</button>
-              </div>
-            </div>
-
-            <!-- Contacts Section -->
-            <div class="section" style="padding: 0; border-bottom: 1px solid var(--line);">
-              <div class="section-title">Контакты</div>
-              <div class="section-content">
-                <div id="contacts"></div>
-              </div>
-            </div>
+            <div class="chat-list" id="contacts"></div>
           </div>
         </div>
 
         <!-- CONTACTS VIEW -->
         <div id="viewContacts" class="sidebar-view">
           <div class="sidebar-view-scroll">
-            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
-              <div class="section-title">Добавить контакт</div>
-              <div class="section-content stack" style="gap: 8px;">
-                <div class="field">
-                  <label>Логин</label>
-                  <input id="addUserIdContacts" type="text" placeholder="@login" autocomplete="off">
-                </div>
-                <button type="button" class="btn primary" onclick="addContactById()">Добавить</button>
+            <div class="add-contact-section">
+              <div class="add-contact-row">
+                <input id="addUserIdContacts" type="text" placeholder="@login" autocomplete="off">
+                <button type="button" class="add-contact-btn" onclick="addContactById()">Добавить</button>
               </div>
             </div>
-
-            <div class="section" style="padding: 0; border-bottom: 1px solid var(--line);">
-              <div class="section-title">Все контакты</div>
-              <div class="section-content">
-                <div id="contactsList"></div>
-              </div>
-            </div>
+            <div class="chat-list" id="contactsList"></div>
           </div>
         </div>
 
@@ -787,95 +831,83 @@
         <div id="viewSettings" class="sidebar-view">
           <div class="sidebar-view-scroll">
             <div class="settings-view">
-              <!-- Profile Card -->
-              <div id="profileCardSettings" class="settings-section stack">
-                <div class="card-header">
-                  <div class="card-avatar" id="profileAvatarSettings">−</div>
-                  <div class="card-profile">
-                    <span class="card-profile-name" id="profileNameSettings">−</span>
-                    <span class="card-profile-id" id="profileUserIdSettings">...</span>
+              <div class="settings-card">
+                <div class="settings-profile">
+                  <div class="settings-avatar" id="profileAvatarSettings">−</div>
+                  <div class="settings-profile-info">
+                    <div class="settings-profile-name" id="profileNameSettings">−</div>
+                    <div class="settings-profile-id" id="profileUserIdSettings">...</div>
                   </div>
                 </div>
               </div>
-
-              <!-- Edit Profile -->
-              <div class="settings-section">
-                <div class="field">
+              <div class="settings-card">
+                <div class="settings-field">
                   <label>Отображаемое имя</label>
                   <input id="displayNameInput" type="text" placeholder="@login">
                 </div>
-                <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
+                <button type="button" class="settings-btn primary" onclick="saveOwnProfile()">Сохранить</button>
               </div>
-
-              <!-- Account Info -->
-              <div class="settings-section">
+              <div class="settings-card">
                 <div class="settings-row">
-                  <span class="settings-label">Логин</span>
-                  <span class="settings-value" id="settingUserId">...</span>
+                  <span class="settings-row-label">Логин</span>
+                  <span class="settings-row-value" id="settingUserId">...</span>
                 </div>
                 <div class="settings-row">
-                  <span class="settings-label">Peer ID</span>
-                  <span class="settings-value" id="settingPeerId">...</span>
+                  <span class="settings-row-label">Peer ID</span>
+                  <span class="settings-row-value" id="settingPeerId">...</span>
                 </div>
               </div>
-
-              <!-- Danger Zone -->
-              <div class="settings-section" style="border: 1px solid rgba(229, 101, 101, 0.3);">
-                <div class="field">
-                  <label style="color: var(--danger);">Опасная зона</label>
-                </div>
-                <button type="button" class="btn subtle" onclick="logoutAccount()">Выйти из аккаунта</button>
-              </div>
+              <button type="button" class="settings-btn danger" onclick="logoutAccount()">Выйти из аккаунта</button>
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- TABS -->
-      <div class="sidebar-tabs">
-        <button type="button" class="tab-btn active" id="tabChats" onclick="switchView('chats')">Чаты</button>
-        <button type="button" class="tab-btn" id="tabContacts" onclick="switchView('contacts')">Контакты</button>
-        <button type="button" class="tab-btn" id="tabSettings" onclick="switchView('settings')">Профиль</button>
       </div>
     </aside>
 
     <!-- CHAT MAIN -->
     <main id="chat">
+      <div class="chat-bg"></div>
       <header id="chatHeader">
-        <button type="button" class="header-back-btn" onclick="goBackFromChat()">Назад</button>
-        <div id="chatHeaderMain">
-          <div id="chatTitle">Чаты</div>
-          <div id="chatSubtitle">Выберите диалог</div>
+        <button type="button" class="chat-back-btn" onclick="goBackFromChat()">←</button>
+        <div class="chat-header-info">
+          <div class="chat-header-name" id="chatTitle">Чаты</div>
+          <div class="chat-header-status" id="chatSubtitle">Выберите диалог</div>
         </div>
-        <div class="header-actions">
-          <button type="button" class="btn subtle" id="btnChatMenu" hidden onclick="toggleChatMenu()">Ещё</button>
-          <button type="button" class="btn subtle" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок">Звонок</button>
-          <div class="chat-menu" id="chatMenu" hidden>
-            <button type="button" onclick="clearCurrentHistory('me')">Очистить у меня</button>
-            <button type="button" onclick="clearCurrentHistory('all')">Очистить у всех</button>
-            <button type="button" class="danger" onclick="deleteCurrentChat()">Удалить контакт</button>
-          </div>
+        <div class="chat-header-actions">
+          <button type="button" class="chat-header-btn" id="btnCall" hidden onclick="startVoiceCall()">📞</button>
+          <button type="button" class="chat-header-btn" id="btnChatMenu" hidden onclick="toggleChatMenu()">⋮</button>
         </div>
       </header>
 
       <section id="messages">
-        <div class="empty-chat">Войдите и найдите контакт по логину</div>
+        <div class="empty-chat">
+          <div class="empty-chat-icon">💬</div>
+          <div>Войдите и найдите контакт по логину</div>
+        </div>
       </section>
 
       <div id="selectionBar" hidden>
-        <span class="meta">Выбрано: <span id="selectionCount">0</span></span>
-        <button type="button" class="btn subtle" onclick="deleteSelectedMessages('me')">У меня</button>
-        <button type="button" class="btn subtle" onclick="deleteSelectedMessages('all')">У всех</button>
-        <button type="button" class="btn subtle" onclick="clearMessageSelection()">Снять</button>
+        <span class="sel-count">Выбрано: <span id="selectionCount">0</span></span>
+        <button type="button" class="sel-btn" onclick="deleteSelectedMessages('me')">У меня</button>
+        <button type="button" class="sel-btn danger" onclick="deleteSelectedMessages('all')">У всех</button>
+        <button type="button" class="sel-btn" onclick="clearMessageSelection()">Снять</button>
       </div>
 
       <footer id="composer">
         <div id="composerRow">
-          <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
-            onkeydown="if(event.key==='Enter') sendCurrentMessage()">
-          <button type="button" class="btn primary" onclick="sendCurrentMessage()">Отпр.</button>
+          <textarea id="messageInput" placeholder="Сообщение" rows="1" autocomplete="off"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendCurrentMessage()}"></textarea>
+          <button type="button" class="send-btn" onclick="sendCurrentMessage()">➤</button>
         </div>
       </footer>
+
+      <div class="chat-menu-overlay" id="chatMenuOverlay" hidden onclick="closeChatMenu()">
+        <div class="chat-menu" id="chatMenu" hidden onclick="event.stopPropagation()">
+          <button type="button" onclick="clearCurrentHistory('me');closeChatMenu()">Очистить у меня</button>
+          <button type="button" onclick="clearCurrentHistory('all');closeChatMenu()">Очистить у всех</button>
+          <button type="button" class="danger" onclick="deleteCurrentChat();closeChatMenu()">Удалить чат</button>
+        </div>
+      </div>
     </main>
   </div>
 
