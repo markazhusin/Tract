@@ -491,6 +491,21 @@ window.connectHandshake = async () => {
   });
   state.multiplexer.register(state.transport);
 
+  // Register signaling relay transport so packets can be relayed via server
+  // (allows offline message delivery — server queues signals until peer polls)
+  try {
+    const { SignalingRelayTransport } = await import('./app/transports/signaling-relay.js');
+    state.signalingRelay = new SignalingRelayTransport(state.myPeerId, {
+      serverUrl,
+      roomId,
+      userId: state.profile.userId,
+      displayName: state.profile.displayName
+    });
+    state.multiplexer.register(state.signalingRelay);
+  } catch (e) {
+    console.warn('Failed to register signaling relay transport:', e);
+  }
+
   state.transport.onPeerDiscovery(async (_peerId, peerMeta) => {
     if (peerMeta.userId === state.profile.userId) return;
 
