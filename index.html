@@ -442,6 +442,7 @@
     .header-actions {
       display: flex;
       gap: 6px;
+      position: relative;
     }
     
     #chat {
@@ -525,6 +526,31 @@
       border-top: 1px solid var(--line);
     }
     #selectionBar .meta { flex: 1; }
+    .chat-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 8px);
+      width: 220px;
+      background: var(--bg-header);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px;
+      z-index: 30;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+    }
+    .chat-menu button {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 6px;
+      text-align: left;
+      font-size: 14px;
+    }
+    .chat-menu button:hover {
+      background: var(--panel-input);
+    }
+    .chat-menu .danger {
+      color: var(--danger);
+    }
     #chat.call-bar-visible #composer {
       padding-bottom: calc(88px + var(--safe-bottom));
     }
@@ -713,19 +739,6 @@
               </div>
             </div>
 
-            <!-- Handshake Section -->
-            <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
-              <div class="section-title">Подключение</div>
-              <div class="section-content">
-                <button type="button" class="btn primary" id="btnConnect" style="width:100%; margin-bottom:8px;" onclick="connectHandshake()" hidden>Подключиться</button>
-                <div class="status-indicator offline" id="networkStatus">
-                  <span class="status-dot"></span>
-                  <span id="statusText">Не в сети</span>
-                </div>
-                <button type="button" class="btn subtle" style="width:100%; margin-top:8px;" onclick="copyAppShareLink()">Скопировать ссылку</button>
-              </div>
-            </div>
-
             <div class="section" style="padding: 12px 10px; border-bottom: 1px solid var(--line);">
               <div class="section-title">Поиск</div>
               <div class="section-content stack" style="gap: 8px;">
@@ -806,14 +819,6 @@
                 </div>
               </div>
 
-              <!-- Connection Info -->
-              <div class="settings-section">
-                <div class="settings-row">
-                  <span class="settings-label">Статус соединения</span>
-                  <span class="settings-value" id="settingStatus">Не в сети</span>
-                </div>
-              </div>
-
               <!-- Danger Zone -->
               <div class="settings-section" style="border: 1px solid rgba(229, 101, 101, 0.3);">
                 <div class="field">
@@ -843,9 +848,13 @@
           <div id="chatSubtitle">Выберите диалог</div>
         </div>
         <div class="header-actions">
-          <button type="button" class="btn subtle" id="btnSelectMessages" hidden onclick="selectCurrentChatMessages()">Выбрать</button>
-          <button type="button" class="btn subtle" id="btnClearHistory" hidden onclick="clearCurrentHistory()">Очистить</button>
+          <button type="button" class="btn subtle" id="btnChatMenu" hidden onclick="toggleChatMenu()">Ещё</button>
           <button type="button" class="btn subtle" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок">Звонок</button>
+          <div class="chat-menu" id="chatMenu" hidden>
+            <button type="button" onclick="clearCurrentHistory('me')">Очистить у меня</button>
+            <button type="button" onclick="clearCurrentHistory('all')">Очистить у всех</button>
+            <button type="button" class="danger" onclick="deleteCurrentChat()">Удалить контакт</button>
+          </div>
         </div>
       </header>
 

@@ -29,19 +29,16 @@ export class Multiplexer {
       p?.type === 'text' ? p.content : `[${p?.type ?? 'msg'}${p?.action ? `:${p.action}` : ''}]`;
     console.log('Отправка:', preview);
     let lastError = null;
-    let sent = false;
 
     for (const t of this.transports.values()) {
       try {
         await t.send(p, targetPeerId);
-        sent = true;
+        return;
       } catch (e) {
         lastError = e;
       }
     }
 
-    if (!sent) {
-      throw lastError || new Error('No transport delivered the packet');
-    }
+    throw lastError || new Error('No transport delivered the packet');
   }
 }

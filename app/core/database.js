@@ -45,7 +45,7 @@ export class MessageDatabase {
     return this.db;
   }
 
-  async saveMessage(packet, chatId, isSent) {
+  async saveMessage(packet, chatId, isSent, meta = {}) {
     const db = await this.getDB();
     const transaction = db.transaction(['messages'], 'readwrite');
     const store = transaction.objectStore('messages');
@@ -53,6 +53,7 @@ export class MessageDatabase {
       ...packet,
       chatId,
       isSent,
+      isOutgoing: meta.isOutgoing ?? Boolean(isSent),
       timestamp: packet.timestamp || Date.now()
     };
 
@@ -76,9 +77,33 @@ export class MessageDatabase {
     });
   }
 
+  async hasMessagePacket(packetId) {
+    if (!packetId) return false;
+    const db = await this.getDB();
+    const transaction = db.transaction(['messages'], 'readonly');
+    const store = transaction.objectStore('messages');
+
+    return new Promise((resolve, reject) => {
+      const request = store.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve(false);
+          return;
+        }
+        if (cursor.value?.packetId === packetId) {
+          resolve(true);
+          return;
+        }
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   async getUndeliveredMessages(chatId) {
     const all = await this.getMessages(chatId);
-    return all.filter((m) => !m.isSent);
+    return all.filter((m) => m.isOutgoing && !m.isSent);
   }
 
   async markMessageSent(messageId) {

@@ -218,10 +218,6 @@ function updateSettingsPanel() {
   
   $('settingUserId').textContent = state.profile.userId;
   $('settingPeerId').textContent = state.myPeerId || '...';
-  
-  const status = state.transport ? 'В сети' : 'Не в сети';
-  const statusEl = $('settingStatus');
-  if (statusEl) statusEl.textContent = status;
 }
 
 async function init() {
@@ -522,13 +518,6 @@ window.connectHandshake = async () => {
     return;
   }
 
-  const btnConnect = $('btnConnect');
-  const connectLabel = btnConnect?.textContent;
-  if (btnConnect) {
-    btnConnect.disabled = true;
-    btnConnect.textContent = 'Подключение…';
-  }
-
   localStorage.setItem(SIGNALING_URL_KEY, serverUrl);
   localStorage.setItem(ROOM_ID_KEY, roomId);
 
@@ -541,7 +530,6 @@ window.connectHandshake = async () => {
   }
   renderContacts();
   renderChatHeader();
-  setStatus('offline', 'Подключение…');
 
   state.multiplexer = new Multiplexer(state.keyPair);
   state.transport = new WebRTCTransport(state.myPeerId, {
@@ -587,6 +575,7 @@ window.connectHandshake = async () => {
         try {
           await state.multiplexer.send(msg, peerMeta.peerId);
           await messageDB.markMessageSent(msg.id);
+          markMessageDelivered(msg.id);
         } catch (e) {
           console.warn('Resend failed for', msg, e);
         }
@@ -637,8 +626,11 @@ window.connectHandshake = async () => {
     }
     state.receivedPacketIds.add(pktId);
 
+    if (packet.senderId === state.profile?.userId) return;
+    if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
+
     const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
-    const savedId = await messageDB.saveMessage(packet, chatId, false);
+    const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
     packet._dbId = savedId;
 
     if (state.currentChatId !== chatId) {
@@ -661,16 +653,9 @@ window.connectHandshake = async () => {
 
   try {
     await state.transport.ready;
-    setStatus('online', 'В сети');
     await updateInviteArtifacts();
   } catch (error) {
     console.error('Handshake connect failed:', error);
-    setStatus('error', 'Не удалось подключиться');
-  } finally {
-    if (btnConnect) {
-      btnConnect.disabled = false;
-      btnConnect.textContent = connectLabel || 'Подключиться';
-    }
   }
 };
 
@@ -712,54 +697,35 @@ window.addContactById = async () => {
 };
 
 window.copyAppShareLink = async () => {
-  const link = buildAppShareLink();
-  await navigator.clipboard.writeText(link);
-  setStatus('online', 'Ссылка скопирована — отправьте другу');
+  await navigator.clipboard.writeText(buildAppShareLink());
 };
 
 window.copyInviteLink = window.copyAppShareLink;
 
 window.renameCurrentContact = async () => {
-  if (!state.currentChatId) return;
-  const contact = state.contacts.get(state.currentChatId);
-  const alias = window.prompt('Новое имя контакта', contact.alias || contact.displayName || contact.id);
-  if (alias === null) return;
-  await upsertContact(state.currentChatId, {
-    ...contact,
-    alias: alias.trim()
-  });
-  renderChatHeader();
+  openChatMenu();
 };
 
-window.clearCurrentHistory = async () => {
+window.clearCurrentHistory = async (scope = 'me') => {
   if (!state.currentChatId) return;
-  const scope = window.prompt('Очистить историю: "у меня" или "у всех"?', 'у меня');
-  if (scope === null) return;
-  const forEveryone = scope.trim().toLowerCase() === 'у всех';
-  if (!forEveryone && scope.trim().toLowerCase() !== 'у меня') {
-    setStatus('warn', 'Выберите: у меня или у всех');
-    return;
+  const chatId = state.currentChatId;
+  if (scope === 'all') {
+    await sendMessageControl({ action: 'clear_chat' }, chatId);
   }
-  if (!window.confirm(forEveryone ? 'Очистить историю у всех?' : 'Очистить историю у меня?')) return;
-  if (forEveryone) {
-    await sendMessageControl({ action: 'clear_chat' });
-  }
-  await messageDB.deleteChat(state.currentChatId);
+  await messageDB.deleteChat(chatId);
   state.selectedMessageIds.clear();
-  const contact = state.contacts.get(state.currentChatId);
+  const contact = state.contacts.get(chatId);
   if (contact) {
-    await upsertContact(state.currentChatId, {
+    await upsertContact(chatId, {
       ...contact,
       lastMsg: ''
     });
   }
-  await renderChatHistory(state.currentChatId);
+  await renderChatHistory(chatId);
+  closeChatMenu();
 };
 
-window.selectCurrentChatMessages = () => {
-  if (!state.currentChatId) return;
-  setStatus('online', 'Нажмите на сообщения, которые нужно выбрать');
-};
+window.selectCurrentChatMessages = () => {};
 
 window.clearMessageSelection = () => {
   state.selectedMessageIds.clear();
@@ -768,39 +734,38 @@ window.clearMessageSelection = () => {
 
 window.deleteSelectedMessages = async (scope = 'me') => {
   if (!state.currentChatId || state.selectedMessageIds.size === 0) return;
+  const chatId = state.currentChatId;
   const ids = Array.from(state.selectedMessageIds);
-  const messages = await messageDB.getMessages(state.currentChatId);
+  const messages = await messageDB.getMessages(chatId);
   const selected = messages.filter((message) => ids.includes(message.id));
   const packetIds = selected.map((message) => message.packetId).filter(Boolean);
 
   if (scope === 'all') {
-    await sendMessageControl({ action: 'delete_messages', packetIds });
+    await sendMessageControl({ action: 'delete_messages', packetIds }, chatId);
   }
 
   await messageDB.deleteMessages(ids);
   state.selectedMessageIds.clear();
-  await renderChatHistory(state.currentChatId);
+  await renderChatHistory(chatId);
 };
 
-async function sendMessageControl(payload) {
-  if (!state.currentChatId || !state.multiplexer || !state.profile) return false;
+async function sendMessageControl(payload, chatId = state.currentChatId) {
+  if (!chatId || !state.multiplexer || !state.profile) return false;
   const packet = {
     type: 'message_control',
     senderId: state.profile.userId,
     timestamp: Date.now(),
     ...payload
   };
-  const targetPeerId = await resolvePeerForUser(state.currentChatId);
+  const targetPeerId = await resolvePeerForUser(chatId);
   if (!targetPeerId) {
-    await queuePendingMessageControl(state.currentChatId, packet);
-    setStatus('warn', 'Действие сохранено и применится у собеседника при доставке');
+    await queuePendingMessageControl(chatId, packet);
     return true;
   }
   try {
     await state.multiplexer.send(packet, targetPeerId);
   } catch (error) {
-    await queuePendingMessageControl(state.currentChatId, packet);
-    setStatus('warn', 'Действие сохранено и отправится позже');
+    await queuePendingMessageControl(chatId, packet);
   }
   return true;
 }
@@ -838,15 +803,19 @@ async function flushPendingMessageControls(chatId, targetPeerId) {
 
 window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
-  if (!window.confirm('Удалить чат и контакт?')) return;
-  await messageDB.deleteChat(state.currentChatId);
-  await messageDB.deleteContact(state.currentChatId);
-  state.contacts.delete(state.currentChatId);
+  const chatId = state.currentChatId;
+  await messageDB.deleteChat(chatId);
+  await messageDB.deleteContact(chatId);
+  state.contacts.delete(chatId);
   state.transport?.setAllowedUserIds?.(state.contacts.keys());
   state.currentChatId = null;
+  state.selectedMessageIds.clear();
   renderContacts();
   renderChatHeader();
+  updateSelectionUI();
   $('messages').innerHTML = '<div class="empty-chat">Чат удалён</div>';
+  closeChatMenu();
+  updateMobileLayout();
 };
 
 async function resolvePeerForUser(userId) {
@@ -873,9 +842,8 @@ window.sendCurrentMessage = async () => {
   const text = input.value.trim();
   if (!text || !state.currentChatId || !state.multiplexer || !state.profile) return;
 
+  const chatId = state.currentChatId;
   const contact = state.contacts.get(state.currentChatId);
-  const targetPeerId = await resolvePeerForUser(state.currentChatId);
-
   const packet = {
     packetId: crypto.randomUUID(),
     type: 'text',
@@ -885,35 +853,47 @@ window.sendCurrentMessage = async () => {
     timestamp: Date.now()
   };
 
-  try {
-    if (targetPeerId) {
-      await state.multiplexer.send(packet, targetPeerId);
-      const dbKey = await messageDB.saveMessage(packet, state.currentChatId, true);
-      packet._dbId = dbKey;
-      await upsertContact(state.currentChatId, {
-        ...contact,
-        activePeerId: targetPeerId,
-        online: true,
-        lastMsg: text
-      });
-      addMessageToUI(packet, true);
-    } else {
-      const dbKey = await messageDB.saveMessage(packet, state.currentChatId, false);
-      await upsertContact(state.currentChatId, {
-        ...contact,
-        lastMsg: text
-      });
-      packet._dbId = dbKey;
-      addMessageToUI(packet, true, { pending: true });
-      setStatus('warn', 'Собеседник не в сети — сообщение сохранено и отправится позже');
-    }
+  input.value = '';
+  const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
+  packet._dbId = dbKey;
+  await upsertContact(chatId, {
+    ...contact,
+    lastMsg: text
+  });
+  if (state.currentChatId === chatId) {
+    addMessageToUI(packet, true, { pending: true });
+  }
 
-    input.value = '';
+  deliverOutgoingMessage(chatId, packet).catch((error) => {
+    console.warn('Deferred send failed:', error);
+  });
+};
+
+async function deliverOutgoingMessage(chatId, packet) {
+  try {
+    const contact = state.contacts.get(chatId);
+    const targetPeerId = await resolvePeerForUser(chatId);
+    if (!targetPeerId) return;
+
+    await state.multiplexer.send(packet, targetPeerId);
+    await messageDB.markMessageSent(packet._dbId || packet.id);
+    await upsertContact(chatId, {
+      ...contact,
+      activePeerId: targetPeerId,
+      online: true,
+      lastMsg: packet.content
+    });
+    markMessageDelivered(packet._dbId || packet.id);
   } catch (error) {
     console.warn('Send failed:', error);
-    setStatus('error', 'Отправка не удалась');
   }
-};
+}
+
+function markMessageDelivered(messageId) {
+  if (messageId === undefined) return;
+  const node = document.querySelector(`.msg[data-message-id="${CSS.escape(String(messageId))}"]`);
+  node?.classList.remove('pending');
+}
 
 async function updateInviteArtifacts() {
   syncSignalingFromEnvironment();
@@ -1024,6 +1004,7 @@ function truncate(s, max) {
 async function openChat(id) {
   state.currentChatId = id;
   state.selectedMessageIds.clear();
+  closeChatMenu();
   state.unreadCounts.delete(id);
   refreshDocTitle();
   renderContacts();
@@ -1035,6 +1016,7 @@ async function openChat(id) {
 window.goBackFromChat = () => {
   state.currentChatId = null;
   state.selectedMessageIds.clear();
+  closeChatMenu();
   renderContacts();
   renderChatHeader();
   updateSelectionUI();
@@ -1137,6 +1119,22 @@ function updateSelectionUI() {
     const id = Number(node.dataset.messageId);
     node.classList.toggle('selected', state.selectedMessageIds.has(id));
   }
+}
+
+window.toggleChatMenu = () => {
+  const menu = $('chatMenu');
+  if (!menu || !state.currentChatId) return;
+  menu.hidden = !menu.hidden;
+};
+
+function openChatMenu() {
+  const menu = $('chatMenu');
+  if (menu) menu.hidden = false;
+}
+
+function closeChatMenu() {
+  const menu = $('chatMenu');
+  if (menu) menu.hidden = true;
 }
 
 function updateCallBar() {
@@ -1355,19 +1353,18 @@ function renderChatHeader() {
   const title = $('chatTitle');
   const subtitle = $('chatSubtitle');
   const btnCall = $('btnCall');
-  const btnSelect = $('btnSelectMessages');
-  const btnClear = $('btnClearHistory');
+  const btnMenu = $('btnChatMenu');
   
   if (btnCall) {
     const contact = state.currentChatId ? state.contacts.get(state.currentChatId) : null;
     btnCall.hidden = !state.currentChatId || !contact?.online || Boolean(state.activeCall);
   }
-  if (btnSelect) btnSelect.hidden = !state.currentChatId;
-  if (btnClear) btnClear.hidden = !state.currentChatId;
+  if (btnMenu) btnMenu.hidden = !state.currentChatId;
 
   if (!state.currentChatId) {
     if (title) title.textContent = 'Чаты';
     if (subtitle) subtitle.textContent = 'Выберите диалог';
+    closeChatMenu();
     return;
   }
 
@@ -1405,10 +1402,12 @@ async function renderChatHistory(chatId) {
   }
 
   for (const message of messages) {
-    const isOutgoing = message.senderId
-      ? message.senderId === state.profile?.userId
-      : Boolean(message.isSent);
-    const pending = message.senderId === state.profile?.userId && !message.isSent;
+    const isOutgoing = message.isOutgoing ?? (
+      message.senderId
+        ? message.senderId === state.profile?.userId
+        : Boolean(message.isSent)
+    );
+    const pending = isOutgoing && !message.isSent;
     addMessageToUI(message, isOutgoing, { pending });
   }
   updateSelectionUI();
@@ -1466,6 +1465,7 @@ function getContactLabel(contact) {
 function setStatus(kind, text) {
   const node = $('networkStatus');
   if (!node) return;
+  if (node.hidden) return;
   
   // Remove old status classes and add new one
   node.className = 'status-indicator';
