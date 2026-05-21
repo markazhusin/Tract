@@ -76,6 +76,30 @@ export class MessageDatabase {
     });
   }
 
+  async getUndeliveredMessages(chatId) {
+    const all = await this.getMessages(chatId);
+    return all.filter((m) => !m.isSent);
+  }
+
+  async markMessageSent(messageId) {
+    const db = await this.getDB();
+    const transaction = db.transaction(['messages'], 'readwrite');
+    const store = transaction.objectStore('messages');
+
+    return new Promise((resolve, reject) => {
+      const req = store.get(messageId);
+      req.onsuccess = () => {
+        const msg = req.result;
+        if (!msg) return resolve(false);
+        msg.isSent = true;
+        const putReq = store.put(msg);
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   async deleteChat(chatId) {
     const db = await this.getDB();
     const transaction = db.transaction(['messages'], 'readwrite');

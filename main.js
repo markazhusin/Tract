@@ -27,6 +27,7 @@ const state = {
   myPeerId: null,
   transport: null,
   multiplexer: null,
+  receivedPacketIds: new Set(),
   currentChatId: null,
   contacts: new Map(),
   activeCall: null,
@@ -560,6 +561,21 @@ window.connectHandshake = async () => {
       roomId,
       lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
     });
+    // Resend pending messages for this user
+    try {
+      const chatId = peerMeta.userId;
+      const pending = await messageDB.getUndeliveredMessages(chatId);
+      for (const msg of pending) {
+        try {
+          await state.multiplexer.send(msg, peerMeta.peerId);
+          await messageDB.markMessageSent(msg.id);
+        } catch (e) {
+          console.warn('Resend failed for', msg, e);
+        }
+      }
+    } catch (e) {
+      console.warn('Resend pending messages failed:', e);
+    }
   });
 
   state.transport.onPeerOffline(async (peerId, peerMeta) => {
@@ -585,9 +601,17 @@ window.connectHandshake = async () => {
       return;
     }
 
-    if (packet.type !== 'text') {
+    if (packet.type !== 'text') return;
+
+    // Deduplicate by packet.id (added on send). If missing, use fingerprint.
+    let pktId = packet.id;
+    if (!pktId) {
+      pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${packet.content}`;
+    }
+    if (state.receivedPacketIds.has(pktId)) {
       return;
     }
+    state.receivedPacketIds.add(pktId);
 
     const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
     await messageDB.saveMessage(packet, chatId, false);
@@ -595,6 +619,10 @@ window.connectHandshake = async () => {
     if (state.currentChatId !== chatId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
       refreshDocTitle();
+    }
+    // If viewing this chat, render incoming message
+    if (state.currentChatId === chatId) {
+      addMessageToUI(packet, false);
     }
 
     await upsertContact(chatId, {
@@ -712,6 +740,7 @@ window.sendCurrentMessage = async () => {
   }
 
   const packet = {
+    id: crypto.randomUUID(),
     type: 'text',
     content: text,
     senderId: state.profile.userId,
@@ -720,17 +749,29 @@ window.sendCurrentMessage = async () => {
   };
 
   try {
-    await state.multiplexer.send(packet, contact.activePeerId);
-    await messageDB.saveMessage(packet, state.currentChatId, true);
-    await upsertContact(state.currentChatId, {
-      ...contact,
-      lastMsg: text
-    });
-    addMessageToUI(packet, true);
+    if (contact?.activePeerId) {
+      await state.multiplexer.send(packet, contact.activePeerId);
+      await messageDB.saveMessage(packet, state.currentChatId, true);
+      await upsertContact(state.currentChatId, {
+        ...contact,
+        lastMsg: text
+      });
+      addMessageToUI(packet, true);
+    } else {
+      // Save as undelivered; will be resent when peer appears
+      await messageDB.saveMessage(packet, state.currentChatId, false);
+      await upsertContact(state.currentChatId, {
+        ...contact,
+        lastMsg: text
+      });
+      addMessageToUI(packet, true, { pending: true });
+      setStatus('warn', 'Собеседник не в сети — сообщение сохранено и отправится позже');
+    }
+
     input.value = '';
   } catch (error) {
     console.warn('Send failed:', error);
-    setStatus('error', 'Peer не подключен');
+    setStatus('error', 'Отправка не удалась');
   }
 };
 
