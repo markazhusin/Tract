@@ -268,9 +268,17 @@ async function ensureAvatarForContact(userId, contact = state.contacts.get(userI
 window.handleAvatarUpload = async (event) => {
   const file = event.target.files?.[0];
   if (!file || !state.profile) return;
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    const avatarData = e.target.result;
+  event.target.value = '';
+
+  // Show circular crop modal
+  const dataUrl = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(file);
+  });
+
+  openAvatarCropModal(dataUrl, async (croppedDataUrl) => {
+    const avatarData = croppedDataUrl;
     localStorage.setItem(`tract.avatar.${state.profile.userId}`, avatarData);
     if (state.transport) {
       state.transport.options.avatarData = avatarData;
@@ -285,10 +293,213 @@ window.handleAvatarUpload = async (event) => {
     }
     renderProfileCards();
     renderContacts();
-  };
-  reader.readAsDataURL(file);
-  event.target.value = '';
+  });
 };
+
+function openAvatarCropModal(imageSrc, onConfirm) {
+  // Remove existing modal if any
+  const existing = document.getElementById('avatarCropModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'avatarCropModal';
+  modal.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:200;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px;
+  `;
+
+  const title = document.createElement('div');
+  title.textContent = 'Выберите область';
+  title.style.cssText = 'color:#f5f5f5;font-size:16px;font-weight:600;';
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.style.cssText = 'position:relative;touch-action:none;user-select:none;';
+
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'display:block;border-radius:8px;max-width:min(340px,90vw);max-height:min(340px,60vh);';
+
+  const overlay = document.createElement('canvas');
+  overlay.style.cssText = `
+    position:absolute;inset:0;pointer-events:none;border-radius:8px;
+    max-width:min(340px,90vw);max-height:min(340px,60vh);
+  `;
+
+  canvasWrap.appendChild(canvas);
+  canvasWrap.appendChild(overlay);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:12px;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Отмена';
+  cancelBtn.style.cssText = 'padding:10px 24px;border-radius:8px;background:rgba(255,255,255,0.1);color:#f5f5f5;font-size:15px;border:none;cursor:pointer;';
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.textContent = 'Готово';
+  confirmBtn.style.cssText = 'padding:10px 24px;border-radius:8px;background:#B7FFF9;color:#141515;font-size:15px;font-weight:600;border:none;cursor:pointer;';
+
+  btnRow.appendChild(cancelBtn);
+  btnRow.appendChild(confirmBtn);
+  modal.appendChild(title);
+  modal.appendChild(canvasWrap);
+  modal.appendChild(btnRow);
+  document.body.appendChild(modal);
+
+  const img = new Image();
+  img.onload = () => {
+    const maxSize = Math.min(340, window.innerWidth * 0.9, window.innerHeight * 0.6);
+    const scale = Math.min(maxSize / img.width, maxSize / img.height);
+    const W = Math.round(img.width * scale);
+    const H = Math.round(img.height * scale);
+
+    canvas.width = W;
+    canvas.height = H;
+    overlay.width = W;
+    overlay.height = H;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    overlay.style.width = W + 'px';
+    overlay.style.height = H + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, W, H);
+
+    // Crop circle state
+    const minDim = Math.min(W, H);
+    let cropR = minDim * 0.45;
+    let cropX = W / 2;
+    let cropY = H / 2;
+
+    function drawOverlay() {
+      const oc = overlay.getContext('2d');
+      oc.clearRect(0, 0, W, H);
+      // Dark overlay
+      oc.fillStyle = 'rgba(0,0,0,0.55)';
+      oc.fillRect(0, 0, W, H);
+      // Cut out circle
+      oc.globalCompositeOperation = 'destination-out';
+      oc.beginPath();
+      oc.arc(cropX, cropY, cropR, 0, Math.PI * 2);
+      oc.fill();
+      oc.globalCompositeOperation = 'source-over';
+      // Circle border
+      oc.strokeStyle = 'rgba(183,255,249,0.9)';
+      oc.lineWidth = 2;
+      oc.beginPath();
+      oc.arc(cropX, cropY, cropR, 0, Math.PI * 2);
+      oc.stroke();
+    }
+
+    drawOverlay();
+
+    // Drag to move circle
+    let dragging = false;
+    let lastX = 0, lastY = 0;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = W / rect.width;
+      const scaleY = H / rect.height;
+      if (e.touches) {
+        return {
+          x: (e.touches[0].clientX - rect.left) * scaleX,
+          y: (e.touches[0].clientY - rect.top) * scaleY
+        };
+      }
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+      };
+    }
+
+    function onStart(e) {
+      e.preventDefault();
+      dragging = true;
+      const p = getPos(e);
+      lastX = p.x; lastY = p.y;
+    }
+
+    function onMove(e) {
+      if (!dragging) return;
+      e.preventDefault();
+      const p = getPos(e);
+      cropX = Math.max(cropR, Math.min(W - cropR, cropX + (p.x - lastX)));
+      cropY = Math.max(cropR, Math.min(H - cropR, cropY + (p.y - lastY)));
+      lastX = p.x; lastY = p.y;
+      drawOverlay();
+    }
+
+    function onEnd() { dragging = false; }
+
+    // Pinch to resize
+    let lastPinchDist = null;
+    function onTouchMove(e) {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (lastPinchDist !== null) {
+          const delta = dist - lastPinchDist;
+          cropR = Math.max(20, Math.min(Math.min(W, H) * 0.5, cropR + delta * 0.5));
+          cropX = Math.max(cropR, Math.min(W - cropR, cropX));
+          cropY = Math.max(cropR, Math.min(H - cropR, cropY));
+          drawOverlay();
+        }
+        lastPinchDist = dist;
+        return;
+      }
+      lastPinchDist = null;
+      onMove(e);
+    }
+
+    function onTouchEnd(e) {
+      if (e.touches.length < 2) lastPinchDist = null;
+      onEnd();
+    }
+
+    // Mouse wheel to resize
+    overlay.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      cropR = Math.max(20, Math.min(Math.min(W, H) * 0.5, cropR - e.deltaY * 0.3));
+      cropX = Math.max(cropR, Math.min(W - cropR, cropX));
+      cropY = Math.max(cropR, Math.min(H - cropR, cropY));
+      drawOverlay();
+    }, { passive: false });
+
+    overlay.addEventListener('mousedown', onStart);
+    overlay.addEventListener('mousemove', onMove);
+    overlay.addEventListener('mouseup', onEnd);
+    overlay.addEventListener('mouseleave', onEnd);
+    overlay.addEventListener('touchstart', onStart, { passive: false });
+    overlay.addEventListener('touchmove', onTouchMove, { passive: false });
+    overlay.addEventListener('touchend', onTouchEnd);
+
+    cancelBtn.onclick = () => modal.remove();
+
+    confirmBtn.onclick = () => {
+      // Render cropped circle to output canvas
+      const size = 256;
+      const out = document.createElement('canvas');
+      out.width = size;
+      out.height = size;
+      const oc = out.getContext('2d');
+      oc.beginPath();
+      oc.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      oc.clip();
+      // Map crop circle to output
+      const srcScale = img.width / W; // canvas coords → original image coords
+      const srcX = (cropX - cropR) * srcScale;
+      const srcY = (cropY - cropR) * srcScale;
+      const srcSize = cropR * 2 * srcScale;
+      oc.drawImage(img, srcX, srcY, srcSize, srcSize, 0, 0, size, size);
+      const result = out.toDataURL('image/jpeg', 0.88);
+      modal.remove();
+      onConfirm(result);
+    };
+  };
+  img.src = imageSrc;
+}
 
 function renderProfileCards() {
   if (!state.profile) return;
@@ -315,6 +526,7 @@ async function init() {
   applyInviteParams();
   syncSignalingFromEnvironment();
   window.addEventListener('resize', updateMobileLayout);
+  initSwipeGestures();
 
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
@@ -647,7 +859,7 @@ window.connectHandshake = async () => {
     userId: state.profile.userId,
     displayName: state.profile.displayName,
     avatarData: getAvatarUrl(state.profile.userId),
-    allowedUserIds: new Set(state.contacts.keys())
+    allowedUserIds: new Set(Array.from(state.contacts.keys()))
   });
   state.multiplexer.register(state.transport);
 
@@ -670,13 +882,21 @@ window.connectHandshake = async () => {
     if (peerMeta.userId === state.profile.userId) return;
     if (!state.contacts.has(peerMeta.userId)) return;
 
+    // Always update displayName from peer metadata (fixes re-add after delete)
+    const existingContact = state.contacts.get(peerMeta.userId);
+    const resolvedDisplayName = peerMeta.displayName && peerMeta.displayName !== peerMeta.userId
+      ? peerMeta.displayName
+      : (existingContact?.displayName && existingContact.displayName !== peerMeta.userId
+          ? existingContact.displayName
+          : peerMeta.displayName || peerMeta.userId);
+
     await upsertContact(peerMeta.userId, {
-      displayName: peerMeta.displayName || peerMeta.userId,
+      displayName: resolvedDisplayName,
       activePeerId: peerMeta.peerId,
-      avatarUrl: peerMeta.avatar || state.contacts.get(peerMeta.userId)?.avatarUrl,
+      avatarUrl: peerMeta.avatar || existingContact?.avatarUrl,
       online: true,
       roomId,
-      lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
+      lastMsg: existingContact?.lastMsg || 'Онлайн'
     });
 
     const chatId = peerMeta.userId;
@@ -829,14 +1049,20 @@ window.addContactById = async () => {
   }
   if (userId === state.profile.userId) return;
 
+  // Preserve existing displayName if contact already exists and has a real name
+  const existing = state.contacts.get(userId);
   await upsertContact(userId, {
-    displayName: state.contacts.get(userId)?.displayName || userId,
-    lastMsg: state.contacts.get(userId)?.lastMsg || 'Контакт добавлен'
+    displayName: (existing?.displayName && existing.displayName !== userId) ? existing.displayName : userId,
+    lastMsg: existing?.lastMsg || 'Контакт добавлен',
+    // Reset activePeerId so peer lookup is fresh
+    activePeerId: null,
+    online: false
   });
 
   ensureAvatarForContact(userId).catch(() => {});
 
-  state.transport?.setAllowedUserIds?.(state.contacts.keys());
+  // Pass array (not iterator) to setAllowedUserIds
+  state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
 
   if (state.transport) {
     const peer = await state.transport.findPeerByUserId(userId).catch(() => null);
@@ -1023,20 +1249,20 @@ async function flushPendingMessageControls(chatId, targetPeerId) {
 window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
+  // Delete messages and contact from DB
   await messageDB.deleteChat(chatId);
+  await messageDB.deleteContact(chatId);
+  // Remove from in-memory state
+  state.contacts.delete(chatId);
   state.selectedMessageIds.clear();
-  const contact = state.contacts.get(chatId);
-  if (contact) {
-    await upsertContact(chatId, {
-      ...contact,
-      lastMsg: '',
-      lastTime: 0
-    });
-  }
+  state.unreadCounts.delete(chatId);
   state.currentChatId = null;
+  // Update WebRTC allowed peers
+  state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
   renderContacts();
   renderChatHeader();
   updateSelectionUI();
+  refreshDocTitle();
   $('messages').innerHTML = '<div class="empty-chat">Чат удалён</div>';
   closeChatMenu();
   updateMobileLayout();
@@ -1961,6 +2187,75 @@ function formatDate(timestamp) {
     return date.toLocaleDateString([], { weekday: 'short' });
   }
   return date.toLocaleDateString([], { day: 'numeric', month: 'short' });
+}
+
+// ==================== SWIPE GESTURES ====================
+function initSwipeGestures() {
+  // Swipe right on chat area → go back to contact list (mobile)
+  const chatEl = $('chat');
+  if (chatEl) {
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let swiping = false;
+
+    chatEl.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      swiping = false;
+    }, { passive: true });
+
+    chatEl.addEventListener('touchmove', (e) => {
+      if (!state.currentChatId) return;
+      const dx = e.touches[0].clientX - touchStartX;
+      const dy = e.touches[0].clientY - touchStartY;
+      // Only trigger if horizontal swipe is dominant and starts from left edge
+      if (!swiping && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        swiping = true;
+      }
+    }, { passive: true });
+
+    chatEl.addEventListener('touchend', (e) => {
+      if (!state.currentChatId) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+      const isRightSwipe = dx > 60 && isHorizontal;
+      const startsFromEdge = touchStartX < 60;
+      if ((isRightSwipe && startsFromEdge) || (isRightSwipe && dx > 120)) {
+        // Only on mobile
+        if (window.matchMedia('(max-width: 768px)').matches) {
+          goBackFromChat();
+        }
+      }
+    }, { passive: true });
+  }
+
+  // Swipe left on sidebar → open last/current chat (mobile)
+  const sidebarEl = $('sidebar');
+  if (sidebarEl) {
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    sidebarEl.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    sidebarEl.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+      const isLeftSwipe = dx < -60 && isHorizontal;
+      if (isLeftSwipe && window.matchMedia('(max-width: 768px)').matches) {
+        // If there's an active chat, slide to it
+        if (state.currentChatId) {
+          updateMobileLayout();
+          const sidebar = $('sidebar');
+          if (sidebar) sidebar.classList.add('chat-open');
+        }
+      }
+    }, { passive: true });
+  }
 }
 
 init();
