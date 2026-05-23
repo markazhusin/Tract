@@ -28,7 +28,9 @@ export class HostedSignaling {
       roomId: this.roomId,
       userId: this.options.userId,
       displayName: this.options.displayName,
-      avatarData: this.options.avatarData || null
+      avatarData: this.options.avatarData || null,
+      hideOnline: this.options.hideOnline || false,
+      lastSeen: this.options.lastSeen || null
     });
   }
 
@@ -49,7 +51,9 @@ export class HostedSignaling {
       this.post('/peer/heartbeat', {
         peerId: this.peerId,
         roomId: this.roomId,
-        displayName: this.options.displayName
+        displayName: this.options.displayName,
+        hideOnline: this.options.hideOnline || false,
+        lastSeen: this.options.hideOnline ? null : Date.now()
       }).catch((error) => {
         console.warn('Heartbeat failed:', error);
       });

@@ -508,10 +508,17 @@ function renderProfileCards() {
 
 function updateSettingsPanel() {
   if (!state.profile) return;
-  
-  $('settingUserId').textContent = state.profile.userId;
+  const el = $('settingUserId');
+  if (el) el.textContent = state.profile.userId;
   const peerIdEl = $('settingPeerId');
   if (peerIdEl) peerIdEl.textContent = state.myPeerId || '...';
+  // Sync hideOnline toggle
+  const toggle = $('hideOnlineToggle');
+  if (toggle) {
+    const hidden = Boolean(localStorage.getItem('tract.hideOnline'));
+    toggle.checked = hidden;
+    updateHideOnlineLabel(hidden);
+  }
 }
 
 async function init() {
@@ -801,7 +808,6 @@ window.saveOwnProfile = async () => {
   renderProfile();
   if (state.transport?.signaling) {
     state.transport.options.displayName = displayName;
-    // Send heartbeat to update displayName on server
     state.transport.signaling.post('/peer/heartbeat', {
       peerId: state.myPeerId,
       roomId: state.transport.options.roomId,
@@ -809,6 +815,34 @@ window.saveOwnProfile = async () => {
     }).catch(() => {});
   }
   await updateInviteArtifacts();
+};
+
+function updateHideOnlineLabel(hidden) {
+  const label = $('hideOnlineLabel');
+  if (label) label.textContent = hidden ? 'Скрыт' : 'Виден';
+}
+
+window.toggleHideOnline = () => {
+  const toggle = $('hideOnlineToggle');
+  if (!toggle) return;
+  const hidden = toggle.checked;
+  if (hidden) {
+    localStorage.setItem('tract.hideOnline', '1');
+  } else {
+    localStorage.removeItem('tract.hideOnline');
+  }
+  updateHideOnlineLabel(hidden);
+  // Update heartbeat so server knows our preference
+  if (state.transport?.signaling) {
+    state.transport.options.hideOnline = hidden;
+    state.transport.signaling.post('/peer/heartbeat', {
+      peerId: state.myPeerId,
+      roomId: state.transport.options.roomId,
+      displayName: state.profile?.displayName,
+      hideOnline: hidden,
+      lastSeen: hidden ? null : Date.now()
+    }).catch(() => {});
+  }
 };
 
 window.connectHandshake = async () => {
@@ -851,12 +885,15 @@ window.connectHandshake = async () => {
   renderChatHeader();
 
   state.multiplexer = new Multiplexer(state.keyPair);
+  const hideOnline = Boolean(localStorage.getItem('tract.hideOnline'));
   state.transport = new WebRTCTransport(state.myPeerId, {
     serverUrl,
     roomId,
     userId: state.profile.userId,
     displayName: state.profile.displayName,
     avatarData: getAvatarUrl(state.profile.userId),
+    hideOnline,
+    lastSeen: hideOnline ? null : Date.now(),
     allowedUserIds: new Set(Array.from(state.contacts.keys()))
   });
   state.multiplexer.register(state.transport);
@@ -895,6 +932,8 @@ window.connectHandshake = async () => {
       activePeerId: peerMeta.peerId,
       avatarUrl: peerMeta.avatar || existingContact.avatarUrl || null,
       online: true,
+      hideOnline: Boolean(peerMeta.hideOnline),
+      lastSeen: peerMeta.lastSeen || existingContact.lastSeen || null,
       roomId,
       lastMsg: existingContact.lastMsg || 'Онлайн'
     });
@@ -958,7 +997,8 @@ window.connectHandshake = async () => {
     await upsertContact(userId, {
       ...contact,
       activePeerId: null,
-      online: false
+      online: false,
+      lastSeen: Date.now()
     });
   });
 
@@ -1446,7 +1486,7 @@ function renderContacts() {
     const btn = document.createElement('button');
     btn.className = `contact-item ${isActive ? 'active' : ''}`;
     btn.innerHTML = `
-      <div class="contact-avatar">${getAvatarHtml(id, initials)}</div>
+      <div class="contact-avatar contact-avatar-clickable">${getAvatarHtml(id, initials)}</div>
       <div class="contact-info">
         <div class="contact-name-row">
           <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(getContactLabel(contact))}</span>
@@ -1457,12 +1497,11 @@ function renderContacts() {
       ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
     `;
 
-    const nameEl = btn.querySelector('.contact-name');
-    if (nameEl) {
-      nameEl.classList.add('contact-name-button');
-      nameEl.title = 'Открыть профиль';
-      nameEl.addEventListener('click', (event) => {
-        event.stopPropagation();
+    // Avatar click → open profile
+    const avatarEl = btn.querySelector('.contact-avatar-clickable');
+    if (avatarEl) {
+      avatarEl.addEventListener('click', (e) => {
+        e.stopPropagation();
         openContactProfile(id);
       });
     }
@@ -1898,8 +1937,14 @@ window.answerVoiceCall = async () => {
 
   try {
     stopRingTone();
-    const audioPromise = state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
-    const acceptPromise = state.multiplexer.send(
+    ac.status = 'active';
+    updateCallBar();
+
+    // Start audio (callee sends renegotiation offer with sendrecv)
+    await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
+
+    // Notify caller that we accepted
+    await state.multiplexer.send(
       {
         type: 'call',
         action: 'accept',
@@ -1908,10 +1953,7 @@ window.answerVoiceCall = async () => {
       },
       peerId
     );
-    ac.status = 'active';
-    updateCallBar();
-    await audioPromise;
-    await acceptPromise;
+
     await playRemoteAudioIfReady();
   } catch (e) {
     console.warn('Answer failed:', e);
@@ -1958,7 +2000,8 @@ function renderChatHeader() {
   const subtitle = $('chatSubtitle');
   const btnCall = $('btnCall');
   const btnMenu = $('btnChatMenu');
-  
+  const headerAvatar = $('chatHeaderAvatar');
+
   if (btnCall) {
     btnCall.hidden = !state.currentChatId || Boolean(state.activeCall) || Boolean(state.contacts.get(state.currentChatId)?.blocked);
   }
@@ -1971,26 +2014,41 @@ function renderChatHeader() {
       title.onclick = null;
     }
     if (subtitle) subtitle.textContent = 'Выберите диалог';
+    if (headerAvatar) { headerAvatar.innerHTML = ''; headerAvatar.hidden = true; }
     closeChatMenu();
     return;
   }
 
   const contact = state.contacts.get(state.currentChatId);
-  if (title) {
-    title.textContent = getContactLabel(contact);
-    if (contact) {
-      title.classList.add('clickable');
-      title.onclick = () => openContactProfile(state.currentChatId);
-    } else {
-      title.classList.remove('clickable');
-      title.onclick = null;
-    }
+  const label = getContactLabel(contact);
+
+  if (headerAvatar) {
+    headerAvatar.hidden = false;
+    const initials = getContactInitials(label);
+    headerAvatar.innerHTML = getAvatarHtml(state.currentChatId, initials);
+    headerAvatar.onclick = () => openContactProfile(state.currentChatId);
   }
+
+  if (title) {
+    title.textContent = label;
+    title.classList.remove('clickable');
+    title.onclick = null;
+  }
+
+  const headerMain = $('chatHeaderMain');
+  if (headerMain && contact) {
+    headerMain.style.cursor = 'pointer';
+    headerMain.onclick = () => openContactProfile(state.currentChatId);
+  } else if (headerMain) {
+    headerMain.style.cursor = '';
+    headerMain.onclick = null;
+  }
+
   if (subtitle) {
     if (contact?.blocked) {
       subtitle.textContent = 'Заблокирован';
     } else {
-      subtitle.textContent = `${contact?.online ? 'в сети' : 'не в сети'}`;
+      subtitle.textContent = getOnlineStatusText(contact);
     }
   }
 }
@@ -2090,6 +2148,24 @@ function getContactLabel(contact) {
   return contact?.alias || contact?.displayName || contact?.id || '';
 }
 
+// Returns online status text respecting the contact's hideOnline preference
+function getOnlineStatusText(contact) {
+  if (!contact) return 'не в сети';
+  if (contact.hideOnline) return 'был(а) недавно';
+  if (contact.online) return 'в сети';
+  if (contact.lastSeen) {
+    return `был(а) ${formatDate(contact.lastSeen)}`;
+  }
+  return 'не в сети';
+}
+
+// Returns own online status text for profile page
+function getOwnOnlineStatusText() {
+  const hideOnline = Boolean(localStorage.getItem('tract.hideOnline'));
+  if (hideOnline) return 'был(а) недавно';
+  return 'в сети';
+}
+
 function getContactGroupKey(label) {
   const normalized = String(label || '').trim().replace(/^@/, '');
   if (!normalized) return '#';
@@ -2126,12 +2202,10 @@ window.openContactProfile = (userId) => {
   if (blocked) {
     statusEl.textContent = 'Заблокирован';
     statusEl.className = 'profile-page-status';
-  } else if (contact.online) {
-    statusEl.textContent = 'В сети';
-    statusEl.className = 'profile-page-status online';
   } else {
-    statusEl.textContent = 'Не в сети';
-    statusEl.className = 'profile-page-status';
+    const statusText = getOnlineStatusText(contact);
+    statusEl.textContent = statusText;
+    statusEl.className = `profile-page-status${contact.online && !contact.hideOnline ? ' online' : ''}`;
   }
 
   const avatarUrl = getAvatarUrl(userId);
@@ -2146,9 +2220,9 @@ window.openContactProfile = (userId) => {
   if (blockLabel) blockLabel.textContent = blocked ? 'Разблок' : 'Блок';
   blockBtn.querySelector('.material-icons').textContent = blocked ? 'lock_open' : 'block';
 
-  // Show delete button only when opened from contacts tab
+  // Delete button always visible
   if (deleteBtn) {
-    deleteBtn.style.display = (currentView === 'contacts') ? '' : 'none';
+    deleteBtn.style.display = '';
   }
 
   state.profileViewUserId = userId;

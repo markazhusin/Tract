@@ -112,7 +112,7 @@ export class WebRTCTransport {
       expectVoiceAnswer: false
     };
 
-    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'inactive' });
 
     pc.ontrack = (event) => {
       const track = event.track;
@@ -192,9 +192,21 @@ export class WebRTCTransport {
     peerState.audioTransceiver.direction = 'sendrecv';
 
     if (asOfferer) {
+      // Caller: create offer with audio sendrecv
       const offer = await peerState.pc.createOffer();
       await peerState.pc.setLocalDescription(offer);
       await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+    } else {
+      // Callee: renegotiate so caller knows we're sending audio too
+      try {
+        const offer = await peerState.pc.createOffer();
+        await peerState.pc.setLocalDescription(offer);
+        await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+      } catch (e) {
+        // If renegotiation fails (e.g. signaling state issue), that's ok —
+        // the caller's audio will still reach us via the existing transceiver
+        console.warn('Callee renegotiation offer failed (non-fatal):', e);
+      }
     }
   }
 
@@ -280,26 +292,10 @@ export class WebRTCTransport {
     }
 
     if (peerState.pc.remoteDescription) {
+      // Renegotiation offer (e.g. callee adding audio track)
       try {
         await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-
-        if (!peerState.localAudioStream) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true },
-            video: false
-          });
-          peerState.localAudioStream = stream;
-          await peerState.audioTransceiver.sender.replaceTrack(stream.getAudioTracks()[0]);
-          try {
-            peerState.audioTransceiver.sender.setStreams([stream]);
-          } catch (e) {
-            console.warn('setStreams:', e);
-          }
-          peerState.audioTransceiver.direction = 'sendrecv';
-        }
-
         await this.flushIceCandidates(peerState);
-
         const answer = await peerState.pc.createAnswer();
         await peerState.pc.setLocalDescription(answer);
         await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
@@ -311,9 +307,7 @@ export class WebRTCTransport {
 
     try {
       await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-
       await this.flushIceCandidates(peerState);
-
       const answer = await peerState.pc.createAnswer();
       await peerState.pc.setLocalDescription(answer);
       await this.signaling.sendSignal(peerId, 'answer', answer.sdp);

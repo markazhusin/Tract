@@ -674,7 +674,92 @@
     }
     .chat-header-title.clickable {
       cursor: pointer;
-      text-decoration: underline;
+    }
+    #chatHeaderMain {
+      flex: 1;
+      min-width: 0;
+      cursor: pointer;
+      border-radius: 6px;
+      padding: 2px 4px;
+      margin: -2px -4px;
+    }
+    #chatHeaderMain:active { background: rgba(255,255,255,0.05); }
+
+    /* Chat header avatar */
+    #chatHeaderAvatar {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: #141515;
+      overflow: hidden;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #chatHeaderAvatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #chatHeaderAvatar:active { opacity: 0.8; }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+    }
+    .toggle-label { font-size: 14px; }
+    .toggle-sublabel { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .toggle-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toggle-switch input[type=checkbox] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 44px;
+      height: 26px;
+      border-radius: 13px;
+      background: var(--panel-input);
+      border: 2px solid var(--line);
+      cursor: pointer;
+      position: relative;
+      transition: background 0.2s, border-color 0.2s;
+      flex-shrink: 0;
+    }
+    .toggle-switch input[type=checkbox]::after {
+      content: '';
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--muted);
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input[type=checkbox]:checked {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .toggle-switch input[type=checkbox]:checked::after {
+      transform: translateX(18px);
+      background: #141515;
+    }
+    .toggle-value {
+      font-size: 13px;
+      color: var(--muted);
+      min-width: 48px;
+      text-align: right;
     }
 
     /* ===== CONTACT PROFILE PAGE (full-screen, TG-style) ===== */
@@ -978,7 +1063,16 @@
                 </div>
                 <div class="field" style="margin-top:12px;">
                   <label>Отображаемое имя</label>
-                  <input id="displayNameInput" type="text" placeholder="@login">
+                  <div style="position:relative;">
+                    <input id="displayNameInput" type="text" placeholder="Введите имя"
+                      style="background:var(--panel-input);border:1.5px solid var(--accent);color:var(--text);padding:10px 40px 10px 12px;border-radius:8px;width:100%;font-size:15px;">
+                    <span class="material-icons" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--accent);font-size:18px;pointer-events:none;">edit</span>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 0 0;">
+                  <span class="material-icons" style="color:var(--muted);font-size:16px;">alternate_email</span>
+                  <span style="font-size:13px;color:var(--muted);">Логин: </span>
+                  <span id="settingUserId" style="font-size:13px;color:var(--muted);"></span>
                 </div>
                 <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
               </div>
