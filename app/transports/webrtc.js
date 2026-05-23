@@ -390,15 +390,33 @@ export class WebRTCTransport {
       return;
     }
 
-    const peer = await this.waitForOpenPeer(targetPeerId, 6000);
-    if (!peer) {
-      throw new Error(`Peer ${targetPeerId} is not connected`);
+    const existingPeer = this.peers.get(targetPeerId);
+    if (existingPeer && existingPeer.channel && existingPeer.channel.readyState === 'open') {
+      existingPeer.channel.send(JSON.stringify(packet));
+      return;
     }
 
-    peer.channel.send(JSON.stringify(packet));
+    if (existingPeer && existingPeer.channel && existingPeer.channel.readyState === 'connecting') {
+      const peer = await this.waitForOpenPeer(targetPeerId, 500);
+      if (peer) {
+        peer.channel.send(JSON.stringify(packet));
+        return;
+      }
+    }
+
+    if (!this.peers.has(targetPeerId) && this.onlinePeers.has(targetPeerId)) {
+      this.connectToPeer(targetPeerId);
+      const peer = await this.waitForOpenPeer(targetPeerId, 500);
+      if (peer) {
+        peer.channel.send(JSON.stringify(packet));
+        return;
+      }
+    }
+
+    throw new Error(`Peer ${targetPeerId} is not connected`);
   }
 
-  async waitForOpenPeer(peerId, timeoutMs = 6000) {
+  async waitForOpenPeer(peerId, timeoutMs = 500) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peer = this.peers.get(peerId);
@@ -411,7 +429,7 @@ export class WebRTCTransport {
         this.connectToPeer(peerId);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
 
     const peer = this.peers.get(peerId);
