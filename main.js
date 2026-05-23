@@ -1024,11 +1024,16 @@ window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
   await messageDB.deleteChat(chatId);
-  await messageDB.deleteContact(chatId);
-  state.contacts.delete(chatId);
-  state.transport?.setAllowedUserIds?.(state.contacts.keys());
-  state.currentChatId = null;
   state.selectedMessageIds.clear();
+  const contact = state.contacts.get(chatId);
+  if (contact) {
+    await upsertContact(chatId, {
+      ...contact,
+      lastMsg: '',
+      lastTime: 0
+    });
+  }
+  state.currentChatId = null;
   renderContacts();
   renderChatHeader();
   updateSelectionUI();
@@ -1735,6 +1740,13 @@ async function restoreContacts() {
       ...contact,
       online: false
     });
+  }
+
+  renderContacts();
+  for (const contact of state.contacts.values()) {
+    if (!contact.avatarUrl && !getAvatarUrl(contact.id)) {
+      ensureAvatarForContact(contact.id).catch(() => {});
+    }
   }
 }
 
