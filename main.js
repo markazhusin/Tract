@@ -1390,6 +1390,7 @@ window.startVoiceCall = async () => {
   if (targetPeerId) {
     const audioSetup = state.transport.startAudioCallWithLocalMedia(targetPeerId, { asOfferer: false })
       .catch((e) => {
+        if (state.activeCall?.callId !== callId) return;
         console.warn('Caller audio setup failed:', e);
       });
 
@@ -1513,7 +1514,6 @@ function renderChatHeader() {
   const btnMenu = $('btnChatMenu');
   
   if (btnCall) {
-    const contact = state.currentChatId ? state.contacts.get(state.currentChatId) : null;
     btnCall.hidden = !state.currentChatId || Boolean(state.activeCall);
   }
   if (btnMenu) btnMenu.hidden = !state.currentChatId;
@@ -1540,8 +1540,7 @@ async function restoreContacts() {
 
     state.contacts.set(contact.id, {
       ...contact,
-      online: false,
-      activePeerId: null
+      online: false
     });
   }
 }

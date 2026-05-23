@@ -462,7 +462,7 @@
       background: var(--bubble-in);
       border-radius: 4px 12px 12px 12px;
     }
-    .msg.pending { opacity: 0.6; }
+    .msg.pending { opacity: 1; }
     .msg.selected { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
     .msg time {
       float: right;
@@ -742,7 +742,7 @@
       <div class="sidebar-header">
         <img src="assets/tract.svg" alt="Tract" style="height:26px;width:auto;">
         <div class="sidebar-header-right">
-          <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки">⚙</button>
+          <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки"><span class="material-icons">settings</span></button>
         </div>
       </div>
 
@@ -785,7 +785,7 @@
                 <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                   <div class="avatar-upload" id="avatarUploadWrapper">
                     <div class="card-avatar" id="profileAvatarSettings" style="width:80px;height:80px;min-width:80px;font-size:36px;">−</div>
-                    <div class="avatar-camera-overlay" onclick="document.getElementById('avatarUploadInput').click()">📷</div>
+                    <div class="avatar-camera-overlay" onclick="document.getElementById('avatarUploadInput').click()"><span class="material-icons">photo_camera</span></div>
                   </div>
                   <div style="text-align:center;">
                     <div class="card-profile-name" id="profileNameSettings" style="font-size:18px;font-weight:600;">−</div>
