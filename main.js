@@ -614,12 +614,15 @@ window.connectHandshake = async () => {
         }
       }
       await flushPendingMessageControls(chatId, peerMeta.peerId);
+      await flushPendingCallControls(chatId, peerMeta.peerId);
     } catch (e) {
       console.warn('Resend pending chat actions failed:', e);
     }
 
-    if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === chatId && !state.activeCall.remotePeerId) {
-      state.activeCall.remotePeerId = peerMeta.peerId;
+    if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === chatId) {
+      if (state.activeCall.remotePeerId !== peerMeta.peerId) {
+        state.activeCall.remotePeerId = peerMeta.peerId;
+      }
       try {
         const audioPromise = state.transport.startAudioCallWithLocalMedia(peerMeta.peerId, { asOfferer: false }).catch((e) => {
           console.warn('Caller audio setup failed when peer appeared:', e);
@@ -669,6 +672,7 @@ window.connectHandshake = async () => {
           console.warn('onPeerConnected send failed:', e);
         }
       }
+      await flushPendingCallControls(userId, peerId);
     } catch (e) {
       console.warn('onPeerConnected retry failed:', e);
     }
@@ -857,6 +861,65 @@ async function queuePendingMessageControl(chatId, packet) {
     controlId: packet.controlId || crypto.randomUUID()
   });
   await messageDB.saveSetting(key, pending);
+}
+
+async function sendCallControl(action, callId, userId, peerId = null) {
+  if (!userId || !state.multiplexer || !state.profile) return false;
+  const packet = {
+    type: 'call',
+    action,
+    callId,
+    senderId: state.profile.userId
+  };
+
+  let targetPeerId = peerId;
+  if (!targetPeerId) {
+    targetPeerId = await resolvePeerForUser(userId).catch(() => null);
+  }
+
+  if (!targetPeerId) {
+    await queuePendingCallControl(userId, packet);
+    return false;
+  }
+
+  try {
+    await state.multiplexer.send(packet, targetPeerId);
+    return true;
+  } catch (error) {
+    await queuePendingCallControl(userId, packet);
+    return false;
+  }
+}
+
+function pendingCallControlsKey(chatId) {
+  return `pendingCallControls:${chatId}`;
+}
+
+async function queuePendingCallControl(chatId, packet) {
+  const key = pendingCallControlsKey(chatId);
+  const pending = await messageDB.getSetting(key) || [];
+  pending.push({
+    ...packet,
+    controlId: packet.controlId || crypto.randomUUID()
+  });
+  await messageDB.saveSetting(key, pending);
+}
+
+async function flushPendingCallControls(chatId, targetPeerId) {
+  if (!state.multiplexer || !chatId || !targetPeerId) return;
+  const key = pendingCallControlsKey(chatId);
+  const pending = await messageDB.getSetting(key) || [];
+  if (!pending.length) return;
+
+  const remaining = [];
+  for (const packet of pending) {
+    try {
+      await state.multiplexer.send(packet, targetPeerId);
+    } catch (error) {
+      remaining.push(packet);
+    }
+  }
+  await messageDB.saveSetting(key, remaining);
 }
 
 async function flushPendingMessageControls(chatId, targetPeerId) {
@@ -1454,26 +1517,14 @@ window.answerVoiceCall = async () => {
 
 window.declineVoiceCall = async () => {
   const ac = state.activeCall;
-  if (!ac || ac.status !== 'incoming' || !state.multiplexer || !state.profile) return;
+  if (!ac || ac.status !== 'incoming' || !state.profile) return;
 
   stopRingTone();
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
   state.activeCall = null;
   updateCallBar();
-  if (peerId) {
-    state.multiplexer
-      .send(
-        {
-          type: 'call',
-          action: 'reject',
-          callId: ac.callId,
-          senderId: state.profile.userId
-        },
-        peerId
-      )
-      .catch(() => {});
-  }
+  await sendCallControl('reject', ac.callId, ac.peerUserId, peerId);
 };
 
 window.endVoiceCall = async () => {
@@ -1491,19 +1542,7 @@ window.endVoiceCall = async () => {
   state.activeCall = null;
   state.micMuted = false;
   updateCallBar();
-  if (peerId) {
-    state.multiplexer
-      .send(
-        {
-          type: 'call',
-          action: 'end',
-          callId: ac.callId,
-          senderId: state.profile.userId
-        },
-        peerId
-      )
-      .catch(() => {});
-  }
+  await sendCallControl('end', ac.callId, ac.peerUserId, peerId);
   await hangupCallAudio(peerId);
 };
 

@@ -30,7 +30,16 @@ export class Multiplexer {
     console.log('Отправка:', preview);
     let lastError = null;
 
-    for (const t of this.transports.values()) {
+    const transports = [...this.transports.values()];
+    if (p?.type === 'call' || p?.type === 'message_control') {
+      transports.sort((a, b) => {
+        if (a.name === 'Signaling') return -1;
+        if (b.name === 'Signaling') return 1;
+        return 0;
+      });
+    }
+
+    for (const t of transports) {
       try {
         await t.send(p, targetPeerId);
         return;
