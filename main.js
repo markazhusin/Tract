@@ -297,35 +297,27 @@ window.handleAvatarUpload = async (event) => {
 };
 
 function openAvatarCropModal(imageSrc, onConfirm) {
-  // Remove existing modal if any
   const existing = document.getElementById('avatarCropModal');
   if (existing) existing.remove();
 
   const modal = document.createElement('div');
   modal.id = 'avatarCropModal';
-  modal.style.cssText = `
-    position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:200;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px;
-  `;
+  modal.style.cssText = [
+    'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.9)', 'z-index:300',
+    'display:flex', 'flex-direction:column', 'align-items:center',
+    'justify-content:center', 'gap:16px', 'padding:20px'
+  ].join(';');
 
   const title = document.createElement('div');
-  title.textContent = 'Выберите область';
-  title.style.cssText = 'color:#f5f5f5;font-size:16px;font-weight:600;';
+  title.textContent = 'Перетащите круг · колесо/пинч — размер';
+  title.style.cssText = 'color:#f5f5f5;font-size:14px;font-weight:500;text-align:center;';
 
-  const canvasWrap = document.createElement('div');
-  canvasWrap.style.cssText = 'position:relative;touch-action:none;user-select:none;';
-
+  // Single canvas for everything
   const canvas = document.createElement('canvas');
-  canvas.style.cssText = 'display:block;border-radius:8px;max-width:min(340px,90vw);max-height:min(340px,60vh);';
-
-  const overlay = document.createElement('canvas');
-  overlay.style.cssText = `
-    position:absolute;inset:0;pointer-events:none;border-radius:8px;
-    max-width:min(340px,90vw);max-height:min(340px,60vh);
-  `;
-
-  canvasWrap.appendChild(canvas);
-  canvasWrap.appendChild(overlay);
+  canvas.style.cssText = [
+    'display:block', 'border-radius:8px', 'touch-action:none',
+    'cursor:move', 'max-width:min(340px,90vw)', 'max-height:min(340px,60vh)'
+  ].join(';');
 
   const btnRow = document.createElement('div');
   btnRow.style.cssText = 'display:flex;gap:12px;';
@@ -341,144 +333,142 @@ function openAvatarCropModal(imageSrc, onConfirm) {
   btnRow.appendChild(cancelBtn);
   btnRow.appendChild(confirmBtn);
   modal.appendChild(title);
-  modal.appendChild(canvasWrap);
+  modal.appendChild(canvas);
   modal.appendChild(btnRow);
   document.body.appendChild(modal);
 
   const img = new Image();
   img.onload = () => {
-    const maxSize = Math.min(340, window.innerWidth * 0.9, window.innerHeight * 0.6);
+    const maxSize = Math.min(340, window.innerWidth * 0.9, window.innerHeight * 0.55);
     const scale = Math.min(maxSize / img.width, maxSize / img.height);
     const W = Math.round(img.width * scale);
     const H = Math.round(img.height * scale);
 
     canvas.width = W;
     canvas.height = H;
-    overlay.width = W;
-    overlay.height = H;
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
-    overlay.style.width = W + 'px';
-    overlay.style.height = H + 'px';
 
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, W, H);
 
-    // Crop circle state
     const minDim = Math.min(W, H);
-    let cropR = minDim * 0.45;
+    let cropR = minDim * 0.44;
     let cropX = W / 2;
     let cropY = H / 2;
 
-    function drawOverlay() {
-      const oc = overlay.getContext('2d');
-      oc.clearRect(0, 0, W, H);
-      // Dark overlay
-      oc.fillStyle = 'rgba(0,0,0,0.55)';
-      oc.fillRect(0, 0, W, H);
-      // Cut out circle
-      oc.globalCompositeOperation = 'destination-out';
-      oc.beginPath();
-      oc.arc(cropX, cropY, cropR, 0, Math.PI * 2);
-      oc.fill();
-      oc.globalCompositeOperation = 'source-over';
+    function draw() {
+      // Draw image
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(img, 0, 0, W, H);
+      // Dark overlay outside circle
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
       // Circle border
-      oc.strokeStyle = 'rgba(183,255,249,0.9)';
-      oc.lineWidth = 2;
-      oc.beginPath();
-      oc.arc(cropX, cropY, cropR, 0, Math.PI * 2);
-      oc.stroke();
+      ctx.strokeStyle = 'rgba(183,255,249,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
-    drawOverlay();
+    draw();
 
-    // Drag to move circle
+    // ---- Pointer events (mouse + touch unified) ----
     let dragging = false;
     let lastX = 0, lastY = 0;
+    let lastPinchDist = null;
 
-    function getPos(e) {
+    function canvasPos(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
-      const scaleX = W / rect.width;
-      const scaleY = H / rect.height;
-      if (e.touches) {
-        return {
-          x: (e.touches[0].clientX - rect.left) * scaleX,
-          y: (e.touches[0].clientY - rect.top) * scaleY
-        };
-      }
       return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY
+        x: (clientX - rect.left) * (W / rect.width),
+        y: (clientY - rect.top) * (H / rect.height)
       };
     }
 
-    function onStart(e) {
+    function clampCrop() {
+      cropX = Math.max(cropR, Math.min(W - cropR, cropX));
+      cropY = Math.max(cropR, Math.min(H - cropR, cropY));
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
       e.preventDefault();
       dragging = true;
-      const p = getPos(e);
+      const p = canvasPos(e.clientX, e.clientY);
       lastX = p.x; lastY = p.y;
-    }
+    });
 
-    function onMove(e) {
+    window.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      e.preventDefault();
-      const p = getPos(e);
-      cropX = Math.max(cropR, Math.min(W - cropR, cropX + (p.x - lastX)));
-      cropY = Math.max(cropR, Math.min(H - cropR, cropY + (p.y - lastY)));
+      const p = canvasPos(e.clientX, e.clientY);
+      cropX += p.x - lastX;
+      cropY += p.y - lastY;
       lastX = p.x; lastY = p.y;
-      drawOverlay();
-    }
+      clampCrop();
+      draw();
+    });
 
-    function onEnd() { dragging = false; }
+    window.addEventListener('mouseup', () => { dragging = false; });
 
-    // Pinch to resize
-    let lastPinchDist = null;
-    function onTouchMove(e) {
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      cropR = Math.max(20, Math.min(minDim * 0.5, cropR - e.deltaY * 0.4));
+      clampCrop();
+      draw();
+    }, { passive: false });
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        dragging = true;
+        const p = canvasPos(e.touches[0].clientX, e.touches[0].clientY);
+        lastX = p.x; lastY = p.y;
+        lastPinchDist = null;
+      } else if (e.touches.length === 2) {
+        dragging = false;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        lastPinchDist = Math.sqrt(dx * dx + dy * dy);
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
       if (e.touches.length === 2) {
-        e.preventDefault();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (lastPinchDist !== null) {
-          const delta = dist - lastPinchDist;
-          cropR = Math.max(20, Math.min(Math.min(W, H) * 0.5, cropR + delta * 0.5));
-          cropX = Math.max(cropR, Math.min(W - cropR, cropX));
-          cropY = Math.max(cropR, Math.min(H - cropR, cropY));
-          drawOverlay();
+          cropR = Math.max(20, Math.min(minDim * 0.5, cropR + (dist - lastPinchDist) * 0.5));
+          clampCrop();
+          draw();
         }
         lastPinchDist = dist;
         return;
       }
-      lastPinchDist = null;
-      onMove(e);
-    }
-
-    function onTouchEnd(e) {
-      if (e.touches.length < 2) lastPinchDist = null;
-      onEnd();
-    }
-
-    // Mouse wheel to resize
-    overlay.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      cropR = Math.max(20, Math.min(Math.min(W, H) * 0.5, cropR - e.deltaY * 0.3));
-      cropX = Math.max(cropR, Math.min(W - cropR, cropX));
-      cropY = Math.max(cropR, Math.min(H - cropR, cropY));
-      drawOverlay();
+      if (!dragging || e.touches.length !== 1) return;
+      const p = canvasPos(e.touches[0].clientX, e.touches[0].clientY);
+      cropX += p.x - lastX;
+      cropY += p.y - lastY;
+      lastX = p.x; lastY = p.y;
+      clampCrop();
+      draw();
     }, { passive: false });
 
-    overlay.addEventListener('mousedown', onStart);
-    overlay.addEventListener('mousemove', onMove);
-    overlay.addEventListener('mouseup', onEnd);
-    overlay.addEventListener('mouseleave', onEnd);
-    overlay.addEventListener('touchstart', onStart, { passive: false });
-    overlay.addEventListener('touchmove', onTouchMove, { passive: false });
-    overlay.addEventListener('touchend', onTouchEnd);
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) lastPinchDist = null;
+      if (e.touches.length === 0) dragging = false;
+    });
 
     cancelBtn.onclick = () => modal.remove();
 
     confirmBtn.onclick = () => {
-      // Render cropped circle to output canvas
       const size = 256;
       const out = document.createElement('canvas');
       out.width = size;
@@ -487,12 +477,14 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       oc.beginPath();
       oc.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
       oc.clip();
-      // Map crop circle to output
-      const srcScale = img.width / W; // canvas coords → original image coords
-      const srcX = (cropX - cropR) * srcScale;
-      const srcY = (cropY - cropR) * srcScale;
-      const srcSize = cropR * 2 * srcScale;
-      oc.drawImage(img, srcX, srcY, srcSize, srcSize, 0, 0, size, size);
+      // Map canvas crop coords back to original image coords
+      const imgScaleX = img.width / W;
+      const imgScaleY = img.height / H;
+      const srcX = (cropX - cropR) * imgScaleX;
+      const srcY = (cropY - cropR) * imgScaleY;
+      const srcW = cropR * 2 * imgScaleX;
+      const srcH = cropR * 2 * imgScaleY;
+      oc.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, size, size);
       const result = out.toDataURL('image/jpeg', 0.88);
       modal.remove();
       onConfirm(result);
@@ -809,6 +801,12 @@ window.saveOwnProfile = async () => {
   renderProfile();
   if (state.transport?.signaling) {
     state.transport.options.displayName = displayName;
+    // Send heartbeat to update displayName on server
+    state.transport.signaling.post('/peer/heartbeat', {
+      peerId: state.myPeerId,
+      roomId: state.transport.options.roomId,
+      displayName
+    }).catch(() => {});
   }
   await updateInviteArtifacts();
 };
@@ -880,27 +878,35 @@ window.connectHandshake = async () => {
 
   state.transport.onPeerDiscovery(async (_peerId, peerMeta) => {
     if (peerMeta.userId === state.profile.userId) return;
-    if (!state.contacts.has(peerMeta.userId)) return;
 
-    // Always update displayName from peer metadata (fixes re-add after delete)
-    const existingContact = state.contacts.get(peerMeta.userId);
-    const resolvedDisplayName = peerMeta.displayName && peerMeta.displayName !== peerMeta.userId
-      ? peerMeta.displayName
-      : (existingContact?.displayName && existingContact.displayName !== peerMeta.userId
+    const isNew = !state.contacts.has(peerMeta.userId);
+    const existingContact = state.contacts.get(peerMeta.userId) || {};
+
+    // Resolve best displayName: prefer server metadata if it differs from userId
+    const resolvedDisplayName =
+      (peerMeta.displayName && peerMeta.displayName !== peerMeta.userId)
+        ? peerMeta.displayName
+        : (existingContact.displayName && existingContact.displayName !== peerMeta.userId)
           ? existingContact.displayName
-          : peerMeta.displayName || peerMeta.userId);
+          : peerMeta.displayName || peerMeta.userId;
 
     await upsertContact(peerMeta.userId, {
       displayName: resolvedDisplayName,
       activePeerId: peerMeta.peerId,
-      avatarUrl: peerMeta.avatar || existingContact?.avatarUrl,
+      avatarUrl: peerMeta.avatar || existingContact.avatarUrl || null,
       online: true,
       roomId,
-      lastMsg: existingContact?.lastMsg || 'Онлайн'
+      lastMsg: existingContact.lastMsg || 'Онлайн'
     });
 
+    // If this is a new contact, update WebRTC allowedUserIds so it can connect
+    if (isNew) {
+      state.transport.setAllowedUserIds(Array.from(state.contacts.keys()));
+    }
+
     const chatId = peerMeta.userId;
-    // Resend pending messages for this user
+
+    // Resend any pending (undelivered) messages for this user
     try {
       const pending = await messageDB.getUndeliveredMessages(chatId);
       for (const msg of pending) {
@@ -909,13 +915,13 @@ window.connectHandshake = async () => {
           await messageDB.markMessageSent(msg.id);
           markMessageDelivered(msg.id);
         } catch (e) {
-          console.warn('Resend failed for', msg, e);
+          console.warn('[onPeerDiscovery] resend failed:', e?.message || e);
         }
       }
       await flushPendingMessageControls(chatId, peerMeta.peerId);
       await flushPendingCallControls(chatId, peerMeta.peerId);
     } catch (e) {
-      console.warn('Resend pending chat actions failed:', e);
+      console.warn('[onPeerDiscovery] pending flush failed:', e);
     }
 
     if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === chatId) {
@@ -1020,14 +1026,26 @@ window.connectHandshake = async () => {
       addMessageToUI(packet, false);
     }
 
+    // Auto-add or update contact with real displayName from packet
+    const existingContact = state.contacts.get(chatId);
+    const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
+      ? packet.senderName
+      : (existingContact?.displayName || chatId);
+
+    const wasNew = !state.contacts.has(chatId);
     await upsertContact(chatId, {
-      displayName: packet.senderName || state.contacts.get(chatId)?.displayName || chatId,
+      displayName: resolvedDisplayName,
       activePeerId: fromPeerId,
       online: true,
       roomId,
       lastMsg: packet.content,
       lastTime: packet.timestamp
     });
+
+    // If contact was auto-created, update allowedUserIds
+    if (wasNew) {
+      state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
+    }
   });
 
   try {
@@ -1049,12 +1067,11 @@ window.addContactById = async () => {
   }
   if (userId === state.profile.userId) return;
 
-  // Preserve existing displayName if contact already exists and has a real name
+  // Create or update contact with temporary displayName (will be updated from peer discovery)
   const existing = state.contacts.get(userId);
   await upsertContact(userId, {
-    displayName: (existing?.displayName && existing.displayName !== userId) ? existing.displayName : userId,
+    displayName: existing?.displayName || userId,
     lastMsg: existing?.lastMsg || 'Контакт добавлен',
-    // Reset activePeerId so peer lookup is fresh
     activePeerId: null,
     online: false
   });
@@ -1064,6 +1081,7 @@ window.addContactById = async () => {
   // Pass array (not iterator) to setAllowedUserIds
   state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
 
+  // Try to find peer and update displayName from server
   if (state.transport) {
     const peer = await state.transport.findPeerByUserId(userId).catch(() => null);
     if (peer) {
@@ -1249,21 +1267,18 @@ async function flushPendingMessageControls(chatId, targetPeerId) {
 window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
-  // Delete messages and contact from DB
+  // Only delete messages, keep the contact
   await messageDB.deleteChat(chatId);
-  await messageDB.deleteContact(chatId);
-  // Remove from in-memory state
-  state.contacts.delete(chatId);
   state.selectedMessageIds.clear();
-  state.unreadCounts.delete(chatId);
+  const contact = state.contacts.get(chatId);
+  if (contact) {
+    await upsertContact(chatId, { ...contact, lastMsg: '', lastTime: 0 });
+  }
   state.currentChatId = null;
-  // Update WebRTC allowed peers
-  state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
   renderContacts();
   renderChatHeader();
   updateSelectionUI();
-  refreshDocTitle();
-  $('messages').innerHTML = '<div class="empty-chat">Чат удалён</div>';
+  $('messages').innerHTML = '<div class="empty-chat">История очищена</div>';
   closeChatMenu();
   updateMobileLayout();
 };
@@ -1271,6 +1286,14 @@ window.deleteCurrentChat = async () => {
 async function resolvePeerForUser(userId) {
   const contact = state.contacts.get(userId);
   let targetPeerId = contact?.activePeerId;
+
+  // If we have a cached peerId, verify it's still valid by checking onlinePeers
+  if (targetPeerId && state.transport?.onlinePeers) {
+    if (!state.transport.onlinePeers.has(targetPeerId)) {
+      // Cached peerId is stale — clear it and try fresh lookup
+      targetPeerId = null;
+    }
+  }
 
   if (!targetPeerId && state.transport?.findPeerByUserId) {
     const resolvedPeer = await state.transport.findPeerByUserId(userId).catch(() => null);
@@ -1284,7 +1307,7 @@ async function resolvePeerForUser(userId) {
     }
   }
 
-  return targetPeerId;
+  return targetPeerId || null;
 }
 
 window.sendCurrentMessage = async () => {
@@ -1329,7 +1352,14 @@ async function deliverOutgoingMessage(chatId, packet) {
   try {
     const contact = state.contacts.get(chatId);
     const targetPeerId = await resolvePeerForUser(chatId);
-    if (!targetPeerId) return;
+
+    if (!targetPeerId) {
+      // Peer is offline — message stays as pending (isSent: false) in DB.
+      // It will be retried automatically when the peer comes online via
+      // onPeerDiscovery / onPeerConnected callbacks.
+      console.log('[deliver] peer offline, message queued as pending:', chatId);
+      return;
+    }
 
     await state.multiplexer.send(packet, targetPeerId);
     await messageDB.markMessageSent(packet._dbId || packet.id);
@@ -1342,7 +1372,8 @@ async function deliverOutgoingMessage(chatId, packet) {
     });
     markMessageDelivered(packet._dbId || packet.id);
   } catch (error) {
-    console.warn('Send failed:', error);
+    // Transport failed — message stays pending, will retry on reconnect
+    console.warn('[deliver] send failed, message stays pending:', error?.message || error);
   }
 }
 
@@ -1601,13 +1632,23 @@ async function handleCallControl(packet, fromPeerId) {
   const peerUserId = packet.senderId || findUserIdByPeerId(fromPeerId);
 
   if (action === 'invite' && peerUserId && callId) {
+    const existingContact = state.contacts.get(peerUserId);
+    const resolvedDisplayName = packet.senderName && packet.senderName !== peerUserId
+      ? packet.senderName
+      : (existingContact?.displayName || peerUserId);
+
+    const wasNew = !state.contacts.has(peerUserId);
     await upsertContact(peerUserId, {
-      displayName: packet.senderName || state.contacts.get(peerUserId)?.displayName || peerUserId,
+      displayName: resolvedDisplayName,
       activePeerId: fromPeerId,
       online: true,
       roomId: state.transport?.options?.roomId,
-      lastMsg: state.contacts.get(peerUserId)?.lastMsg || 'Звонок'
+      lastMsg: existingContact?.lastMsg || 'Звонок'
     });
+
+    if (wasNew) {
+      state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
+    }
 
     if (state.activeCall?.status === 'active') return;
 
@@ -2067,46 +2108,57 @@ window.openContactProfile = (userId) => {
   if (!userId) return;
 
   const contact = state.contacts.get(userId) || { id: userId, online: false };
-  const modal = $('contactProfileModal');
   const avatarEl = $('profileModalAvatar');
   const nameEl = $('profileModalName');
   const idEl = $('profileModalId');
   const statusEl = $('profileModalStatus');
   const callBtn = $('profileCallBtn');
   const blockBtn = $('profileBlockBtn');
+  const blockLabel = $('profileBlockLabel');
+  const deleteBtn = $('profileDeleteBtn');
 
-  if (!modal || !avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn) return;
+  if (!avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn) return;
 
   nameEl.textContent = getContactLabel(contact);
   idEl.textContent = userId;
-  if (contact.blocked) {
+
+  const blocked = Boolean(contact.blocked);
+  if (blocked) {
     statusEl.textContent = 'Заблокирован';
+    statusEl.className = 'profile-page-status';
+  } else if (contact.online) {
+    statusEl.textContent = 'В сети';
+    statusEl.className = 'profile-page-status online';
   } else {
-    statusEl.textContent = contact.online ? 'В сети' : 'Не в сети';
+    statusEl.textContent = 'Не в сети';
+    statusEl.className = 'profile-page-status';
   }
 
-  if (getAvatarUrl(userId)) {
-    avatarEl.innerHTML = `<img src="${escapeHtml(getAvatarUrl(userId))}" alt="">`;
+  const avatarUrl = getAvatarUrl(userId);
+  if (avatarUrl) {
+    avatarEl.innerHTML = `<img src="${escapeHtml(avatarUrl)}" alt="">`;
   } else {
     avatarEl.textContent = getContactInitials(getContactLabel(contact));
   }
 
-  const blocked = Boolean(contact.blocked);
   callBtn.disabled = blocked;
-  callBtn.title = blocked ? 'Разблокируйте контакт, чтобы позвонить' : 'Позвонить';
-  blockBtn.textContent = blocked ? 'Разблокировать' : 'Заблокировать';
-  blockBtn.className = blocked ? 'btn subtle' : 'btn primary';
+  callBtn.style.opacity = blocked ? '0.4' : '';
+  if (blockLabel) blockLabel.textContent = blocked ? 'Разблок' : 'Блок';
+  blockBtn.querySelector('.material-icons').textContent = blocked ? 'lock_open' : 'block';
+
+  // Show delete button only when opened from contacts tab
+  if (deleteBtn) {
+    deleteBtn.style.display = (currentView === 'contacts') ? '' : 'none';
+  }
 
   state.profileViewUserId = userId;
-  modal.hidden = false;
-  modal.classList.remove('hidden');
+  const page = $('contactProfilePage');
+  if (page) page.classList.add('open');
 };
 
 window.closeContactProfile = () => {
-  const modal = $('contactProfileModal');
-  if (!modal) return;
-  modal.hidden = true;
-  modal.classList.add('hidden');
+  const page = $('contactProfilePage');
+  if (page) page.classList.remove('open');
   state.profileViewUserId = null;
 };
 
@@ -2122,11 +2174,34 @@ window.toggleContactBlockFromProfile = async () => {
   const userId = state.profileViewUserId;
   if (!userId) return;
   const contact = state.contacts.get(userId) || { id: userId };
-  const updated = await upsertContact(userId, {
+  await upsertContact(userId, {
     ...contact,
     blocked: !Boolean(contact.blocked)
   });
-  openContactProfile(updated.id);
+  openContactProfile(userId);
+};
+
+window.deleteContactFromProfile = async () => {
+  const userId = state.profileViewUserId;
+  if (!userId) return;
+  closeContactProfile();
+  // Delete messages and contact from DB
+  await messageDB.deleteChat(userId);
+  await messageDB.deleteContact(userId);
+  // Remove from in-memory state
+  state.contacts.delete(userId);
+  state.unreadCounts.delete(userId);
+  if (state.currentChatId === userId) {
+    state.currentChatId = null;
+    state.selectedMessageIds.clear();
+    $('messages').innerHTML = '<div class="empty-chat">Контакт удалён</div>';
+    renderChatHeader();
+    updateSelectionUI();
+    updateMobileLayout();
+  }
+  state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
+  refreshDocTitle();
+  renderContacts();
 };
 
 function setStatus(kind, text) {
@@ -2196,22 +2271,10 @@ function initSwipeGestures() {
   if (chatEl) {
     let touchStartX = 0;
     let touchStartY = 0;
-    let swiping = false;
 
     chatEl.addEventListener('touchstart', (e) => {
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
-      swiping = false;
-    }, { passive: true });
-
-    chatEl.addEventListener('touchmove', (e) => {
-      if (!state.currentChatId) return;
-      const dx = e.touches[0].clientX - touchStartX;
-      const dy = e.touches[0].clientY - touchStartY;
-      // Only trigger if horizontal swipe is dominant and starts from left edge
-      if (!swiping && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        swiping = true;
-      }
     }, { passive: true });
 
     chatEl.addEventListener('touchend', (e) => {
@@ -2222,7 +2285,6 @@ function initSwipeGestures() {
       const isRightSwipe = dx > 60 && isHorizontal;
       const startsFromEdge = touchStartX < 60;
       if ((isRightSwipe && startsFromEdge) || (isRightSwipe && dx > 120)) {
-        // Only on mobile
         if (window.matchMedia('(max-width: 768px)').matches) {
           goBackFromChat();
         }
@@ -2230,7 +2292,7 @@ function initSwipeGestures() {
     }, { passive: true });
   }
 
-  // Swipe left on sidebar → open last/current chat (mobile)
+  // Swipe left on sidebar → open current chat (mobile)
   const sidebarEl = $('sidebar');
   if (sidebarEl) {
     let touchStartX = 0;
@@ -2246,13 +2308,32 @@ function initSwipeGestures() {
       const dy = e.changedTouches[0].clientY - touchStartY;
       const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
       const isLeftSwipe = dx < -60 && isHorizontal;
-      if (isLeftSwipe && window.matchMedia('(max-width: 768px)').matches) {
-        // If there's an active chat, slide to it
-        if (state.currentChatId) {
-          updateMobileLayout();
-          const sidebar = $('sidebar');
-          if (sidebar) sidebar.classList.add('chat-open');
-        }
+      if (isLeftSwipe && window.matchMedia('(max-width: 768px)').matches && state.currentChatId) {
+        const sidebar = $('sidebar');
+        if (sidebar) sidebar.classList.add('chat-open');
+      }
+    }, { passive: true });
+  }
+
+  // Swipe right on profile page → close profile
+  const profilePage = $('contactProfilePage');
+  if (profilePage) {
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    profilePage.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    profilePage.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+      const isRightSwipe = dx > 60 && isHorizontal;
+      const startsFromEdge = touchStartX < 60;
+      if ((isRightSwipe && startsFromEdge) || (isRightSwipe && dx > 120)) {
+        closeContactProfile();
       }
     }, { passive: true });
   }

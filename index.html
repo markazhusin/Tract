@@ -625,15 +625,13 @@
       width: 80px;
       height: 80px;
       border-radius: 50%;
-      overflow: hidden;
       cursor: pointer;
       flex-shrink: 0;
     }
     .avatar-upload .card-avatar {
-      width: 100%;
-      height: 100%;
-      min-width: auto;
-      min-height: auto;
+      width: 80px;
+      height: 80px;
+      min-width: 80px;
       border-radius: 50%;
       overflow: hidden;
       position: relative;
@@ -652,23 +650,23 @@
       border-radius: 50%;
       pointer-events: none;
       box-sizing: border-box;
-      background: radial-gradient(circle at center, transparent 56%, rgba(0,0,0,0.18) 56%);
     }
     .avatar-camera-overlay {
       position: absolute;
-      bottom: 6px;
-      right: 6px;
-      width: 28px;
-      height: 28px;
+      bottom: 0;
+      right: 0;
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
       background: var(--accent);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 14px;
+      font-size: 13px;
       color: #141515;
       box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-      border: 2px solid var(--panel);
+      border: 2px solid var(--bg);
+      z-index: 2;
     }
 
     .chat-header-title {
@@ -679,84 +677,132 @@
       text-decoration: underline;
     }
 
-    .profile-modal {
+    /* ===== CONTACT PROFILE PAGE (full-screen, TG-style) ===== */
+    #contactProfilePage {
       position: fixed;
       inset: 0;
-      background: rgba(10, 10, 10, 0.72);
+      z-index: 200;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      will-change: transform;
+    }
+    #contactProfilePage.open {
+      transform: translateX(0);
+    }
+    .profile-page-header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: calc(10px + var(--safe-top)) 12px 10px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--line);
+    }
+    .profile-page-back {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 100;
-      padding: 18px;
+      font-size: 20px;
+      flex-shrink: 0;
+      color: var(--accent);
     }
-    .profile-modal.hidden {
-      display: none;
+    .profile-page-back:active { background: rgba(255,255,255,0.06); }
+    .profile-page-header-title {
+      flex: 1;
+      font-size: 17px;
+      font-weight: 600;
     }
-    .profile-modal-card {
-      width: min(480px, 100%);
-      background: var(--panel);
-      border-radius: 18px;
-      padding: 24px;
-      position: relative;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.25);
-      color: var(--text);
+    .profile-page-scroll {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
-    .profile-modal-close {
-      position: absolute;
-      top: 16px;
-      right: 16px;
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      border: none;
-      background: rgba(255,255,255,0.12);
-      color: var(--text);
-      cursor: pointer;
-      display: grid;
-      place-items: center;
+    .profile-page-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 20px 20px;
+      gap: 12px;
     }
-    .profile-modal-avatar {
-      width: 120px;
-      height: 120px;
+    .profile-page-avatar {
+      width: 100px;
+      height: 100px;
       border-radius: 50%;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 18px;
-      font-size: 40px;
+      font-size: 38px;
       font-weight: 700;
       color: #141515;
       background: var(--accent);
+      flex-shrink: 0;
     }
-    .profile-modal-avatar img {
+    .profile-page-avatar img {
       width: 100%;
       height: 100%;
       object-fit: cover;
     }
-    .profile-modal-title {
-      text-align: center;
+    .profile-page-name {
       font-size: 22px;
       font-weight: 700;
-      margin-bottom: 6px;
-      word-break: break-word;
-    }
-    .profile-modal-subtitle,
-    .profile-modal-status {
       text-align: center;
-      color: var(--muted);
-      margin-bottom: 10px;
-      font-size: 14px;
       word-break: break-word;
     }
-    .profile-modal-actions {
+    .profile-page-status {
+      font-size: 14px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .profile-page-status.online { color: var(--online); }
+    .profile-page-actions {
       display: flex;
       gap: 10px;
-      flex-wrap: wrap;
       justify-content: center;
-      margin-top: 14px;
+      padding: 0 20px 20px;
+      flex-wrap: wrap;
     }
-    .profile-modal-actions .btn { flex: 1; min-width: 130px; }
+    .profile-page-action-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 16px;
+      background: var(--panel-input);
+      border-radius: 12px;
+      min-width: 72px;
+      font-size: 12px;
+      color: var(--accent);
+      border: none;
+      cursor: pointer;
+    }
+    .profile-page-action-btn:active { opacity: 0.7; }
+    .profile-page-action-btn .material-icons { font-size: 22px; }
+    .profile-page-action-btn.danger { color: var(--danger); }
+    .profile-page-section {
+      margin: 0 12px 12px;
+      background: var(--panel-input);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .profile-page-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .profile-page-row:last-child { border-bottom: none; }
+    .profile-page-row-icon { color: var(--muted); font-size: 20px; }
+    .profile-page-row-content { flex: 1; min-width: 0; }
+    .profile-page-row-label { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+    .profile-page-row-value { font-size: 15px; word-break: break-all; }
 
     .contact-group-header {
       padding: 12px 12px 4px;
@@ -920,10 +966,10 @@
               <!-- Profile Section -->
               <div class="settings-section" style="padding:20px;">
                 <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-                  <div class="avatar-upload" id="avatarUploadWrapper">
+                  <div class="avatar-upload" id="avatarUploadWrapper" onclick="document.getElementById('avatarUploadInput').click()">
                     <div class="card-avatar" id="profileAvatarSettings" style="width:80px;height:80px;min-width:80px;font-size:36px;">−</div>
                     <div class="avatar-crop-frame"></div>
-                    <div class="avatar-camera-overlay" onclick="document.getElementById('avatarUploadInput').click()"><span class="material-icons">photo_camera</span></div>
+                    <div class="avatar-camera-overlay"><span class="material-icons" style="font-size:13px;">photo_camera</span></div>
                   </div>
                   <div style="text-align:center;">
                     <div class="card-profile-name" id="profileNameSettings" style="font-size:18px;font-weight:600;">−</div>
@@ -963,19 +1009,7 @@
           </div>
         </div>
 
-        <div id="contactProfileModal" class="profile-modal hidden" hidden>
-          <div class="profile-modal-card">
-            <button type="button" class="profile-modal-close" onclick="closeContactProfile()" title="Закрыть">×</button>
-            <div class="profile-modal-avatar" id="profileModalAvatar">A</div>
-            <div class="profile-modal-title" id="profileModalName">Имя</div>
-            <div class="profile-modal-subtitle" id="profileModalId">@login</div>
-            <div class="profile-modal-status" id="profileModalStatus">В сети</div>
-            <div class="profile-modal-actions">
-              <button type="button" class="btn primary" id="profileCallBtn" onclick="startVoiceCallFromProfile()">Позвонить</button>
-              <button type="button" class="btn subtle" id="profileBlockBtn" onclick="toggleContactBlockFromProfile()">Заблокировать</button>
-            </div>
-          </div>
-        </div>
+        <!-- contact profile is now a full-screen page, see #contactProfilePage below -->
       </div>
     </aside>
 
@@ -993,7 +1027,6 @@
           <div class="chat-menu" id="chatMenu" hidden>
             <button type="button" onclick="clearCurrentHistory('me')">Очистить у меня</button>
             <button type="button" onclick="clearCurrentHistory('all')">Очистить у всех</button>
-            <button type="button" class="danger" onclick="deleteCurrentChat()">Удалить чат и контакт</button>
           </div>
         </div>
       </header>
@@ -1019,6 +1052,50 @@
         </div>
       </footer>
     </main>
+  </div>
+
+  <!-- CONTACT PROFILE PAGE (full-screen, TG-style) -->
+  <div id="contactProfilePage">
+    <div class="profile-page-header">
+      <button type="button" class="profile-page-back" onclick="closeContactProfile()">
+        <span class="material-icons">arrow_back</span>
+      </button>
+      <div class="profile-page-header-title">Профиль</div>
+    </div>
+    <div class="profile-page-scroll">
+      <div class="profile-page-hero">
+        <div class="profile-page-avatar" id="profileModalAvatar">A</div>
+        <div class="profile-page-name" id="profileModalName">Имя</div>
+        <div class="profile-page-status" id="profileModalStatus">Не в сети</div>
+      </div>
+
+      <!-- Action buttons row -->
+      <div class="profile-page-actions">
+        <button type="button" class="profile-page-action-btn" id="profileCallBtn" onclick="startVoiceCallFromProfile()">
+          <span class="material-icons">phone</span>
+          Звонок
+        </button>
+        <button type="button" class="profile-page-action-btn" id="profileBlockBtn" onclick="toggleContactBlockFromProfile()">
+          <span class="material-icons">block</span>
+          <span id="profileBlockLabel">Блок</span>
+        </button>
+        <button type="button" class="profile-page-action-btn danger" id="profileDeleteBtn" onclick="deleteContactFromProfile()">
+          <span class="material-icons">delete</span>
+          Удалить
+        </button>
+      </div>
+
+      <!-- Info section -->
+      <div class="profile-page-section">
+        <div class="profile-page-row">
+          <span class="material-icons profile-page-row-icon">alternate_email</span>
+          <div class="profile-page-row-content">
+            <div class="profile-page-row-label">Логин</div>
+            <div class="profile-page-row-value" id="profileModalId">@login</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="main.js"></script>
