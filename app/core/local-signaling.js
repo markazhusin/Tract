@@ -27,7 +27,8 @@ export class HostedSignaling {
       peerId: this.peerId,
       roomId: this.roomId,
       userId: this.options.userId,
-      displayName: this.options.displayName
+      displayName: this.options.displayName,
+      avatarData: this.options.avatarData || null
     });
   }
 

@@ -170,10 +170,16 @@ export class WebRTCTransport {
       throw new Error('Peer connection not ready for audio');
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: false
-    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false
+      });
+    } catch (error) {
+      console.warn('Audio constraints not supported, retrying with simpler audio settings:', error);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
 
     peerState.localAudioStream = stream;
     const track = stream.getAudioTracks()[0];

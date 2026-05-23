@@ -82,7 +82,7 @@ function cleanupExpiredPeers() {
 }
 
 app.post('/peer/register', (req, res) => {
-  const { peerId, roomId, userId, displayName } = req.body;
+  const { peerId, roomId, userId, displayName, avatarData } = req.body;
   if (!peerId || !roomId || !userId) {
     return res.status(400).json({ error: 'peerId, roomId and userId are required' });
   }
@@ -93,6 +93,7 @@ app.post('/peer/register', (req, res) => {
     roomId,
     userId,
     displayName: displayName || userId,
+    avatar: avatarData || null,
     address: req.socket.remoteAddress,
     timestamp: Date.now()
   });
@@ -102,7 +103,7 @@ app.post('/peer/register', (req, res) => {
 });
 
 app.post('/peer/heartbeat', (req, res) => {
-  const { peerId, roomId, displayName } = req.body;
+  const { peerId, roomId, displayName, avatarData } = req.body;
   const key = peerKey(roomId, peerId);
   const peer = peers.get(key);
 
@@ -114,6 +115,9 @@ app.post('/peer/heartbeat', (req, res) => {
   if (displayName) {
     peer.displayName = displayName;
   }
+  if (avatarData) {
+    peer.avatar = avatarData;
+  }
   peers.set(key, peer);
   res.json({ status: 'ok' });
 });
@@ -124,6 +128,30 @@ app.post('/peer/unregister', (req, res) => {
   peers.delete(key);
   signalingChannels.delete(key);
   res.json({ status: 'ok' });
+});
+
+app.post('/profile/avatar', (req, res) => {
+  const { userId, avatarData } = req.body;
+  if (!userId || !avatarData) {
+    return res.status(400).json({ error: 'userId and avatarData are required' });
+  }
+
+  const record = identityStore.get(userId) || { updatedAt: Date.now() };
+  record.avatarData = avatarData;
+  record.updatedAt = Date.now();
+  identityStore.set(userId, record);
+  saveIdentityStore();
+
+  res.json({ status: 'ok' });
+});
+
+app.get('/profile/avatar/:userId', (req, res) => {
+  const { userId } = req.params;
+  const record = identityStore.get(userId);
+  if (!record || !record.avatarData) {
+    return res.status(404).json({ avatarData: null });
+  }
+  res.json({ avatarData: record.avatarData });
 });
 
 app.get('/peers/discover', (req, res) => {

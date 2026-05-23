@@ -622,12 +622,33 @@
     /* Avatar upload overlay */
     .avatar-upload {
       position: relative;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      overflow: hidden;
       cursor: pointer;
+      flex-shrink: 0;
+    }
+    .avatar-upload .card-avatar {
+      width: 100%;
+      height: 100%;
+      min-width: auto;
+      min-height: auto;
+      border-radius: 50%;
+    }
+    .avatar-crop-frame {
+      position: absolute;
+      inset: 0;
+      border: 2px solid rgba(255,255,255,0.72);
+      border-radius: 50%;
+      pointer-events: none;
+      box-sizing: border-box;
+      background: radial-gradient(circle at center, transparent 62%, rgba(0,0,0,0.08) 62%);
     }
     .avatar-camera-overlay {
       position: absolute;
-      bottom: -2px;
-      right: -2px;
+      bottom: 6px;
+      right: 6px;
       width: 28px;
       height: 28px;
       border-radius: 50%;
@@ -639,6 +660,113 @@
       color: #141515;
       box-shadow: 0 2px 6px rgba(0,0,0,0.4);
       border: 2px solid var(--panel);
+    }
+
+    .chat-header-title {
+      cursor: default;
+    }
+    .chat-header-title.clickable {
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .profile-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 10, 10, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 18px;
+    }
+    .profile-modal.hidden {
+      display: none;
+    }
+    .profile-modal-card {
+      width: min(480px, 100%);
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 24px;
+      position: relative;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+      color: var(--text);
+    }
+    .profile-modal-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.12);
+      color: var(--text);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+    }
+    .profile-modal-avatar {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 18px;
+      font-size: 40px;
+      font-weight: 700;
+      color: #141515;
+      background: var(--accent);
+    }
+    .profile-modal-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .profile-modal-title {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    .profile-modal-subtitle,
+    .profile-modal-status {
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 10px;
+      font-size: 14px;
+      word-break: break-word;
+    }
+    .profile-modal-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 14px;
+    }
+    .profile-modal-actions .btn { flex: 1; min-width: 130px; }
+
+    .contact-group-header {
+      padding: 12px 12px 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+    }
+
+    .contact-name-button {
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      text-align: left;
     }
 
     /* ===== CALL BAR ===== */
@@ -785,6 +913,7 @@
                 <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
                   <div class="avatar-upload" id="avatarUploadWrapper">
                     <div class="card-avatar" id="profileAvatarSettings" style="width:80px;height:80px;min-width:80px;font-size:36px;">−</div>
+                    <div class="avatar-crop-frame"></div>
                     <div class="avatar-camera-overlay" onclick="document.getElementById('avatarUploadInput').click()"><span class="material-icons">photo_camera</span></div>
                   </div>
                   <div style="text-align:center;">
@@ -824,6 +953,20 @@
             </div>
           </div>
         </div>
+
+        <div id="contactProfileModal" class="profile-modal hidden" hidden>
+          <div class="profile-modal-card">
+            <button type="button" class="profile-modal-close" onclick="closeContactProfile()" title="Закрыть">×</button>
+            <div class="profile-modal-avatar" id="profileModalAvatar">A</div>
+            <div class="profile-modal-title" id="profileModalName">Имя</div>
+            <div class="profile-modal-subtitle" id="profileModalId">@login</div>
+            <div class="profile-modal-status" id="profileModalStatus">В сети</div>
+            <div class="profile-modal-actions">
+              <button type="button" class="btn primary" id="profileCallBtn" onclick="startVoiceCallFromProfile()">Позвонить</button>
+              <button type="button" class="btn subtle" id="profileBlockBtn" onclick="toggleContactBlockFromProfile()">Заблокировать</button>
+            </div>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -832,7 +975,7 @@
       <header id="chatHeader">
         <button type="button" class="header-back-btn" onclick="goBackFromChat()">←</button>
         <div id="chatHeaderMain">
-          <div id="chatTitle">Чаты</div>
+          <div id="chatTitle" class="chat-header-title">Чаты</div>
           <div id="chatSubtitle">Выберите диалог</div>
         </div>
         <div class="header-actions">
@@ -861,7 +1004,9 @@
         <div id="composerRow">
           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
             onkeydown="if(event.key==='Enter') sendCurrentMessage()">
-          <button type="button" class="btn primary" id="sendBtn" onclick="sendCurrentMessage()">Отпр.</button>
+          <button type="button" class="btn primary" id="sendBtn" onclick="sendCurrentMessage()" title="Отправить">
+            <span class="material-icons">send</span>
+          </button>
         </div>
       </footer>
     </main>

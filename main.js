@@ -189,6 +189,8 @@ function getContactInitials(displayName) {
 
 function getAvatarUrl(userId) {
   if (!userId) return null;
+  const contact = state.contacts.get(userId);
+  if (contact?.avatarUrl) return contact.avatarUrl;
   return localStorage.getItem(`tract.avatar.${userId}`);
 }
 
@@ -201,12 +203,86 @@ function setAvatarHtml(el, userId, initials) {
   }
 }
 
-window.handleAvatarUpload = (event) => {
+async function uploadAvatarToServer(userId, avatarData) {
+  if (!userId || !avatarData) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+
+  try {
+    await fetch(new URL('/profile/avatar', serverUrl).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, avatarData })
+    });
+  } catch (error) {
+    console.warn('Avatar upload failed:', error);
+  }
+}
+
+async function fetchAvatarFromServer(userId) {
+  if (!userId) return null;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return null;
+
+  try {
+    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}`, serverUrl).toString());
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    return data?.avatarData || null;
+  } catch (error) {
+    console.warn('Avatar fetch failed:', error);
+    return null;
+  }
+}
+
+async function loadOwnAvatar() {
+  if (!state.profile) return;
+  const existing = getAvatarUrl(state.profile.userId);
+  if (existing) return existing;
+
+  const avatarData = await fetchAvatarFromServer(state.profile.userId);
+  if (!avatarData) return null;
+
+  localStorage.setItem(`tract.avatar.${state.profile.userId}`, avatarData);
+  renderProfileCards();
+  renderContacts();
+  return avatarData;
+}
+
+async function ensureAvatarForContact(userId, contact = state.contacts.get(userId)) {
+  if (!userId || !state.profile) return null;
+  if (contact?.avatarUrl) return contact.avatarUrl;
+
+  const avatarData = await fetchAvatarFromServer(userId);
+  if (!avatarData) return null;
+
+  await upsertContact(userId, {
+    ...contact,
+    avatarUrl: avatarData
+  });
+  return avatarData;
+}
+
+window.handleAvatarUpload = async (event) => {
   const file = event.target.files?.[0];
   if (!file || !state.profile) return;
   const reader = new FileReader();
-  reader.onload = (e) => {
-    localStorage.setItem(`tract.avatar.${state.profile.userId}`, e.target.result);
+  reader.onload = async (e) => {
+    const avatarData = e.target.result;
+    localStorage.setItem(`tract.avatar.${state.profile.userId}`, avatarData);
+    if (state.transport) {
+      state.transport.options.avatarData = avatarData;
+    }
+    await uploadAvatarToServer(state.profile.userId, avatarData);
+    if (state.transport?.signaling) {
+      state.transport.signaling.post('/peer/heartbeat', {
+        peerId: state.myPeerId,
+        roomId: state.transport.options.roomId,
+        avatarData
+      }).catch(() => {});
+    }
     renderProfileCards();
     renderContacts();
   };
@@ -437,6 +513,7 @@ async function bootstrapAuthenticatedSession(auth) {
 
   state.contacts.clear();
   await restoreContacts();
+  await loadOwnAvatar();
 
   const selfId = $('selfId');
   if (selfId) selfId.textContent = state.profile.userId;
@@ -569,6 +646,7 @@ window.connectHandshake = async () => {
     roomId,
     userId: state.profile.userId,
     displayName: state.profile.displayName,
+    avatarData: getAvatarUrl(state.profile.userId),
     allowedUserIds: new Set(state.contacts.keys())
   });
   state.multiplexer.register(state.transport);
@@ -595,6 +673,7 @@ window.connectHandshake = async () => {
     await upsertContact(peerMeta.userId, {
       displayName: peerMeta.displayName || peerMeta.userId,
       activePeerId: peerMeta.peerId,
+      avatarUrl: peerMeta.avatar || state.contacts.get(peerMeta.userId)?.avatarUrl,
       online: true,
       roomId,
       lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
@@ -754,6 +833,8 @@ window.addContactById = async () => {
     displayName: state.contacts.get(userId)?.displayName || userId,
     lastMsg: state.contacts.get(userId)?.lastMsg || 'Контакт добавлен'
   });
+
+  ensureAvatarForContact(userId).catch(() => {});
 
   state.transport?.setAllowedUserIds?.(state.contacts.keys());
 
@@ -982,6 +1063,11 @@ window.sendCurrentMessage = async () => {
 
   const chatId = state.currentChatId;
   const contact = state.contacts.get(state.currentChatId);
+  if (contact?.blocked) {
+    setStatus('warning', 'Контакт заблокирован. Сначала разблокируйте.');
+    return;
+  }
+
   const packet = {
     packetId: crypto.randomUUID(),
     type: 'text',
@@ -1085,51 +1171,100 @@ function renderContacts() {
   const container1 = $('contacts');
   const container2 = $('contactsList');
   
-  const render = (container, isMainList) => {
+  const renderContactItem = ([id, contact], isActive) => {
+    const unread = state.unreadCounts.get(id) || 0;
+    const initials = getContactInitials(contact.displayName || id);
+    const preview = contact.blocked
+      ? 'Заблокирован'
+      : contact.lastMsg
+        ? truncate(contact.lastMsg, 40)
+        : (contact.online ? 'В сети' : 'Не в сети');
+    const time = contact.lastTime ? formatDate(contact.lastTime) : '';
+
+    const btn = document.createElement('button');
+    btn.className = `contact-item ${isActive ? 'active' : ''}`;
+    btn.innerHTML = `
+      <div class="contact-avatar">${getAvatarHtml(id, initials)}</div>
+      <div class="contact-info">
+        <div class="contact-name-row">
+          <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(getContactLabel(contact))}</span>
+          <span class="contact-time">${time}</span>
+        </div>
+        <span class="contact-preview${unread > 0 ? ' has-unread' : ''}">${escapeHtml(preview)}</span>
+      </div>
+      ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
+    `;
+
+    const nameEl = btn.querySelector('.contact-name');
+    if (nameEl) {
+      nameEl.classList.add('contact-name-button');
+      nameEl.title = 'Открыть профиль';
+      nameEl.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openContactProfile(id);
+      });
+    }
+
+    btn.onclick = () => openChat(id);
+    return btn;
+  };
+
+  const render = (container, grouped) => {
     if (!container) return;
     container.innerHTML = '';
 
     const items = Array.from(state.contacts.entries())
-      .filter(([id]) => !isSelfContactId(id))
-      .sort(([, left], [, right]) => {
-        if (Boolean(right.online) !== Boolean(left.online)) {
-          return Number(Boolean(right.online)) - Number(Boolean(left.online));
-        }
-        return (right.updatedAt || 0) - (left.updatedAt || 0);
-      });
+      .filter(([id]) => !isSelfContactId(id));
 
     if (items.length === 0) {
       container.innerHTML = '<div class="empty" style="padding: 16px; text-align: center; color: var(--muted); font-size: 13px;">Нет контактов</div>';
       return;
     }
 
-    for (const [id, contact] of items) {
-      const unread = state.unreadCounts.get(id) || 0;
-      const initials = getContactInitials(contact.displayName || id);
-      const preview = contact.lastMsg ? truncate(contact.lastMsg, 40) : (contact.online ? 'В сети' : '');
-      const time = contact.lastTime ? formatDate(contact.lastTime) : '';
-      
-      const btn = document.createElement('button');
-      btn.className = `contact-item ${id === state.currentChatId ? 'active' : ''}`;
-      
-      btn.innerHTML = `
-        <div class="contact-avatar">${getAvatarHtml(id, initials)}</div>
-        <div class="contact-info">
-          <div class="contact-name-row">
-            <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(getContactLabel(contact))}</span>
-            <span class="contact-time">${time}</span>
-          </div>
-          <span class="contact-preview${unread > 0 ? ' has-unread' : ''}">${escapeHtml(preview)}</span>
-        </div>
-        ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
-      `;
-      btn.onclick = () => openChat(id);
-      container.appendChild(btn);
+    if (!grouped) {
+      items.sort(([, left], [, right]) => {
+        if (Boolean(right.online) !== Boolean(left.online)) {
+          return Number(Boolean(right.online)) - Number(Boolean(left.online));
+        }
+        return (right.updatedAt || 0) - (left.updatedAt || 0);
+      });
+      for (const item of items) {
+        container.appendChild(renderContactItem(item, item[0] === state.currentChatId));
+      }
+      return;
+    }
+
+    const groups = new Map();
+    for (const item of items) {
+      const label = getContactLabel(item[1]);
+      const groupKey = getContactGroupKey(label);
+      const list = groups.get(groupKey) || [];
+      list.push(item);
+      groups.set(groupKey, list);
+    }
+
+    const sortedGroupKeys = Array.from(groups.keys()).sort((left, right) => {
+      if (left === '#') return 1;
+      if (right === '#') return -1;
+      return left.localeCompare(right, undefined, { sensitivity: 'base' });
+    });
+
+    for (const groupKey of sortedGroupKeys) {
+      const heading = document.createElement('div');
+      heading.className = 'contact-group-header';
+      heading.textContent = groupKey;
+      container.appendChild(heading);
+
+      const groupItems = groups.get(groupKey) || [];
+      groupItems.sort(([, a], [, b]) => compareContactLabels(a, b));
+      for (const item of groupItems) {
+        container.appendChild(renderContactItem(item, item[0] === state.currentChatId));
+      }
     }
   };
   
-  render(container1, true);
-  render(container2, false);
+  render(container1, false);
+  render(container2, true);
 }
 
 function getAvatarHtml(userId, initials) {
@@ -1451,7 +1586,7 @@ window.startVoiceCall = async () => {
   }
 
   if (targetPeerId) {
-    const audioSetup = state.transport.startAudioCallWithLocalMedia(targetPeerId, { asOfferer: false })
+    const audioSetup = state.transport.startAudioCallWithLocalMedia(targetPeerId, { asOfferer: true })
       .catch((e) => {
         if (state.activeCall?.callId !== callId) return;
         console.warn('Caller audio setup failed:', e);
@@ -1491,6 +1626,7 @@ window.answerVoiceCall = async () => {
 
   try {
     stopRingTone();
+    const audioPromise = state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
     const acceptPromise = state.multiplexer.send(
       {
         type: 'call',
@@ -1500,11 +1636,10 @@ window.answerVoiceCall = async () => {
       },
       peerId
     );
-    const audioPromise = state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: true });
     ac.status = 'active';
     updateCallBar();
-    await acceptPromise;
     await audioPromise;
+    await acceptPromise;
     await playRemoteAudioIfReady();
   } catch (e) {
     console.warn('Answer failed:', e);
@@ -1553,20 +1688,39 @@ function renderChatHeader() {
   const btnMenu = $('btnChatMenu');
   
   if (btnCall) {
-    btnCall.hidden = !state.currentChatId || Boolean(state.activeCall);
+    btnCall.hidden = !state.currentChatId || Boolean(state.activeCall) || Boolean(state.contacts.get(state.currentChatId)?.blocked);
   }
   if (btnMenu) btnMenu.hidden = !state.currentChatId;
 
   if (!state.currentChatId) {
-    if (title) title.textContent = 'Чаты';
+    if (title) {
+      title.textContent = 'Чаты';
+      title.classList.remove('clickable');
+      title.onclick = null;
+    }
     if (subtitle) subtitle.textContent = 'Выберите диалог';
     closeChatMenu();
     return;
   }
 
   const contact = state.contacts.get(state.currentChatId);
-  if (title) title.textContent = getContactLabel(contact);
-  if (subtitle) subtitle.textContent = `${contact?.online ? 'в сети' : 'не в сети'}`;
+  if (title) {
+    title.textContent = getContactLabel(contact);
+    if (contact) {
+      title.classList.add('clickable');
+      title.onclick = () => openContactProfile(state.currentChatId);
+    } else {
+      title.classList.remove('clickable');
+      title.onclick = null;
+    }
+  }
+  if (subtitle) {
+    if (contact?.blocked) {
+      subtitle.textContent = 'Заблокирован';
+    } else {
+      subtitle.textContent = `${contact?.online ? 'в сети' : 'не в сети'}`;
+    }
+  }
 }
 
 async function restoreContacts() {
@@ -1654,8 +1808,88 @@ async function upsertContact(userId, patch) {
 }
 
 function getContactLabel(contact) {
-  return contact.alias || contact.displayName || contact.id;
+  return contact?.alias || contact?.displayName || contact?.id || '';
 }
+
+function getContactGroupKey(label) {
+  const normalized = String(label || '').trim().replace(/^@/, '');
+  if (!normalized) return '#';
+  const first = normalized.charAt(0).toUpperCase();
+  if (/[A-Za-zА-ЯЁ]/.test(first)) return first;
+  return '#';
+}
+
+function compareContactLabels(left, right) {
+  const a = getContactLabel(left).toLowerCase();
+  const b = getContactLabel(right).toLowerCase();
+  return a.localeCompare(b, undefined, { sensitivity: 'base' });
+}
+
+window.openContactProfile = (userId) => {
+  if (!userId) return;
+
+  const contact = state.contacts.get(userId) || { id: userId, online: false };
+  const modal = $('contactProfileModal');
+  const avatarEl = $('profileModalAvatar');
+  const nameEl = $('profileModalName');
+  const idEl = $('profileModalId');
+  const statusEl = $('profileModalStatus');
+  const callBtn = $('profileCallBtn');
+  const blockBtn = $('profileBlockBtn');
+
+  if (!modal || !avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn) return;
+
+  nameEl.textContent = getContactLabel(contact);
+  idEl.textContent = userId;
+  if (contact.blocked) {
+    statusEl.textContent = 'Заблокирован';
+  } else {
+    statusEl.textContent = contact.online ? 'В сети' : 'Не в сети';
+  }
+
+  if (getAvatarUrl(userId)) {
+    avatarEl.innerHTML = `<img src="${escapeHtml(getAvatarUrl(userId))}" alt="">`;
+  } else {
+    avatarEl.textContent = getContactInitials(getContactLabel(contact));
+  }
+
+  const blocked = Boolean(contact.blocked);
+  callBtn.disabled = blocked;
+  callBtn.title = blocked ? 'Разблокируйте контакт, чтобы позвонить' : 'Позвонить';
+  blockBtn.textContent = blocked ? 'Разблокировать' : 'Заблокировать';
+  blockBtn.className = blocked ? 'btn subtle' : 'btn primary';
+
+  state.profileViewUserId = userId;
+  modal.hidden = false;
+  modal.classList.remove('hidden');
+};
+
+window.closeContactProfile = () => {
+  const modal = $('contactProfileModal');
+  if (!modal) return;
+  modal.hidden = true;
+  modal.classList.add('hidden');
+  state.profileViewUserId = null;
+};
+
+window.startVoiceCallFromProfile = async () => {
+  const userId = state.profileViewUserId;
+  if (!userId) return;
+  closeContactProfile();
+  await openChat(userId);
+  await startVoiceCall();
+};
+
+window.toggleContactBlockFromProfile = async () => {
+  const userId = state.profileViewUserId;
+  if (!userId) return;
+  const contact = state.contacts.get(userId) || { id: userId };
+  const updated = await upsertContact(userId, {
+    ...contact,
+    blocked: !Boolean(contact.blocked)
+  });
+  openContactProfile(updated.id);
+};
 
 function setStatus(kind, text) {
   const node = $('networkStatus');
