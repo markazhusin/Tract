@@ -1,5 +1,5 @@
-const DEFAULT_POLL_INTERVAL = 5000;
-const DEFAULT_PRESENCE_INTERVAL = 3000;
+const DEFAULT_POLL_INTERVAL = 1000;
+const DEFAULT_PRESENCE_INTERVAL = 1000;
 
 export class HostedSignaling {
   constructor(peerId, options = {}) {

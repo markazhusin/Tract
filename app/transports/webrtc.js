@@ -1,6 +1,6 @@
 import { initSignaling } from '../core/local-signaling.js';
 
-const DISCOVERY_INTERVAL = 3000;
+const DISCOVERY_INTERVAL = 1000;
 
 export class WebRTCTransport {
   name = 'WebRTC';
@@ -229,7 +229,7 @@ export class WebRTCTransport {
       if (peerState && peerState.pc && peerState.audioTransceiver) {
         return peerState;
       }
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 30));
     }
     return this.peers.get(peerId);
   }
@@ -390,7 +390,7 @@ export class WebRTCTransport {
       return;
     }
 
-    const peer = await this.waitForOpenPeer(targetPeerId);
+    const peer = await this.waitForOpenPeer(targetPeerId, 6000);
     if (!peer) {
       throw new Error(`Peer ${targetPeerId} is not connected`);
     }
@@ -398,7 +398,7 @@ export class WebRTCTransport {
     peer.channel.send(JSON.stringify(packet));
   }
 
-  async waitForOpenPeer(peerId, timeoutMs = 20000) {
+  async waitForOpenPeer(peerId, timeoutMs = 6000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peer = this.peers.get(peerId);
@@ -411,7 +411,7 @@ export class WebRTCTransport {
         this.connectToPeer(peerId);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     const peer = this.peers.get(peerId);

@@ -599,9 +599,10 @@ window.connectHandshake = async () => {
       roomId,
       lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
     });
+
+    const chatId = peerMeta.userId;
     // Resend pending messages for this user
     try {
-      const chatId = peerMeta.userId;
       const pending = await messageDB.getUndeliveredMessages(chatId);
       for (const msg of pending) {
         try {
@@ -615,6 +616,28 @@ window.connectHandshake = async () => {
       await flushPendingMessageControls(chatId, peerMeta.peerId);
     } catch (e) {
       console.warn('Resend pending chat actions failed:', e);
+    }
+
+    if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === chatId && !state.activeCall.remotePeerId) {
+      state.activeCall.remotePeerId = peerMeta.peerId;
+      try {
+        const audioPromise = state.transport.startAudioCallWithLocalMedia(peerMeta.peerId, { asOfferer: false }).catch((e) => {
+          console.warn('Caller audio setup failed when peer appeared:', e);
+        });
+        await state.multiplexer.send(
+          {
+            type: 'call',
+            action: 'invite',
+            callId: state.activeCall.callId,
+            senderId: state.profile.userId,
+            senderName: state.profile.displayName
+          },
+          peerMeta.peerId
+        );
+        await audioPromise;
+      } catch (e) {
+        console.warn('Pending call invite failed when peer appeared:', e);
+      }
     }
   });
 
@@ -1344,46 +1367,53 @@ function updateMobileLayout() {
 window.startVoiceCall = async () => {
   if (!state.currentChatId || !state.transport || !state.multiplexer || !state.profile) return;
   const contact = state.contacts.get(state.currentChatId);
-  if (!contact?.activePeerId) {
-    setStatus('error', 'Собеседник не в сети');
-    return;
-  }
   if (state.activeCall) return;
 
   const callId = crypto.randomUUID();
   state.activeCall = {
     callId,
     peerUserId: state.currentChatId,
-    remotePeerId: contact.activePeerId,
+    remotePeerId: contact?.activePeerId || null,
     status: 'ringing',
     role: 'caller'
   };
   startRingTone('outgoing');
   updateCallBar();
 
-  try {
-    await state.transport.startAudioCallWithLocalMedia(contact.activePeerId, { asOfferer: false });
-  } catch (e) {
-    console.warn('Caller audio setup failed:', e);
+  const targetPeerId = await resolvePeerForUser(state.currentChatId).catch(() => null);
+  if (targetPeerId) {
+    state.activeCall.remotePeerId = targetPeerId;
+  } else {
+    setStatus('warn', 'Собеседник не найден онлайн — приглашение будет отправлено при появлении.');
   }
 
-  try {
-    await state.multiplexer.send(
-      {
-        type: 'call',
-        action: 'invite',
-        callId,
-        senderId: state.profile.userId,
-        senderName: state.profile.displayName
-      },
-      contact.activePeerId
-    );
-  } catch (e) {
-    console.warn('Invite failed:', e);
-    stopRingTone();
-    state.activeCall = null;
-    updateCallBar();
-    setStatus('error', 'Не удалось позвонить');
+  if (targetPeerId) {
+    const audioSetup = state.transport.startAudioCallWithLocalMedia(targetPeerId, { asOfferer: false })
+      .catch((e) => {
+        console.warn('Caller audio setup failed:', e);
+      });
+
+    try {
+      await state.multiplexer.send(
+        {
+          type: 'call',
+          action: 'invite',
+          callId,
+          senderId: state.profile.userId,
+          senderName: state.profile.displayName
+        },
+        targetPeerId
+      );
+    } catch (e) {
+      console.warn('Invite failed:', e);
+      stopRingTone();
+      state.activeCall = null;
+      updateCallBar();
+      setStatus('error', 'Не удалось позвонить');
+      return;
+    }
+
+    await audioSetup;
   }
 };
 
@@ -1397,7 +1427,7 @@ window.answerVoiceCall = async () => {
 
   try {
     stopRingTone();
-    await state.multiplexer.send(
+    const acceptPromise = state.multiplexer.send(
       {
         type: 'call',
         action: 'accept',
@@ -1406,9 +1436,11 @@ window.answerVoiceCall = async () => {
       },
       peerId
     );
-    await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: true });
+    const audioPromise = state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: true });
     ac.status = 'active';
     updateCallBar();
+    await acceptPromise;
+    await audioPromise;
     await playRemoteAudioIfReady();
   } catch (e) {
     console.warn('Answer failed:', e);
@@ -1426,8 +1458,10 @@ window.declineVoiceCall = async () => {
   stopRingTone();
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
+  state.activeCall = null;
+  updateCallBar();
   if (peerId) {
-    await state.multiplexer
+    state.multiplexer
       .send(
         {
           type: 'call',
@@ -1439,8 +1473,6 @@ window.declineVoiceCall = async () => {
       )
       .catch(() => {});
   }
-  state.activeCall = null;
-  updateCallBar();
 };
 
 window.endVoiceCall = async () => {
@@ -1455,8 +1487,11 @@ window.endVoiceCall = async () => {
 
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
+  state.activeCall = null;
+  state.micMuted = false;
+  updateCallBar();
   if (peerId) {
-    await state.multiplexer
+    state.multiplexer
       .send(
         {
           type: 'call',
@@ -1469,9 +1504,6 @@ window.endVoiceCall = async () => {
       .catch(() => {});
   }
   await hangupCallAudio(peerId);
-  state.activeCall = null;
-  state.micMuted = false;
-  updateCallBar();
 };
 
 function renderChatHeader() {
@@ -1482,7 +1514,7 @@ function renderChatHeader() {
   
   if (btnCall) {
     const contact = state.currentChatId ? state.contacts.get(state.currentChatId) : null;
-    btnCall.hidden = !state.currentChatId || !contact?.online || Boolean(state.activeCall);
+    btnCall.hidden = !state.currentChatId || Boolean(state.activeCall);
   }
   if (btnMenu) btnMenu.hidden = !state.currentChatId;
 
