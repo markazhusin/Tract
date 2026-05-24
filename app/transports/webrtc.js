@@ -112,7 +112,7 @@ export class WebRTCTransport {
       expectVoiceAnswer: false
     };
 
-    // Audio transceiver is added only when a voice call starts (avoids broken SDP renegotiation).
+    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
 
     pc.ontrack = (event) => {
       const track = event.track;
@@ -144,17 +144,10 @@ export class WebRTCTransport {
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
         peerState.connected = true;
-        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       }
 
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
         this.closePeer(peerId);
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       }
     };
 
@@ -165,52 +158,13 @@ export class WebRTCTransport {
     const peerState = this.peers.get(peerId);
     if (peerState) {
       peerState.expectVoiceAnswer = true;
+      this.ensureAudioReceive(peerState);
     }
   }
 
-  ensureAudioTransceiver(peerState) {
-    if (!peerState?.pc) return null;
-    if (!peerState.audioTransceiver) {
-      peerState.audioTransceiver = peerState.pc.addTransceiver('audio', {
-        direction: 'sendrecv'
-      });
-    }
-    return peerState.audioTransceiver;
-  }
-
-  async waitForSignalingState(peerState, states, timeoutMs = 4000) {
-    const wanted = new Set(states);
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (wanted.has(peerState.pc.signalingState)) return peerState.pc.signalingState;
-      await new Promise((r) => setTimeout(r, 40));
-    }
-    return peerState.pc.signalingState;
-  }
-
-  async applyLocalAudioTrack(peerState, peerId) {
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-        video: false
-      });
-    } catch (error) {
-      console.warn('Audio constraints not supported, retrying with simpler audio settings:', error);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    }
-
-    const transceiver = this.ensureAudioTransceiver(peerState);
-    const track = stream.getAudioTracks()[0];
-    peerState.localAudioStream = stream;
-    await transceiver.sender.replaceTrack(track);
-    try {
-      transceiver.sender.setStreams([stream]);
-    } catch (e) {
-      console.warn('setStreams:', e);
-    }
-    transceiver.direction = 'sendrecv';
-    return stream;
+  ensureAudioReceive(peerState) {
+    if (!peerState?.audioTransceiver) return;
+    peerState.audioTransceiver.direction = peerState.localAudioStream ? 'sendrecv' : 'recvonly';
   }
 
   extractRemoteAudioStream(peerState) {
@@ -254,33 +208,47 @@ export class WebRTCTransport {
     }
 
     const peerState = await this.waitForPeerState(peerId, 12000);
-    if (!peerState?.pc) {
+    if (!peerState?.pc || !peerState.audioTransceiver) {
       throw new Error('Peer connection not ready for audio');
     }
 
-    await this.applyLocalAudioTrack(peerState, peerId);
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false
+      });
+    } catch (error) {
+      console.warn('Audio constraints not supported, retrying with simpler audio settings:', error);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
+
+    peerState.localAudioStream = stream;
+    const track = stream.getAudioTracks()[0];
+    await peerState.audioTransceiver.sender.replaceTrack(track);
+    try {
+      peerState.audioTransceiver.sender.setStreams([stream]);
+    } catch (e) {
+      console.warn('setStreams:', e);
+    }
+    this.ensureAudioReceive(peerState);
 
     if (asOfferer) {
-      const offer = await peerState.pc.createOffer({ iceRestart: false });
-      await peerState.pc.setLocalDescription(offer);
-      await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
-      return;
-    }
-
-    // Callee: answer caller's audio offer (do not create competing offer)
-    const state = await this.waitForSignalingState(peerState, ['have-remote-offer'], 5000);
-    if (state === 'have-remote-offer') {
-      const answer = await peerState.pc.createAnswer();
-      await peerState.pc.setLocalDescription(answer);
-      await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
-      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
-      return;
-    }
-
-    if (peerState.pc.signalingState === 'stable') {
+      // Caller: create offer with audio sendrecv
       const offer = await peerState.pc.createOffer();
       await peerState.pc.setLocalDescription(offer);
       await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+    } else {
+      // Callee: renegotiate so caller knows we're sending audio too
+      try {
+        const offer = await peerState.pc.createOffer();
+        await peerState.pc.setLocalDescription(offer);
+        await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+      } catch (e) {
+        // If renegotiation fails (e.g. signaling state issue), that's ok —
+        // the caller's audio will still reach us via the existing transceiver
+        console.warn('Callee renegotiation offer failed (non-fatal):', e);
+      }
     }
   }
 
@@ -299,7 +267,7 @@ export class WebRTCTransport {
     try {
       await peerState.audioTransceiver?.sender.replaceTrack(null);
       if (peerState.audioTransceiver) {
-        peerState.audioTransceiver.direction = 'inactive';
+        peerState.audioTransceiver.direction = 'recvonly';
       }
     } catch (e) {
       console.warn('stopLocalAudio replaceTrack:', e);
@@ -318,7 +286,7 @@ export class WebRTCTransport {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peerState = this.peers.get(peerId);
-      if (peerState?.pc) {
+      if (peerState && peerState.pc && peerState.audioTransceiver) {
         return peerState;
       }
       await new Promise((r) => setTimeout(r, 30));
@@ -365,24 +333,33 @@ export class WebRTCTransport {
       };
     }
 
-    const offer = new RTCSessionDescription({ type: 'offer', sdp });
+    this.ensureAudioReceive(peerState);
+
+    if (peerState.pc.remoteDescription) {
+      // Renegotiation offer (e.g. callee adding audio track)
+      try {
+        await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+        await this.flushIceCandidates(peerState);
+        const answer = await peerState.pc.createAnswer();
+        await peerState.pc.setLocalDescription(answer);
+        await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
+      } catch (err) {
+        console.error('WebRTC renegotiation error:', err);
+      }
+      return;
+    }
 
     try {
-      if (peerState.pc.signalingState === 'have-local-offer') {
-        await peerState.pc.setLocalDescription({ type: 'rollback' });
-      }
-
-      await peerState.pc.setRemoteDescription(offer);
+      await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
       await this.flushIceCandidates(peerState);
       const answer = await peerState.pc.createAnswer();
       await peerState.pc.setLocalDescription(answer);
-      await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
+      await this.signaling.sendSignal(peerId, 'answer', answer.sdp);
       queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
-      console.error('WebRTC offer handling error:', err);
-      if (!peerState.pc.remoteDescription) {
-        this.closePeer(peerId);
-      }
+      console.error('WebRTC answer error:', err);
+      this.closePeer(peerId);
     }
   }
 
@@ -391,15 +368,8 @@ export class WebRTCTransport {
     if (!peer) return;
 
     try {
-      if (peer.pc.signalingState === 'stable') {
-        return;
-      }
-      if (peer.pc.signalingState !== 'have-local-offer') {
-        console.warn('Ignoring answer in state', peer.pc.signalingState);
-        return;
-      }
-
       await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+
       await this.flushIceCandidates(peer);
       queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
