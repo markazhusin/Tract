@@ -555,409 +555,68 @@
       padding: 10px 18px;
       border-radius: 22px;
     }
-    @media (max-width: 768px) {
-      #sendBtn {
-        padding: 8px 14px;
-        font-size: 13px;
+      /* Checkbox contact item for group member selection */
+      .contact-checkbox-item {
+        padding: 10px 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        cursor: pointer;
+        transition: background 0.15s;
       }
-    }
+      .contact-checkbox-item:active { background: rgba(255,255,255,0.04); }
+      .contact-checkbox-item .checkbox {
+        width: 22px; height: 22px; min-width: 22px;
+        border-radius: 50%;
+        border: 2px solid var(--muted);
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.15s;
+      }
+      .contact-checkbox-item .checkbox.checked {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      .contact-checkbox-item .checkbox.checked::after {
+        content: '✓';
+        font-size: 13px;
+        font-weight: 700;
+        color: #141515;
+      }
+      .contact-checkbox-item .contact-info { flex: 1; min-width: 0; }
+      .contact-checkbox-item .contact-avatar { width: 40px; height: 40px; min-width: 40px; font-size: 16px; }
 
-    /* ===== AUTH ===== */
-    #authGate {
-      position: fixed;
-      inset: 0;
-      background: var(--bg);
-      display: grid;
-      place-items: center;
-      padding: 20px;
-      z-index: 50;
-    }
-    #authShell {
-      width: min(380px, 100%);
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
-    .auth-title {
-      font-size: 22px;
-      font-weight: 600;
-      text-align: center;
-    }
-    .auth-hint {
-      color: var(--muted);
-      font-size: 14px;
-      text-align: center;
-      line-height: 1.5;
-    }
-    #authError { color: var(--danger); font-size: 14px; text-align: center; min-height: 20px; }
-
-    .auth-logo {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto;
-    }
-
-    /* ===== SETTINGS ===== */
-    .settings-view {
-      display: flex;
-      flex-direction: column;
-      padding: 12px 10px;
-      gap: 12px;
-    }
-    .settings-section {
-      background: var(--panel-input);
-      border-radius: 12px;
-      padding: 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .settings-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 0;
-    }
-    .settings-label { font-size: 14px; }
-    .settings-value { font-size: 13px; color: var(--muted); }
-    .settings-section-title {
-      padding: 14px 14px 4px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    /* Avatar upload overlay */
-    .avatar-upload {
-      position: relative;
-      width: 80px;
-      height: 80px;
-      border-radius: 50%;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .avatar-upload .card-avatar {
-      width: 80px;
-      height: 80px;
-      min-width: 80px;
-      border-radius: 50%;
-      overflow: hidden;
-      position: relative;
-    }
-    .avatar-upload .card-avatar img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center;
-      display: block;
-    }
-    .avatar-crop-frame {
-      position: absolute;
-      inset: 0;
-      border: 2px solid rgba(255,255,255,0.92);
-      border-radius: 50%;
-      pointer-events: none;
-      box-sizing: border-box;
-    }
-    .avatar-camera-overlay {
-      position: absolute;
-      bottom: 0;
-      right: 0;
-      width: 26px;
-      height: 26px;
-      border-radius: 50%;
-      background: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      color: #141515;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-      border: 2px solid var(--bg);
-      z-index: 2;
-    }
-
-    .chat-header-title {
-      cursor: default;
-    }
-    .chat-header-title.clickable {
-      cursor: pointer;
-    }
-    #chatHeaderMain {
-      flex: 1;
-      min-width: 0;
-      cursor: pointer;
-      border-radius: 6px;
-      padding: 2px 4px;
-      margin: -2px -4px;
-    }
-    #chatHeaderMain:active { background: rgba(255,255,255,0.05); }
-
-    /* Chat header avatar */
-    #chatHeaderAvatar {
-      width: 36px;
-      height: 36px;
-      min-width: 36px;
-      border-radius: 50%;
-      background: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      font-weight: 600;
-      color: #141515;
-      overflow: hidden;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    #chatHeaderAvatar img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    #chatHeaderAvatar:active { opacity: 0.8; }
-
-    /* Toggle switch */
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 0;
-    }
-    .toggle-label { font-size: 14px; }
-    .toggle-sublabel { font-size: 12px; color: var(--muted); margin-top: 2px; }
-    .toggle-switch {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .toggle-switch input[type=checkbox] {
-      appearance: none;
-      -webkit-appearance: none;
-      width: 44px;
-      height: 26px;
-      border-radius: 13px;
-      background: var(--panel-input);
-      border: 2px solid var(--line);
-      cursor: pointer;
-      position: relative;
-      transition: background 0.2s, border-color 0.2s;
-      flex-shrink: 0;
-    }
-    .toggle-switch input[type=checkbox]::after {
-      content: '';
-      position: absolute;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: var(--muted);
-      top: 2px;
-      left: 2px;
-      transition: transform 0.2s, background 0.2s;
-    }
-    .toggle-switch input[type=checkbox]:checked {
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-    .toggle-switch input[type=checkbox]:checked::after {
-      transform: translateX(18px);
-      background: #141515;
-    }
-    .toggle-value {
-      font-size: 13px;
-      color: var(--muted);
-      min-width: 48px;
-      text-align: right;
-    }
-
-    /* ===== CONTACT PROFILE PAGE (full-screen, TG-style) ===== */
-    #contactProfilePage {
-      position: fixed;
-      inset: 0;
-      z-index: 200;
-      background: var(--bg);
-      display: flex;
-      flex-direction: column;
-      transform: translateX(100%);
-      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-      will-change: transform;
-    }
-    #contactProfilePage.open {
-      transform: translateX(0);
-    }
-    .profile-page-header {
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: calc(10px + var(--safe-top)) 12px 10px;
-      background: var(--bg-header);
-      border-bottom: 1px solid var(--line);
-    }
-    .profile-page-back {
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-      flex-shrink: 0;
-      color: var(--accent);
-    }
-    .profile-page-back:active { background: rgba(255,255,255,0.06); }
-    .profile-page-header-title {
-      flex: 1;
-      font-size: 17px;
-      font-weight: 600;
-    }
-    .profile-page-scroll {
-      flex: 1;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-    .profile-page-hero {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 32px 20px 20px;
-      gap: 12px;
-    }
-    .profile-page-avatar {
-      width: 100px;
-      height: 100px;
-      border-radius: 50%;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 38px;
-      font-weight: 700;
-      color: #141515;
-      background: var(--accent);
-      flex-shrink: 0;
-    }
-    .profile-page-avatar img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    .profile-page-name {
-      font-size: 22px;
-      font-weight: 700;
-      text-align: center;
-      word-break: break-word;
-    }
-    .profile-page-status {
-      font-size: 14px;
-      color: var(--muted);
-      text-align: center;
-    }
-    .profile-page-status.online { color: var(--online); }
-    .profile-page-actions {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      padding: 0 20px 20px;
-      flex-wrap: wrap;
-    }
-    .profile-page-action-btn {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-      padding: 12px 16px;
-      background: var(--panel-input);
-      border-radius: 12px;
-      min-width: 72px;
-      font-size: 12px;
-      color: var(--accent);
-      border: none;
-      cursor: pointer;
-    }
-    .profile-page-action-btn:active { opacity: 0.7; }
-    .profile-page-action-btn .material-icons { font-size: 22px; }
-    .profile-page-action-btn.danger { color: var(--danger); }
-    .profile-page-section {
-      margin: 0 12px 12px;
-      background: var(--panel-input);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .profile-page-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-    .profile-page-row:last-child { border-bottom: none; }
-    .profile-page-row-icon { color: var(--muted); font-size: 20px; }
-    .profile-page-row-content { flex: 1; min-width: 0; }
-    .profile-page-row-label { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
-    .profile-page-row-value { font-size: 15px; word-break: break-all; }
-
-    .contact-group-header {
-      padding: 12px 12px 4px;
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.2em;
-    }
-
-    .contact-name-button {
-      background: none;
-      border: none;
-      padding: 0;
-      margin: 0;
-      color: inherit;
-      font: inherit;
-      cursor: pointer;
-      text-align: left;
-    }
-
-    /* ===== CALL BAR ===== */
-    #callBar {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 40;
-      background: var(--call-bar);
-      border-top: 1px solid var(--line);
-      padding: 12px 14px calc(12px + var(--safe-bottom));
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      box-shadow: 0 -4px 24px rgba(0,0,0,0.3);
-    }
-    #callBarLabel { font-size: 15px; font-weight: 500; }
-    #callBarActions { display: flex; gap: 8px; flex-wrap: wrap; }
-    #callBarActions .btn { flex: 1; min-width: 120px; }
-
-    audio#remoteAudio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
-
-    /* ===== MOBILE ===== */
-    @media (max-width: 768px) {
-      #app { position: relative; }
-      #sidebar {
-        position: absolute;
-        inset: 0;
-        z-index: 20;
-        width: 100%;
-        min-width: 0;
-        transition: transform 0.3s ease;
+      /* Overlay pages for new message / create group / group info */
+      #newMessagePage,
+      #createGroupPage,
+      #groupInfoPage {
+        position: fixed; inset: 0; z-index: 200;
+        background: var(--bg);
+        display: flex; flex-direction: column;
+        transform: translateX(100%);
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        will-change: transform;
+      }
+      #newMessagePage.open,
+      #createGroupPage.open,
+      #groupInfoPage.open {
         transform: translateX(0);
       }
-      #sidebar.chat-open { transform: translateX(-100%); }
-      #chat { position: relative; z-index: 10; }
-      .header-back-btn { display: flex; }
-    }
-  </style>
+
+      /* Group message sender name */
+      .msg-sender {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 2px;
+        display: block;
+      }
+
+      @media (max-width: 768px) {
+        #sidebar.chat-open { transform: translateX(-100%); }
+        #chat { position: relative; z-index: 10; }
+        .header-back-btn { display: flex; }
+      }
+    </style>
 </head>
 <body>
   <audio id="remoteAudio" autoplay playsinline webkit-playsinline></audio>
@@ -1021,6 +680,7 @@
       <div class="sidebar-header">
         <img src="assets/tract.svg" alt="Tract" style="height:26px;width:auto;">
         <div class="sidebar-header-right">
+          <button type="button" class="sidebar-header-btn" onclick="openNewMessage()" title="Новое сообщение"><span class="material-icons">edit</span></button>
           <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки"><span class="material-icons">settings</span></button>
         </div>
       </div>
@@ -1220,6 +880,97 @@
             <div class="profile-page-row-value" id="profileModalId">@login</div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW MESSAGE PAGE (TG-style) -->
+  <div id="newMessagePage">
+    <div class="profile-page-header">
+      <button type="button" class="profile-page-back" onclick="closeNewMessage()">
+        <span class="material-icons">arrow_back</span>
+      </button>
+      <div class="profile-page-header-title">Новое сообщение</div>
+    </div>
+    <div class="profile-page-scroll">
+      <div class="profile-page-actions" style="padding:12px 20px;">
+        <button type="button" class="profile-page-action-btn" onclick="openCreateGroup()" style="min-width:120px;">
+          <span class="material-icons">group_add</span>
+          Новая группа
+        </button>
+      </div>
+      <div class="contact-group-header">Контакти</div>
+      <div id="newMessageContactList"></div>
+    </div>
+  </div>
+
+  <!-- CREATE GROUP PAGE -->
+  <div id="createGroupPage">
+    <div class="profile-page-header">
+      <button type="button" class="profile-page-back" onclick="closeCreateGroup()">
+        <span class="material-icons">arrow_back</span>
+      </button>
+      <div class="profile-page-header-title">Новая группа</div>
+      <button type="button" class="profile-page-action-btn" id="createGroupNextBtn" onclick="createGroupNextStep()" style="padding:6px 16px;font-size:14px;min-width:auto;border-radius:20px;background:var(--accent);color:#141515;">Далее</button>
+    </div>
+
+    <!-- Step 1: Select members -->
+    <div id="createGroupStep1" class="profile-page-scroll">
+      <div class="contact-group-header">Выберите участников</div>
+      <div id="createGroupContactList"></div>
+    </div>
+
+    <!-- Step 2: Name & Avatar -->
+    <div id="createGroupStep2" class="profile-page-scroll" hidden>
+      <div class="profile-page-hero" style="padding-top:24px;">
+        <div class="avatar-upload" onclick="document.getElementById('groupAvatarInput').click()">
+          <div class="card-avatar" id="groupAvatarPreview" style="width:80px;height:80px;min-width:80px;font-size:32px;">G</div>
+          <div class="avatar-crop-frame"></div>
+          <div class="avatar-camera-overlay"><span class="material-icons" style="font-size:13px;">photo_camera</span></div>
+        </div>
+        <input type="file" id="groupAvatarInput" accept="image/*" hidden onchange="handleGroupAvatar(event)">
+        <div class="field" style="width:100%;max-width:300px;margin-top:8px;">
+          <label>Название группы</label>
+          <input id="groupNameInput" type="text" placeholder="Введите название группы" style="text-align:center;font-size:16px;" oninput="updateCreateGroupBtn()">
+        </div>
+        <div style="font-size:13px;color:var(--muted);margin-top:8px;" id="groupSelectedCount"></div>
+      </div>
+      <div class="profile-page-actions" style="padding-top:8px;">
+        <button type="button" class="btn primary" onclick="finishCreateGroup()" style="min-width:160px;padding:12px 24px;border-radius:24px;font-size:15px;">Создать группу</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GROUP INFO PAGE -->
+  <div id="groupInfoPage">
+    <div class="profile-page-header">
+      <button type="button" class="profile-page-back" onclick="closeGroupInfo()">
+        <span class="material-icons">arrow_back</span>
+      </button>
+      <div class="profile-page-header-title">Информация</div>
+    </div>
+    <div class="profile-page-scroll">
+      <div class="profile-page-hero">
+        <div class="profile-page-avatar" id="groupInfoAvatar">G</div>
+        <div class="profile-page-name" id="groupInfoName">Группа</div>
+        <div class="profile-page-status" id="groupInfoMemberCount"></div>
+      </div>
+      <div class="profile-page-section">
+        <div class="profile-page-row">
+          <span class="material-icons profile-page-row-icon">info</span>
+          <div class="profile-page-row-content">
+            <div class="profile-page-row-label">Описание</div>
+            <div class="profile-page-row-value">Групповой чат</div>
+          </div>
+        </div>
+      </div>
+      <div class="contact-group-header">Участники (<span id="groupInfoMembersNum">0</span>)</div>
+      <div id="groupInfoMemberList"></div>
+      <div class="profile-page-actions" style="padding:16px 20px;">
+        <button type="button" class="profile-page-action-btn danger" onclick="leaveGroup()">
+          <span class="material-icons">exit_to_app</span>
+          Покинуть группу
+        </button>
       </div>
     </div>
   </div>

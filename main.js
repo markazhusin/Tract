@@ -45,6 +45,7 @@ const state = {
   receivedPacketIds: new Set(),
   currentChatId: null,
   contacts: new Map(),
+  groups: new Map(),
   activeCall: null,
   unreadCounts: new Map(),
   micMuted: false,
@@ -809,7 +810,7 @@ function consumeChatDeepLink() {
 
 async function openChatFromDeepLink(chatId) {
   if (!chatId || !state.profile) return;
-  if (!state.contacts.has(chatId)) return;
+  if (!state.contacts.has(chatId) && !state.groups.has(chatId)) return;
   await openChat(chatId);
   const sidebar = $('sidebar');
   if (sidebar && window.matchMedia('(max-width: 768px)').matches) {
@@ -973,8 +974,10 @@ async function bootstrapAuthenticatedSession(auth) {
   }
 
   state.contacts.clear();
+  state.groups.clear();
   await syncContactsFromServer();
   await restoreContacts();
+  await loadGroups();
   await loadOwnAvatar();
 
   const selfId = $('selfId');
@@ -1172,10 +1175,28 @@ async function processIncomingPacket(packet, fromPeerId) {
     if (packet.senderId === state.profile?.userId) return;
     if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
 
-    const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
+    const isGroup = packet.recipientId && packet.recipientId.startsWith('#');
+    const chatId = isGroup ? packet.recipientId : (packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId);
   const displayPacket = { ...packet, content, encrypted: false };
   const savedId = await messageDB.saveMessage(displayPacket, chatId, false, { isOutgoing: false });
   displayPacket._dbId = savedId;
+
+  if (isGroup) {
+    if (state.currentChatId !== chatId) {
+      state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
+      refreshDocTitle();
+      const group = state.groups.get(chatId);
+      notifyNewMessage({
+        chatId,
+        title: group?.name || chatId,
+        body: truncate(String(content || ''), 120)
+      });
+    }
+    if (state.currentChatId === chatId) {
+      addMessageToUI(displayPacket, false);
+    }
+    return;
+  }
 
   const existingContact = state.contacts.get(chatId);
   const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
@@ -1437,6 +1458,239 @@ async function syncContactsFromServer() {
     console.warn('Contact sync from server failed:', e);
   }
 }
+
+// ==================== GROUP CHAT ====================
+
+async function loadGroups() {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    const response = await fetch(new URL(`/groups/${encodeURIComponent(state.profile.userId)}`, serverUrl));
+    if (!response.ok) return;
+    const { groups = [] } = await response.json();
+    for (const group of groups) {
+      state.groups.set(group.groupId, group);
+    }
+  } catch (e) {
+    console.warn('Load groups failed:', e);
+  }
+}
+
+let groupCreationMembers = new Set();
+let groupCreationAvatar = null;
+
+window.openNewMessage = () => {
+  const page = $('newMessagePage');
+  if (!page) return;
+  page.classList.add('open');
+  renderNewMessageContacts();
+};
+
+window.closeNewMessage = () => {
+  $('newMessagePage')?.classList.remove('open');
+};
+
+function renderNewMessageContacts() {
+  const container = $('newMessageContactList');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const [id, contact] of state.contacts) {
+    const initials = getContactInitials(contact.displayName || id);
+    const btn = document.createElement('button');
+    btn.className = 'contact-item';
+    btn.innerHTML = `
+      <div class="contact-avatar contact-avatar-clickable">${getAvatarHtml(id, initials)}</div>
+      <div class="contact-info">
+        <div class="contact-name-row">
+          <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
+        </div>
+        <span class="contact-preview">${getOnlineStatusText(contact)}</span>
+      </div>
+    `;
+    btn.onclick = () => {
+      closeNewMessage();
+      openChat(id);
+    };
+    container.appendChild(btn);
+  }
+}
+
+window.openCreateGroup = () => {
+  closeNewMessage();
+  const page = $('createGroupPage');
+  if (!page) return;
+  groupCreationMembers = new Set();
+  groupCreationAvatar = null;
+  $('groupNameInput').value = '';
+  $('groupAvatarPreview').textContent = 'G';
+  $('groupAvatarPreview').innerHTML = 'G';
+  $('createGroupStep2').hidden = true;
+  $('createGroupStep1').hidden = false;
+  $('createGroupNextBtn').textContent = 'Далее';
+  page.classList.add('open');
+  renderCreateGroupContacts();
+};
+
+window.closeCreateGroup = () => {
+  $('createGroupPage')?.classList.remove('open');
+};
+
+function renderCreateGroupContacts() {
+  const container = $('createGroupContactList');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const [id, contact] of state.contacts) {
+    const initials = getContactInitials(contact.displayName || id);
+    const checked = groupCreationMembers.has(id) ? 'checked' : '';
+    const item = document.createElement('div');
+    item.className = 'contact-checkbox-item';
+    item.innerHTML = `
+      <div class="checkbox ${checked}"></div>
+      <div class="contact-avatar">${getAvatarHtml(id, initials)}</div>
+      <div class="contact-info">
+        <div class="contact-name-row">
+          <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
+        </div>
+      </div>
+    `;
+    item.onclick = () => {
+      if (groupCreationMembers.has(id)) {
+        groupCreationMembers.delete(id);
+      } else {
+        groupCreationMembers.add(id);
+      }
+      renderCreateGroupContacts();
+      updateCreateGroupSelectedCount();
+    };
+    container.appendChild(item);
+  }
+}
+
+window.createGroupNextStep = () => {
+  $('createGroupStep1').hidden = true;
+  $('createGroupStep2').hidden = false;
+  $('createGroupNextBtn').textContent = 'Готово';
+  updateCreateGroupSelectedCount();
+};
+
+function updateCreateGroupSelectedCount() {
+  const el = $('groupSelectedCount');
+  if (el) {
+    const count = groupCreationMembers.size;
+    el.textContent = count > 0 ? `Выбрано участников: ${count}` : 'Участники не выбраны (можно добавить позже)';
+  }
+}
+
+window.handleGroupAvatar = (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  event.target.value = '';
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    groupCreationAvatar = e.target.result;
+    const preview = $('groupAvatarPreview');
+    if (preview) preview.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;">`;
+  };
+  reader.readAsDataURL(file);
+};
+
+window.finishCreateGroup = async () => {
+  if (!state.profile) return;
+  const name = ($('groupNameInput')?.value || '').trim() || 'Unnamed Group';
+  const groupId = `#${crypto.randomUUID()}`;
+  const members = Array.from(groupCreationMembers).map((userId) => ({
+    userId,
+    role: 'member',
+    addedAt: Date.now()
+  }));
+  members.push({ userId: state.profile.userId, role: 'admin', addedAt: Date.now() });
+
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+
+  try {
+    const response = await fetch(new URL('/groups/create', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        groupId,
+        name,
+        avatarData: groupCreationAvatar || null,
+        createdBy: state.profile.userId,
+        members
+      })
+    });
+    if (!response.ok) throw new Error('Create group failed');
+    const data = await response.json();
+    state.groups.set(groupId, data.group);
+    closeCreateGroup();
+    await openChat(groupId);
+  } catch (e) {
+    console.warn('Create group error:', e);
+    setStatus('error', 'Не удалось создать группу');
+  }
+};
+
+window.openGroupInfo = () => {
+  const group = state.groups.get(state.currentChatId);
+  if (!group) return;
+  const page = $('groupInfoPage');
+  if (!page) return;
+  const initials = getContactInitials(group.name);
+  const avatarEl = $('groupInfoAvatar');
+  if (avatarEl) {
+    if (group.avatarData) {
+      avatarEl.innerHTML = `<img src="${group.avatarData}" style="width:100%;height:100%;object-fit:cover;">`;
+    } else {
+      avatarEl.textContent = initials;
+    }
+  }
+  const nameEl = $('groupInfoName');
+  if (nameEl) nameEl.textContent = group.name;
+  const countEl = $('groupInfoMemberCount');
+  if (countEl) {
+    const count = group.members.length;
+    countEl.textContent = `${count} ${count === 1 ? 'участник' : 'участников'}`;
+  }
+  const numEl = $('groupInfoMembersNum');
+  if (numEl) numEl.textContent = group.members.length;
+  const listEl = $('groupInfoMemberList');
+  if (listEl) {
+    listEl.innerHTML = '';
+    for (const member of group.members) {
+      const contact = state.contacts.get(member.userId);
+      const displayName = contact?.displayName || member.userId;
+      const initials = getContactInitials(displayName);
+      const roleLabel = member.role === 'admin' ? 'создатель' : '';
+      const item = document.createElement('div');
+      item.className = 'profile-page-row';
+      item.style.padding = '10px 16px';
+      item.innerHTML = `
+        <div class="contact-avatar" style="width:36px;height:36px;min-width:36px;font-size:14px;">${getAvatarHtml(member.userId, initials)}</div>
+        <div class="profile-page-row-content">
+          <div style="font-size:15px;">${escapeHtml(displayName)}</div>
+          ${roleLabel ? `<div style="font-size:12px;color:var(--muted);">${roleLabel}</div>` : ''}
+        </div>
+      `;
+      listEl.appendChild(item);
+    }
+  }
+  page.classList.add('open');
+};
+
+window.closeGroupInfo = () => {
+  $('groupInfoPage')?.classList.remove('open');
+};
+
+window.leaveGroup = async () => {
+  const group = state.groups.get(state.currentChatId);
+  if (!group || !state.profile) return;
+  state.groups.delete(state.currentChatId);
+  state.unreadCounts.delete(state.currentChatId);
+  closeGroupInfo();
+  await goBackFromChat();
+};
 
 window.addContactById = async () => {
   const primaryInput = $('addUserId');
@@ -1726,12 +1980,13 @@ async function flushPendingMessageControls(chatId, targetPeerId) {
 window.deleteCurrentChat = async () => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
-  // Only delete messages, keep the contact
   await messageDB.deleteChat(chatId);
   state.selectedMessageIds.clear();
-  const contact = state.contacts.get(chatId);
-  if (contact) {
-    await upsertContact(chatId, { ...contact, lastMsg: '', lastTime: 0 });
+  if (!state.groups.has(chatId)) {
+    const contact = state.contacts.get(chatId);
+    if (contact) {
+      await upsertContact(chatId, { ...contact, lastMsg: '', lastTime: 0 });
+    }
   }
   state.currentChatId = null;
   renderContacts();
@@ -1775,10 +2030,14 @@ window.sendCurrentMessage = async () => {
   if (!text || !state.currentChatId || !state.multiplexer || !state.profile) return;
 
   const chatId = state.currentChatId;
-  const contact = state.contacts.get(state.currentChatId);
-  if (contact?.blocked) {
-    setStatus('warning', 'Контакт заблокирован. Сначала разблокируйте.');
-    return;
+  const isGroup = state.groups.has(chatId);
+
+  if (!isGroup) {
+    const contact = state.contacts.get(chatId);
+    if (contact?.blocked) {
+      setStatus('warning', 'Контакт заблокирован. Сначала разблокируйте.');
+      return;
+    }
   }
 
   const packet = {
@@ -1794,11 +2053,16 @@ window.sendCurrentMessage = async () => {
   input.value = '';
   const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
   packet._dbId = dbKey;
-  await upsertContact(chatId, {
-    ...contact,
-    lastMsg: text,
-    lastTime: packet.timestamp
-  });
+
+  if (!isGroup) {
+    const contact = state.contacts.get(chatId);
+    await upsertContact(chatId, {
+      ...contact,
+      lastMsg: text,
+      lastTime: packet.timestamp
+    });
+  }
+
   if (state.currentChatId === chatId) {
     addMessageToUI(packet, true, { pending: true });
   }
@@ -1809,6 +2073,38 @@ window.sendCurrentMessage = async () => {
 };
 
 async function deliverOutgoingMessage(chatId, packet) {
+  const group = state.groups.get(chatId);
+
+  if (group) {
+    // Group message — send via server
+    const serverUrl = resolveSignalingUrl();
+    if (!serverUrl) return;
+    try {
+      const response = await fetch(new URL('/groups/message', serverUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          groupId: chatId,
+          from: state.myPeerId,
+          fromUserId: state.profile.userId,
+          payload: {
+            ...packet,
+            senderId: state.profile.userId,
+            senderName: state.profile.displayName,
+            recipientId: chatId
+          }
+        })
+      });
+      if (response.ok) {
+        await messageDB.markMessageSent(packet._dbId || packet.id);
+        markMessageDelivered(packet._dbId || packet.id);
+      }
+    } catch (e) {
+      console.warn('Group send failed:', e);
+    }
+    return;
+  }
+
   const contact = state.contacts.get(chatId);
   packet.recipientId = chatId;
   const targetPeerId = await resolvePeerForUser(chatId);
@@ -1895,6 +2191,28 @@ function renderContacts() {
     return btn;
   };
 
+  const renderGroupItem = ([groupId, group], isActive) => {
+    const unread = state.unreadCounts.get(groupId) || 0;
+    const initials = getContactInitials(group.name);
+    const preview = 'Группа';
+    const time = '';
+    const btn = document.createElement('button');
+    btn.className = `contact-item ${isActive ? 'active' : ''}`;
+    btn.innerHTML = `
+      <div class="contact-avatar contact-avatar-clickable" style="background:var(--online);">${group.avatarData ? `<img src="${group.avatarData}" style="width:100%;height:100%;object-fit:cover;">` : initials}</div>
+      <div class="contact-info">
+        <div class="contact-name-row">
+          <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(group.name)}</span>
+          <span class="contact-time">${time}</span>
+        </div>
+        <span class="contact-preview">${preview}</span>
+      </div>
+      ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
+    `;
+    btn.onclick = () => openChat(groupId);
+    return btn;
+  };
+
   const render = (container, grouped) => {
     if (!container) return;
     container.innerHTML = '';
@@ -1902,12 +2220,22 @@ function renderContacts() {
     const items = Array.from(state.contacts.entries())
       .filter(([id]) => !isSelfContactId(id));
 
-    if (items.length === 0) {
+    const groupItems = Array.from(state.groups.entries());
+
+    if (items.length === 0 && groupItems.length === 0) {
       container.innerHTML = '<div class="empty" style="padding: 16px; text-align: center; color: var(--muted); font-size: 13px;">Нет контактов</div>';
       return;
     }
 
     if (!grouped) {
+      for (const gItem of groupItems) {
+        container.appendChild(renderGroupItem(gItem, gItem[0] === state.currentChatId));
+      }
+      if (groupItems.length > 0 && items.length > 0) {
+        const divider = document.createElement('div');
+        divider.style.cssText = 'height:1px;background:var(--line);margin:4px 12px;';
+        container.appendChild(divider);
+      }
       items.sort(([, left], [, right]) => {
         if (Boolean(right.online) !== Boolean(left.online)) {
           return Number(Boolean(right.online)) - Number(Boolean(left.online));
@@ -1984,6 +2312,9 @@ async function openChat(id) {
   renderChatHeader();
   await renderChatHistory(id);
   updateMobileLayout();
+  if (state.groups.has(id)) {
+    $('btnCall').hidden = true;
+  }
 }
 
 window.goBackFromChat = () => {
@@ -2416,8 +2747,10 @@ function renderChatHeader() {
   const btnMenu = $('btnChatMenu');
   const headerAvatar = $('chatHeaderAvatar');
 
+  const group = state.groups.get(state.currentChatId);
+
   if (btnCall) {
-    btnCall.hidden = !state.currentChatId || Boolean(state.activeCall) || Boolean(state.contacts.get(state.currentChatId)?.blocked);
+    btnCall.hidden = !state.currentChatId || Boolean(state.activeCall) || Boolean(state.contacts.get(state.currentChatId)?.blocked) || Boolean(group);
   }
   if (btnMenu) btnMenu.hidden = !state.currentChatId;
 
@@ -2430,6 +2763,32 @@ function renderChatHeader() {
     if (subtitle) subtitle.textContent = 'Выберите диалог';
     if (headerAvatar) { headerAvatar.innerHTML = ''; headerAvatar.hidden = true; }
     closeChatMenu();
+    return;
+  }
+
+  if (group) {
+    const initials = getContactInitials(group.name);
+    if (headerAvatar) {
+      headerAvatar.hidden = false;
+      headerAvatar.innerHTML = group.avatarData
+        ? `<img src="${group.avatarData}" style="width:100%;height:100%;object-fit:cover;">`
+        : initials;
+      headerAvatar.onclick = () => openGroupInfo();
+    }
+    if (title) {
+      title.textContent = group.name;
+      title.classList.remove('clickable');
+      title.onclick = null;
+    }
+    const headerMain = $('chatHeaderMain');
+    if (headerMain) {
+      headerMain.style.cursor = 'pointer';
+      headerMain.onclick = () => openGroupInfo();
+    }
+    if (subtitle) {
+      const count = group.members.length;
+      subtitle.textContent = `${count} ${count === 1 ? 'участник' : 'участников'}`;
+    }
     return;
   }
 
@@ -2523,10 +2882,18 @@ function addMessageToUI(packet, isSent, options = {}) {
   if (messageId !== undefined) {
     message.dataset.messageId = String(messageId);
   }
+
+  const isGroup = state.groups.has(state.currentChatId);
+  const senderName = !isSent && isGroup && packet.senderName && packet.senderName !== state.profile?.userId
+    ? escapeHtml(packet.senderName)
+    : '';
+
   message.innerHTML = `
+    ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
     <span>${escapeHtml(packet.content)}</span>
     <time>${formatTime(packet.timestamp)}</time>
   `;
+
   message.onclick = () => {
     if (messageId === undefined) return;
     const id = Number(messageId);

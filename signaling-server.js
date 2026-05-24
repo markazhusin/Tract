@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IDENTITY_STORE_PATH = path.join(__dirname, 'data', 'identity-store.json');
 const INBOX_STORE_PATH = path.join(__dirname, 'data', 'message-inbox.json');
 const CONTACT_STORE_PATH = path.join(__dirname, 'data', 'contact-store.json');
+const GROUP_STORE_PATH = path.join(__dirname, 'data', 'group-store.json');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,6 +22,8 @@ const identityStore = new Map();
 const userInbox = new Map();
 /** Persistent contact list by @login userId */
 const contactStore = new Map();
+/** Persistent group store */
+const groupStore = new Map();
 const PEER_TTL_MS = 15000;
 const MAX_INBOX_PER_USER = 5000;
 const CALL_INBOX_TTL_MS = 90_000;
@@ -104,6 +107,33 @@ function saveContactStore() {
 }
 
 loadContactStore();
+
+function loadGroupStore() {
+  try {
+    if (fs.existsSync(GROUP_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(GROUP_STORE_PATH, 'utf8'));
+      for (const [groupId, group] of Object.entries(data)) {
+        groupStore.set(groupId, group);
+      }
+      console.log(`[Groups] Loaded ${groupStore.size} groups from disk`);
+    }
+  } catch (err) {
+    console.warn('[Groups] Failed to load from disk:', err.message);
+  }
+}
+
+function saveGroupStore() {
+  try {
+    const dir = path.dirname(GROUP_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const data = Object.fromEntries(groupStore);
+    fs.writeFileSync(GROUP_STORE_PATH, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    console.warn('[Groups] Failed to save to disk:', err.message);
+  }
+}
+
+loadGroupStore();
 
 function resolvePeerUserId(roomId, peerId) {
   if (!peerId) return null;
@@ -473,6 +503,119 @@ app.get('/contacts/load/:userId', (req, res) => {
   const { userId } = req.params;
   const contacts = contactStore.get(userId) || [];
   res.json({ contacts });
+});
+
+function isGroupId(id) {
+  return id && typeof id === 'string' && id.startsWith('#');
+}
+
+const GROUP_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+app.post('/groups/create', (req, res) => {
+  const { groupId, name, avatarData, createdBy, members } = req.body;
+  if (!groupId || !createdBy) {
+    return res.status(400).json({ error: 'groupId and createdBy are required' });
+  }
+
+  const memberList = Array.isArray(members) ? [...members] : [];
+  if (!memberList.some((m) => m.userId === createdBy)) {
+    memberList.push({ userId: createdBy, role: 'admin', addedAt: Date.now() });
+  }
+
+  const group = {
+    groupId,
+    name: name || 'Unnamed Group',
+    avatarData: avatarData || null,
+    createdBy,
+    members: memberList,
+    createdAt: Date.now()
+  };
+
+  groupStore.set(groupId, group);
+  saveGroupStore();
+  console.log(`[Groups] Created ${groupId} by ${createdBy}`);
+
+  for (const member of memberList) {
+    enqueueUserInbox(normalizeUserId(member.userId), {
+      id: crypto.randomUUID(),
+      type: 'app_packet',
+      payload: { type: 'group_event', action: 'created', groupId, name: group.name, createdBy },
+      timestamp: Date.now()
+    });
+  }
+
+  res.json({ status: 'ok', group });
+});
+
+app.post('/groups/add-members', (req, res) => {
+  const { groupId, members, addedBy } = req.body;
+  const group = groupStore.get(groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+
+  const added = [];
+  for (const m of (members || [])) {
+    if (m.userId && !group.members.some((ex) => ex.userId === m.userId)) {
+      group.members.push({ userId: m.userId, role: m.role || 'member', addedAt: Date.now() });
+      added.push(m.userId);
+    }
+  }
+
+  if (added.length) {
+    groupStore.set(groupId, group);
+    saveGroupStore();
+    console.log(`[Groups] Added members to ${groupId}: ${added.join(', ')}`);
+  }
+
+  res.json({ status: 'ok', added, group });
+});
+
+app.get('/groups/:userId', (req, res) => {
+  const { userId } = req.params;
+  const userGroups = [];
+  for (const group of groupStore.values()) {
+    if (group.members.some((m) => m.userId === userId)) {
+      userGroups.push(group);
+    }
+  }
+  res.json({ groups: userGroups });
+});
+
+app.get('/group/:groupId', (req, res) => {
+  const group = groupStore.get(req.params.groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+  res.json({ group });
+});
+
+app.post('/groups/message', (req, res) => {
+  const { groupId, from, fromUserId, payload } = req.body;
+  if (!groupId || !payload) {
+    return res.status(400).json({ error: 'groupId and payload are required' });
+  }
+
+  const group = groupStore.get(groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+
+  if (!group.members.some((m) => m.userId === fromUserId)) {
+    return res.status(403).json({ error: 'not a group member' });
+  }
+
+  const messageEntry = {
+    id: crypto.randomUUID(),
+    groupId,
+    fromUserId: fromUserId || null,
+    payload,
+    timestamp: Date.now()
+  };
+
+  for (const member of group.members) {
+    if (member.userId === fromUserId) continue;
+    enqueueUserInbox(normalizeUserId(member.userId), {
+      ...messageEntry,
+      type: 'app_packet'
+    });
+  }
+
+  res.json({ status: 'ok', messageId: messageEntry.id });
 });
 
 const distDir = path.join(__dirname, 'dist');
