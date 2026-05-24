@@ -156,49 +156,8 @@ async function pullInbox() {
     const ackIds = [];
     for (const entry of msgs) {
       if (entry.type !== 'app_packet' || !entry.payload) continue;
-      if (entry.payload.type === 'text' && entry.payload.encrypted && entry.payload.senderId) {
-        const contact = state.contacts.get(entry.payload.senderId);
-        let senderPubKey = contact?.publicKeyHex;
-        if (!senderPubKey) {
-          senderPubKey = await fetchPeerPublicKey(resolveSignalingUrl(), entry.payload.senderId);
-        }
-        if (senderPubKey) {
-          try {
-            const plaintext = await decryptMessage(
-              entry.payload.ciphertext, entry.payload.iv,
-              entry.payload.senderPublicKey || senderPubKey,
-              state.keyPair
-            );
-            const packet = {
-              ...entry.payload,
-              content: plaintext,
-              encrypted: false
-            };
-            const chatId = entry.payload.senderId;
-            const pktId = packet.packetId || `${chatId}:${packet.timestamp}`;
-            if (state.receivedPacketIds.has(pktId)) continue;
-            state.receivedPacketIds.add(pktId);
-            const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
-            packet._dbId = savedId;
-            if (state.currentChatId !== chatId) {
-              state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
-              refreshDocTitle();
-            }
-            if (state.currentChatId === chatId) {
-              addMessageToUI(packet, false);
-            }
-            await upsertContact(chatId, {
-              displayName: packet.senderName || state.contacts.get(chatId)?.displayName || chatId,
-              online: false,
-              lastMsg: packet.content,
-              lastTime: packet.timestamp
-            });
-            ackIds.push(entry.id);
-          } catch (e) {
-            console.warn('Inbox decrypt failed:', e);
-          }
-        }
-      }
+      await processIncomingPacket(entry.payload, entry.from);
+      if (entry.id) ackIds.push(entry.id);
     }
     if (ackIds.length && signaling.ackInbox) {
       await signaling.ackInbox(state.profile.userId, ackIds);
