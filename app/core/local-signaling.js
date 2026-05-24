@@ -147,14 +147,39 @@ export class HostedSignaling {
     return peer;
   }
 
-  async sendSignal(to, type, payload) {
-    await this.post('/signal', {
+  async sendSignal(to, type, payload, meta = {}) {
+    const body = {
       from: this.peerId,
-      to,
+      to: to || undefined,
       roomId: this.roomId,
       type,
       payload
+    };
+    if (meta.toUserId) {
+      body.toUserId = meta.toUserId;
+    }
+    await this.post('/signal', body);
+  }
+
+  async pullInbox(userId) {
+    const response = await fetch(new URL('/inbox/pull', this.serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId })
     });
+    if (!response.ok) {
+      throw new Error(`Inbox pull failed: ${response.status}`);
+    }
+    return response.json();
+  }
+
+  async ackInbox(userId, ids) {
+    if (!ids?.length) return;
+    await this.post('/inbox/ack', { userId, ids });
+  }
+
+  pollNow() {
+    return this.pollSignals();
   }
 
   onSignal(type, callback) {

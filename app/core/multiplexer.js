@@ -31,7 +31,7 @@ export class Multiplexer {
     let lastError = null;
 
     const transports = [...this.transports.values()];
-    if (p?.type === 'call' || p?.type === 'message_control') {
+    if (p?.type === 'text' || p?.type === 'call' || p?.type === 'message_control') {
       transports.sort((a, b) => {
         if (a.name === 'Signaling') return -1;
         if (b.name === 'Signaling') return 1;

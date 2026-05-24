@@ -25,12 +25,15 @@ export class SignalingRelayTransport {
     this.onMessageCallback = cb;
   }
 
-  async send(packet, targetPeerId) {
+  async send(packet, targetPeerId, toUserId = null) {
     await this.ready;
-    if (!targetPeerId) {
-      throw new Error('Signaling relay requires a targetPeerId');
+    const recipientUserId = toUserId || packet.recipientId || packet.toUserId || null;
+    if (!targetPeerId && !recipientUserId) {
+      throw new Error('Signaling relay requires targetPeerId or toUserId');
     }
-    await this.signaling.sendSignal(targetPeerId, 'app_packet', packet);
+    await this.signaling.sendSignal(targetPeerId || '', 'app_packet', packet, {
+      toUserId: recipientUserId
+    });
   }
 
   async stop() {

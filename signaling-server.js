@@ -2,18 +2,25 @@ import http from 'http';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IDENTITY_STORE_PATH = path.join(__dirname, 'data', 'identity-store.json');
+const INBOX_STORE_PATH = path.join(__dirname, 'data', 'message-inbox.json');
 
 const app = express();
 const server = http.createServer(app);
 const peers = new Map();
-const signalingChannels = new Map();
+/** Ephemeral WebRTC signaling (offer/answer/ice) — per peerId, not persisted */
+const peerSignals = new Map();
 const sseClients = new Map(); // key (roomId:peerId) -> Set<res>
 const identityStore = new Map();
+/** Persistent inbox by @login userId — survives logout, peer timeout, redeploy */
+const userInbox = new Map();
 const PEER_TTL_MS = 15000;
+const MAX_INBOX_PER_USER = 5000;
+const CALL_INBOX_TTL_MS = 90_000;
 
 function loadIdentityStore() {
   try {
@@ -41,6 +48,80 @@ function saveIdentityStore() {
 }
 
 loadIdentityStore();
+loadInboxStore();
+
+function loadInboxStore() {
+  try {
+    if (fs.existsSync(INBOX_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(INBOX_STORE_PATH, 'utf8'));
+      for (const [userId, entries] of Object.entries(data)) {
+        userInbox.set(userId, Array.isArray(entries) ? entries : []);
+      }
+      console.log(`[Inbox] Loaded ${userInbox.size} user mailboxes from disk`);
+    }
+  } catch (err) {
+    console.warn('[Inbox] Failed to load from disk:', err.message);
+  }
+}
+
+function saveInboxStore() {
+  try {
+    const dir = path.dirname(INBOX_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const data = Object.fromEntries(userInbox);
+    fs.writeFileSync(INBOX_STORE_PATH, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    console.warn('[Inbox] Failed to save to disk:', err.message);
+  }
+}
+
+function resolvePeerUserId(roomId, peerId) {
+  if (!peerId) return null;
+  return peers.get(peerKey(roomId, peerId))?.userId || null;
+}
+
+function normalizeUserId(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+
+function isPersistentAppPacket(type, payload) {
+  if (type !== 'app_packet' || !payload || typeof payload !== 'object') return false;
+  return payload.type === 'text' || payload.type === 'message_control' || payload.type === 'call';
+}
+
+function enqueueUserInbox(toUserId, entry) {
+  const userId = normalizeUserId(toUserId);
+  if (!userId) return null;
+
+  if (!userInbox.has(userId)) userInbox.set(userId, []);
+  const list = userInbox.get(userId);
+
+  if (entry.payload?.packetId && list.some((e) => e.payload?.packetId === entry.payload.packetId)) {
+    return null;
+  }
+
+  if (entry.payload?.type === 'call' && entry.payload?.callId) {
+    const dup = list.some((e) => e.payload?.type === 'call' && e.payload?.callId === entry.payload.callId && e.payload?.action === entry.payload.action);
+    if (dup) return null;
+  }
+
+  list.push(entry);
+  while (list.length > MAX_INBOX_PER_USER) {
+    list.shift();
+  }
+  saveInboxStore();
+  return entry.id;
+}
+
+function filterInboxForDelivery(entries) {
+  const now = Date.now();
+  return entries.filter((entry) => {
+    if (entry.payload?.type !== 'call') return true;
+    return now - (entry.timestamp || 0) < CALL_INBOX_TTL_MS;
+  });
+}
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -60,11 +141,11 @@ function peerKey(roomId, peerId) {
   return `${roomId}:${peerId}`;
 }
 
-function ensureQueue(key) {
-  if (!signalingChannels.has(key)) {
-    signalingChannels.set(key, []);
+function ensurePeerSignalQueue(key) {
+  if (!peerSignals.has(key)) {
+    peerSignals.set(key, []);
   }
-  return signalingChannels.get(key);
+  return peerSignals.get(key);
 }
 
 function safeWrite(res, data) {
@@ -76,8 +157,16 @@ function cleanupExpiredPeers() {
   for (const [key, peer] of peers) {
     if (now - peer.timestamp <= PEER_TTL_MS) continue;
     peers.delete(key);
-    signalingChannels.delete(key);
+    peerSignals.delete(key);
     console.log(`[Signaling] Timeout: ${peer.roomId}/${peer.peerId}`);
+  }
+
+  for (const [userId, entries] of userInbox) {
+    const fresh = filterInboxForDelivery(entries);
+    if (fresh.length !== entries.length) {
+      userInbox.set(userId, fresh);
+      saveInboxStore();
+    }
   }
 }
 
@@ -99,7 +188,7 @@ app.post('/peer/register', (req, res) => {
     address: req.socket.remoteAddress,
     timestamp: Date.now()
   });
-  ensureQueue(key);
+  ensurePeerSignalQueue(key);
 
   res.json({ status: 'ok' });
 });
@@ -126,7 +215,7 @@ app.post('/peer/unregister', (req, res) => {
   const { peerId, roomId } = req.body;
   const key = peerKey(roomId, peerId);
   peers.delete(key);
-  signalingChannels.delete(key);
+  peerSignals.delete(key);
   res.json({ status: 'ok' });
 });
 
@@ -208,33 +297,92 @@ app.get('/events/:peerId', (req, res) => {
 });
 
 app.post('/signal', (req, res) => {
-  const { from, to, roomId, type, payload } = req.body;
-  if (!from || !to || !roomId || !type) {
-    return res.status(400).json({ error: 'from, to, roomId and type are required' });
+  const { from, to, toUserId, roomId, type, payload } = req.body;
+  if (!from || !roomId || !type) {
+    return res.status(400).json({ error: 'from, roomId and type are required' });
+  }
+  if (!to && !toUserId) {
+    return res.status(400).json({ error: 'to or toUserId is required' });
   }
 
-  const targetKey = peerKey(roomId, to);
-  const clients = sseClients.get(targetKey);
+  const recipientUserId = normalizeUserId(toUserId) || resolvePeerUserId(roomId, to);
+  const fromUserId = resolvePeerUserId(roomId, from);
 
-  if (clients && clients.size > 0) {
-    const message = JSON.stringify({ from, type, payload });
-    for (const client of clients) {
-      safeWrite(client, `data: ${message}\n\n`);
-    }
-  } else {
-    // Fallback: queue for HTTP polling
-    const queue = ensureQueue(targetKey);
-    queue.push({
+  if (isPersistentAppPacket(type, payload) && recipientUserId) {
+    enqueueUserInbox(recipientUserId, {
+      id: crypto.randomUUID(),
       from,
-      to,
-      roomId,
+      fromUserId,
+      toUserId: recipientUserId,
       type,
       payload,
       timestamp: Date.now()
     });
   }
 
-  res.json({ status: 'queued' });
+  const targetPeerId = to || findOnlinePeerIdForUser(roomId, recipientUserId);
+  if (targetPeerId) {
+    const targetKey = peerKey(roomId, targetPeerId);
+    const clients = sseClients.get(targetKey);
+
+    if (clients && clients.size > 0) {
+      const message = JSON.stringify({ from, type, payload });
+      for (const client of clients) {
+        safeWrite(client, `data: ${message}\n\n`);
+      }
+    } else if (!isPersistentAppPacket(type, payload)) {
+      const queue = ensurePeerSignalQueue(targetKey);
+      queue.push({ from, to: targetPeerId, roomId, type, payload, timestamp: Date.now() });
+    }
+  }
+
+  res.json({ status: 'queued', persisted: Boolean(recipientUserId && isPersistentAppPacket(type, payload)) });
+});
+
+function findOnlinePeerIdForUser(roomId, userId) {
+  if (!userId) return null;
+  for (const peer of peers.values()) {
+    if (peer.roomId === roomId && peer.userId === userId) {
+      return peer.peerId;
+    }
+  }
+  return null;
+}
+
+app.post('/inbox/pull', (req, res) => {
+  const userId = normalizeUserId(req.body?.userId);
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  const entries = filterInboxForDelivery(userInbox.get(userId) || []);
+  userInbox.set(userId, entries);
+  saveInboxStore();
+
+  res.json({
+    messages: entries.map((entry) => ({
+      id: entry.id,
+      from: entry.from,
+      fromUserId: entry.fromUserId,
+      type: entry.type,
+      payload: entry.payload,
+      timestamp: entry.timestamp
+    }))
+  });
+});
+
+app.post('/inbox/ack', (req, res) => {
+  const userId = normalizeUserId(req.body?.userId);
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  const idSet = new Set(ids);
+  const list = userInbox.get(userId) || [];
+  userInbox.set(userId, list.filter((entry) => !idSet.has(entry.id)));
+  saveInboxStore();
+  res.json({ status: 'ok', removed: ids.length });
 });
 
 app.get('/signal/poll/:peerId', (req, res) => {
@@ -242,7 +390,7 @@ app.get('/signal/poll/:peerId', (req, res) => {
   const { peerId } = req.params;
   const { roomId } = req.query;
   const key = peerKey(roomId, peerId);
-  const queue = ensureQueue(key);
+  const queue = ensurePeerSignalQueue(key);
   const messages = queue.splice(0, queue.length);
 
   res.json({ messages });

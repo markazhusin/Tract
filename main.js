@@ -12,6 +12,7 @@ import {
   uploadIdentityToServer
 } from './app/core/keypair.js';
 import { Multiplexer } from './app/core/multiplexer.js';
+import { getSignaling } from './app/core/local-signaling.js';
 import { WebRTCTransport } from './app/transports/webrtc.js';
 import { messageDB } from './app/core/database.js';
 import {
@@ -960,6 +961,103 @@ window.toggleHideOnline = () => {
   }
 };
 
+let inboxSyncBound = false;
+
+function bindInboxSync() {
+  if (inboxSyncBound) return;
+  inboxSyncBound = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !state.profile) return;
+    getSignaling()?.pollNow().catch(() => {});
+    pullUserInbox().catch(() => {});
+  });
+}
+
+async function pullUserInbox() {
+  if (!state.profile) return;
+  const signaling = getSignaling();
+  if (!signaling) return;
+
+  try {
+    const { messages = [] } = await signaling.pullInbox(state.profile.userId);
+    const ackIds = [];
+
+    for (const entry of messages) {
+      if (entry.type !== 'app_packet' || !entry.payload) continue;
+      await processIncomingPacket(entry.payload, entry.from);
+      if (entry.id) ackIds.push(entry.id);
+    }
+
+    await signaling.ackInbox(state.profile.userId, ackIds);
+  } catch (error) {
+    console.warn('Inbox pull failed:', error);
+  }
+}
+
+async function processIncomingPacket(packet, fromPeerId) {
+  if (packet.type === 'message_control') {
+    await handleMessageControl(packet, fromPeerId);
+    return;
+  }
+
+  if (packet.type === 'call') {
+    await handleCallControl(packet, fromPeerId);
+    return;
+  }
+
+  if (packet.type !== 'text') return;
+
+  let pktId = packet.packetId;
+  if (!pktId) {
+    pktId = `${packet.senderId || fromPeerId}:${packet.timestamp}:${packet.content}`;
+  }
+  if (state.receivedPacketIds.has(pktId)) {
+    return;
+  }
+  state.receivedPacketIds.add(pktId);
+
+  if (packet.senderId === state.profile?.userId) return;
+  if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
+
+  const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
+  const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
+  packet._dbId = savedId;
+
+  const existingContact = state.contacts.get(chatId);
+  const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
+    ? packet.senderName
+    : (existingContact?.displayName || chatId);
+
+  if (state.currentChatId !== chatId) {
+    state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
+    refreshDocTitle();
+    notifyNewMessage({
+      chatId,
+      title: getContactLabel(existingContact) || resolvedDisplayName || chatId,
+      body: truncate(String(packet.content || ''), 120)
+    });
+  }
+
+  if (state.currentChatId === chatId) {
+    addMessageToUI(packet, false);
+  }
+
+  const roomId = state.transport?.options?.roomId || resolveRoomId();
+  const wasNew = !state.contacts.has(chatId);
+  await upsertContact(chatId, {
+    displayName: resolvedDisplayName,
+    activePeerId: fromPeerId,
+    online: true,
+    roomId,
+    lastMsg: packet.content,
+    lastTime: packet.timestamp
+  });
+
+  if (wasNew) {
+    state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
+  }
+}
+
 window.connectHandshake = async () => {
   if (!state.profile || !state.keyPair) {
     const stored = getStoredIdentityMetadata();
@@ -1131,74 +1229,16 @@ window.connectHandshake = async () => {
   });
 
   state.multiplexer.onMessage(async (packet, fromPeerId) => {
-    if (packet.type === 'message_control') {
-      await handleMessageControl(packet, fromPeerId);
-      return;
-    }
-
-    if (packet.type === 'call') {
-      await handleCallControl(packet, fromPeerId);
-      return;
-    }
-
-    if (packet.type !== 'text') return;
-
-    // Deduplicate by packet.packetId (added on send). If missing, use fingerprint.
-    let pktId = packet.packetId;
-    if (!pktId) {
-      pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${packet.content}`;
-    }
-    if (state.receivedPacketIds.has(pktId)) {
-      return;
-    }
-    state.receivedPacketIds.add(pktId);
-
-    if (packet.senderId === state.profile?.userId) return;
-    if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
-
-    const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
-    const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
-    packet._dbId = savedId;
-
-    const existingContact = state.contacts.get(chatId);
-    const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
-      ? packet.senderName
-      : (existingContact?.displayName || chatId);
-
-    if (state.currentChatId !== chatId) {
-      state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
-      refreshDocTitle();
-      notifyNewMessage({
-        chatId,
-        title: getContactLabel(existingContact) || resolvedDisplayName || chatId,
-        body: truncate(String(packet.content || ''), 120)
-      });
-    }
-    // If viewing this chat, render incoming message
-    if (state.currentChatId === chatId) {
-      addMessageToUI(packet, false);
-    }
-
-    // Auto-add or update contact with real displayName from packet
-
-    const wasNew = !state.contacts.has(chatId);
-    await upsertContact(chatId, {
-      displayName: resolvedDisplayName,
-      activePeerId: fromPeerId,
-      online: true,
-      roomId,
-      lastMsg: packet.content,
-      lastTime: packet.timestamp
-    });
-
-    // If contact was auto-created, update allowedUserIds
-    if (wasNew) {
-      state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
-    }
+    await processIncomingPacket(packet, fromPeerId);
   });
 
   try {
     await state.transport.ready;
+    if (state.signalingRelay) {
+      await state.signalingRelay.ready;
+    }
+    bindInboxSync();
+    await pullUserInbox();
     await updateInviteArtifacts();
   } catch (error) {
     console.error('Handshake connect failed:', error);
@@ -1304,14 +1344,26 @@ window.deleteSelectedMessages = async (scope = 'me') => {
 };
 
 async function sendMessageControl(payload, chatId = state.currentChatId) {
-  if (!chatId || !state.multiplexer || !state.profile) return false;
+  if (!chatId || !state.profile) return false;
   const packet = {
     type: 'message_control',
     senderId: state.profile.userId,
     timestamp: Date.now(),
+    recipientId: chatId,
     ...payload
   };
   const targetPeerId = await resolvePeerForUser(chatId);
+
+  try {
+    if (state.signalingRelay) {
+      await state.signalingRelay.ready;
+      await state.signalingRelay.send(packet, targetPeerId, chatId);
+      return true;
+    }
+  } catch (error) {
+    console.warn('Message control relay failed:', error);
+  }
+
   if (!targetPeerId) {
     await queuePendingMessageControl(chatId, packet);
     return true;
@@ -1346,18 +1398,29 @@ async function clearPendingCallControls(chatId) {
 }
 
 async function sendCallControl(action, callId, userId, peerId = null, extra = {}) {
-  if (!userId || !state.multiplexer || !state.profile) return false;
+  if (!userId || !state.profile) return false;
   const packet = {
     type: 'call',
     action,
     callId,
     senderId: state.profile.userId,
+    recipientId: userId,
     ...extra
   };
 
   let targetPeerId = peerId;
   if (!targetPeerId) {
     targetPeerId = await resolvePeerForUser(userId).catch(() => null);
+  }
+
+  try {
+    if (state.signalingRelay) {
+      await state.signalingRelay.ready;
+      await state.signalingRelay.send(packet, targetPeerId, userId);
+      return true;
+    }
+  } catch (error) {
+    console.warn('Call control relay failed:', error);
   }
 
   if (!targetPeerId) {
@@ -1411,7 +1474,12 @@ async function flushPendingCallControls(chatId, targetPeerId) {
   for (const packet of pending) {
     const { controlId, queuedAt, ...outgoing } = packet;
     try {
-      await state.multiplexer.send(outgoing, targetPeerId);
+      if (state.signalingRelay) {
+        await state.signalingRelay.ready;
+        await state.signalingRelay.send({ ...outgoing, recipientId: chatId }, targetPeerId, chatId);
+      } else {
+        await state.multiplexer.send(outgoing, targetPeerId);
+      }
     } catch (error) {
       remaining.push(packet);
     }
@@ -1439,7 +1507,12 @@ async function flushPendingMessageControls(chatId, targetPeerId) {
   const remaining = [];
   for (const packet of pending) {
     try {
-      await state.multiplexer.send(packet, targetPeerId);
+      if (state.signalingRelay) {
+        await state.signalingRelay.ready;
+        await state.signalingRelay.send({ ...packet, recipientId: chatId }, targetPeerId, chatId);
+      } else {
+        await state.multiplexer.send(packet, targetPeerId);
+      }
     } catch (error) {
       remaining.push(packet);
     }
@@ -1532,31 +1605,41 @@ window.sendCurrentMessage = async () => {
 };
 
 async function deliverOutgoingMessage(chatId, packet) {
+  const contact = state.contacts.get(chatId);
+  packet.recipientId = chatId;
+  const targetPeerId = await resolvePeerForUser(chatId);
+  let storedOnServer = false;
+
   try {
-    const contact = state.contacts.get(chatId);
-    const targetPeerId = await resolvePeerForUser(chatId);
-
-    if (!targetPeerId) {
-      // Peer is offline — message stays as pending (isSent: false) in DB.
-      // It will be retried automatically when the peer comes online via
-      // onPeerDiscovery / onPeerConnected callbacks.
-      console.log('[deliver] peer offline, message queued as pending:', chatId);
-      return;
+    if (state.signalingRelay) {
+      await state.signalingRelay.ready;
+      await state.signalingRelay.send(packet, targetPeerId, chatId);
+      storedOnServer = true;
     }
+  } catch (error) {
+    console.warn('[deliver] server relay failed:', error?.message || error);
+  }
 
-    await state.multiplexer.send(packet, targetPeerId);
+  if (targetPeerId) {
+    try {
+      await state.transport.send(packet, targetPeerId);
+    } catch (error) {
+      console.warn('[deliver] p2p failed (server copy may exist):', error?.message || error);
+    }
+  }
+
+  if (storedOnServer) {
     await messageDB.markMessageSent(packet._dbId || packet.id);
     await upsertContact(chatId, {
       ...contact,
-      activePeerId: targetPeerId,
-      online: true,
+      activePeerId: targetPeerId || contact?.activePeerId || null,
+      online: Boolean(targetPeerId),
       lastMsg: packet.content,
       lastTime: packet.timestamp
     });
     markMessageDelivered(packet._dbId || packet.id);
-  } catch (error) {
-    // Transport failed — message stays pending, will retry on reconnect
-    console.warn('[deliver] send failed, message stays pending:', error?.message || error);
+  } else if (!targetPeerId) {
+    console.log('[deliver] peer offline, waiting for server relay:', chatId);
   }
 }
 
