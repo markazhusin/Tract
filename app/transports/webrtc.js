@@ -471,13 +471,8 @@ export class WebRTCTransport {
         return peer;
       }
 
-<<<<<<< HEAD
       // Initiate connection if peer is not yet connected
       if (!this.peers.has(peerId)) {
-=======
-      // Initiate connection if peer is online and not yet connected
-      if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
->>>>>>> parent of df54c08 (return)
         this.connectToPeer(peerId);
       }
 
