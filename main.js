@@ -265,11 +265,43 @@ function getContactInitials(displayName) {
   return clean.slice(0, 2).toUpperCase();
 }
 
+function getAvatarStorageKey(userId) {
+  return `tract.avatar.${userId}`;
+}
+
+function getAvatarHistoryStorageKey(userId) {
+  return `tract.avatar.history.${userId}`;
+}
+
 function getAvatarUrl(userId) {
   if (!userId) return null;
   const contact = state.contacts.get(userId);
   if (contact?.avatarUrl) return contact.avatarUrl;
-  return localStorage.getItem(`tract.avatar.${userId}`);
+  return localStorage.getItem(getAvatarStorageKey(userId));
+}
+
+function getAvatarHistory(userId) {
+  const stored = localStorage.getItem(getAvatarHistoryStorageKey(userId));
+  if (!stored) return [];
+  try {
+    return JSON.parse(stored) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAvatarHistory(userId, avatars = []) {
+  if (!userId) return;
+  if (!avatars.length) {
+    localStorage.removeItem(getAvatarHistoryStorageKey(userId));
+    localStorage.removeItem(getAvatarStorageKey(userId));
+    return;
+  }
+  localStorage.setItem(getAvatarHistoryStorageKey(userId), JSON.stringify(avatars));
+  const latest = avatars[avatars.length - 1];
+  if (latest?.avatarData) {
+    localStorage.setItem(getAvatarStorageKey(userId), latest.avatarData);
+  }
 }
 
 function setAvatarHtml(el, userId, initials) {
@@ -282,65 +314,115 @@ function setAvatarHtml(el, userId, initials) {
 }
 
 async function uploadAvatarToServer(userId, avatarData) {
-  if (!userId || !avatarData) return;
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return;
-
-  try {
-    await fetch(new URL('/profile/avatar', serverUrl).toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, avatarData })
-    });
-  } catch (error) {
-    console.warn('Avatar upload failed:', error);
-  }
-}
-
-async function fetchAvatarFromServer(userId) {
-  if (!userId) return null;
+  if (!userId || !avatarData) return null;
   const serverUrl = resolveSignalingUrl();
   if (!serverUrl) return null;
 
   try {
-    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}`, serverUrl).toString());
+    const response = await fetch(new URL('/profile/avatar', serverUrl).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, avatarData })
+    });
     if (!response.ok) {
-      return null;
+      throw new Error(`Upload failed ${response.status}`);
     }
     const data = await response.json();
-    return data?.avatarData || null;
+    return {
+      avatarData: data.avatarData || avatarData,
+      avatars: Array.isArray(data.avatars) ? data.avatars : [{ id: 'current', avatarData }]
+    };
   } catch (error) {
-    console.warn('Avatar fetch failed:', error);
+    console.warn('Avatar upload failed:', error);
     return null;
   }
 }
 
+async function deleteAvatarFromServer(userId, avatarId) {
+  if (!userId || !avatarId) return null;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return null;
+
+  try {
+    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}/${encodeURIComponent(avatarId)}`, serverUrl).toString(), {
+      method: 'DELETE'
+    });
+    if (!response.ok) {
+      throw new Error(`Delete failed ${response.status}`);
+    }
+    const data = await response.json();
+    return {
+      avatarData: data.avatarData || null,
+      avatars: Array.isArray(data.avatars) ? data.avatars : []
+    };
+  } catch (error) {
+    console.warn('Avatar deletion failed:', error);
+    return null;
+  }
+}
+
+async function fetchAvatarGalleryFromServer(userId) {
+  if (!userId) return [];
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return [];
+
+  try {
+    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}`, serverUrl).toString());
+    if (!response.ok) {
+      return [];
+    }
+    const data = await response.json();
+    if (Array.isArray(data.avatars) && data.avatars.length) {
+      return data.avatars;
+    }
+    if (data.avatarData) {
+      return [{ id: 'current', avatarData: data.avatarData, uploadedAt: Date.now() }];
+    }
+    return [];
+  } catch (error) {
+    console.warn('Avatar fetch failed:', error);
+    return [];
+  }
+}
+
+async function fetchAvatarFromServer(userId) {
+  const avatars = await fetchAvatarGalleryFromServer(userId);
+  return avatars.length ? avatars[avatars.length - 1].avatarData : null;
+}
+
 async function loadOwnAvatar() {
-  if (!state.profile) return;
-  const existing = getAvatarUrl(state.profile.userId);
-  if (existing) return existing;
+  if (!state.profile) return null;
+  const avatars = await fetchAvatarGalleryFromServer(state.profile.userId);
+  if (avatars.length) {
+    saveAvatarHistory(state.profile.userId, avatars);
+    renderProfileCards();
+    renderContacts();
+    return avatars[avatars.length - 1].avatarData;
+  }
 
-  const avatarData = await fetchAvatarFromServer(state.profile.userId);
-  if (!avatarData) return null;
-
-  localStorage.setItem(`tract.avatar.${state.profile.userId}`, avatarData);
-  renderProfileCards();
-  renderContacts();
-  return avatarData;
+  const existing = localStorage.getItem(getAvatarStorageKey(state.profile.userId));
+  if (existing) {
+    renderProfileCards();
+    renderContacts();
+    return existing;
+  }
+  return null;
 }
 
 async function ensureAvatarForContact(userId, contact = state.contacts.get(userId)) {
   if (!userId || !state.profile) return null;
   if (contact?.avatarUrl) return contact.avatarUrl;
 
-  const avatarData = await fetchAvatarFromServer(userId);
-  if (!avatarData) return null;
+  const avatars = await fetchAvatarGalleryFromServer(userId);
+  if (!avatars.length) return null;
 
+  const latest = avatars[avatars.length - 1].avatarData;
   await upsertContact(userId, {
     ...contact,
-    avatarUrl: avatarData
+    avatarUrl: latest,
+    avatars
   });
-  return avatarData;
+  return latest;
 }
 
 window.handleAvatarUpload = async (event) => {
@@ -348,7 +430,6 @@ window.handleAvatarUpload = async (event) => {
   if (!file || !state.profile) return;
   event.target.value = '';
 
-  // Show circular crop modal
   const dataUrl = await new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => resolve(e.target.result);
@@ -357,11 +438,14 @@ window.handleAvatarUpload = async (event) => {
 
   openAvatarCropModal(dataUrl, async (croppedDataUrl) => {
     const avatarData = croppedDataUrl;
-    localStorage.setItem(`tract.avatar.${state.profile.userId}`, avatarData);
+    saveAvatarHistory(state.profile.userId, [{ id: 'current', avatarData, uploadedAt: Date.now() }]);
     if (state.transport) {
       state.transport.options.avatarData = avatarData;
     }
-    await uploadAvatarToServer(state.profile.userId, avatarData);
+    const result = await uploadAvatarToServer(state.profile.userId, avatarData);
+    if (result?.avatars?.length) {
+      saveAvatarHistory(state.profile.userId, result.avatars);
+    }
     if (state.transport?.signaling) {
       state.transport.signaling.post('/peer/heartbeat', {
         peerId: state.myPeerId,
@@ -2452,6 +2536,7 @@ window.openContactProfile = (userId) => {
 
   const contact = state.contacts.get(userId) || { id: userId, online: false };
   const avatarEl = $('profileModalAvatar');
+  const gallery = $('profileAvatarGallery');
   const nameEl = $('profileModalName');
   const idEl = $('profileModalId');
   const statusEl = $('profileModalStatus');
@@ -2459,8 +2544,9 @@ window.openContactProfile = (userId) => {
   const blockBtn = $('profileBlockBtn');
   const blockLabel = $('profileBlockLabel');
   const deleteBtn = $('profileDeleteBtn');
+  const deleteAvatarBtn = $('profileDeleteAvatarBtn');
 
-  if (!avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn) return;
+  if (!avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn || !gallery) return;
 
   nameEl.textContent = getContactLabel(contact);
   idEl.textContent = userId;
