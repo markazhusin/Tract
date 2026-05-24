@@ -107,6 +107,67 @@ function refreshDocTitle() {
   document.title = n > 0 ? `(${n}) Tract` : 'Tract';
 }
 
+function getTotalUnread() {
+  return [...state.unreadCounts.values()].reduce((a, b) => a + b, 0);
+}
+
+function updateAppBadge() {
+  const total = getTotalUnread();
+  // Update document title as before
+  refreshDocTitle();
+  // Navigator badge (Chromium / Android / some PWAs)
+  if ('setAppBadge' in navigator) {
+    try {
+      if (total > 0) navigator.setAppBadge(total);
+      else navigator.clearAppBadge();
+    } catch (e) {
+      console.warn('App badge update failed', e);
+    }
+  }
+  // Also inform service worker (for environments where registration can set badge)
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage({ type: 'badge', count: total });
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
+function notifyIncomingMessage(chatId, title, body, url) {
+  // If service worker is active, send message to show notification
+  const payload = { type: 'notify', title: title, body: body, tag: chatId, data: { url: url || '/' } };
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage(payload);
+      return;
+    } catch (e) {
+      // fallthrough
+    }
+  }
+  // Fallback: use Notification API directly
+  if (window.Notification && Notification.permission === 'granted') {
+    try {
+      new Notification(title, { body, tag: chatId, data: { url: url || '/' } });
+    } catch (e) { /* ignore */ }
+  }
+}
+
+async function registerServiceWorkerAndNotifications() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    // request notification permission if not granted/denied
+    if (window.Notification && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      try { await Notification.requestPermission(); } catch (e) { }
+    }
+    // ensure controller is set on first load by calling ready
+    await navigator.serviceWorker.ready;
+  } catch (e) {
+    console.warn('Service worker registration failed', e);
+  }
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -743,6 +804,8 @@ async function bootstrapAuthenticatedSession(auth) {
   setStatus('offline', 'Аккаунт разблокирован, сеть не подключена');
   await updateInviteArtifacts();
   updateMobileLayout();
+  // Register service worker and request notification permissions (non-blocking)
+  registerServiceWorkerAndNotifications().catch(() => {});
   queueMicrotask(() => {
     connectHandshake().catch((e) => console.warn('Auto-connect:', e));
   });
@@ -1060,6 +1123,7 @@ window.connectHandshake = async () => {
     if (state.currentChatId !== chatId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
       refreshDocTitle();
+      updateAppBadge();
     }
     // If viewing this chat, render incoming message
     if (state.currentChatId === chatId) {
@@ -1086,6 +1150,16 @@ window.connectHandshake = async () => {
     if (wasNew) {
       state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
     }
+
+    // Notify if app is backgrounded or user isn't viewing this chat
+    try {
+      const shouldNotify = document.hidden || state.currentChatId !== chatId;
+      if (shouldNotify) {
+        const sender = packet.senderName || getContactLabel(state.contacts.get(chatId)) || chatId;
+        notifyIncomingMessage(chatId, sender, packet.content, '/');
+      }
+    } catch (e) {}
+    updateAppBadge();
   });
 
   try {
@@ -1167,6 +1241,7 @@ window.clearCurrentHistory = async (scope = 'me') => {
   }
   await renderChatHistory(chatId);
   closeChatMenu();
+  updateAppBadge();
 };
 
 window.selectCurrentChatMessages = () => {};
@@ -1595,6 +1670,7 @@ async function openChat(id) {
   closeChatMenu();
   state.unreadCounts.delete(id);
   refreshDocTitle();
+  updateAppBadge();
   renderContacts();
   renderChatHeader();
   await renderChatHistory(id);
@@ -2265,6 +2341,7 @@ window.deleteContactFromProfile = async () => {
   // Remove from in-memory state
   state.contacts.delete(userId);
   state.unreadCounts.delete(userId);
+  updateAppBadge();
   if (state.currentChatId === userId) {
     state.currentChatId = null;
     state.selectedMessageIds.clear();
@@ -2275,6 +2352,7 @@ window.deleteContactFromProfile = async () => {
   }
   state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
   refreshDocTitle();
+  updateAppBadge();
   renderContacts();
 };
 
