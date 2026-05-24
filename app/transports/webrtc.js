@@ -404,7 +404,7 @@ export class WebRTCTransport {
       }
     }
 
-    if (!this.peers.has(targetPeerId)) {
+    if (!this.peers.has(targetPeerId) && this.onlinePeers.has(targetPeerId)) {
       this.connectToPeer(targetPeerId);
       const peer = await this.waitForOpenPeer(targetPeerId, 500);
       if (peer) {
@@ -424,8 +424,8 @@ export class WebRTCTransport {
         return peer;
       }
 
-      // Initiate connection if peer is not yet connected
-      if (!this.peers.has(peerId)) {
+      // Initiate connection if peer is online and not yet connected
+      if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
         this.connectToPeer(peerId);
       }
 
