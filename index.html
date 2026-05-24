@@ -646,11 +646,37 @@
         display: flex;
         align-items: center;
         gap: 10px;
+        position: relative;
       }
       .toggle-switch input[type="checkbox"] {
-        width: 42px;
-        height: 24px;
-        accent-color: var(--accent);
+        appearance: none;
+        -webkit-appearance: none;
+        width: 44px;
+        height: 26px;
+        border-radius: 13px;
+        background: #555;
+        cursor: pointer;
+        position: relative;
+        transition: background 0.2s;
+        flex-shrink: 0;
+        margin: 0;
+      }
+      .toggle-switch input[type="checkbox"]::after {
+        content: '';
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform 0.2s;
+      }
+      .toggle-switch input[type="checkbox"]:checked {
+        background: var(--accent);
+      }
+      .toggle-switch input[type="checkbox"]:checked::after {
+        transform: translateX(18px);
       }
       .toggle-value {
         font-size: 13px;

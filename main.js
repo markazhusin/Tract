@@ -998,6 +998,13 @@ async function bootstrapAuthenticatedSession(auth) {
   setStatus('offline', 'Аккаунт разблокирован, сеть не подключена');
   await updateInviteArtifacts();
   updateMobileLayout();
+
+  // Periodic contact sync across devices
+  if (window._contactSyncTimer) clearInterval(window._contactSyncTimer);
+  window._contactSyncTimer = setInterval(() => {
+    syncContactsFromServer().catch(() => {});
+  }, 30000);
+
   queueMicrotask(() => {
     connectHandshake().catch((e) => console.warn('Auto-connect:', e));
   });
@@ -1031,6 +1038,14 @@ window.logoutAccount = async () => {
   state.currentChatId = null;
   state.selectedMessageIds.clear();
   state.contacts.clear();
+  if (window._contactSyncTimer) {
+    clearInterval(window._contactSyncTimer);
+    window._contactSyncTimer = null;
+  }
+  if (window._contactSyncDebounce) {
+    clearTimeout(window._contactSyncDebounce);
+    window._contactSyncDebounce = null;
+  }
   await messageDB.initForUser(null);
   clearSessionPeerId();
   renderContacts();
@@ -2979,6 +2994,13 @@ async function upsertContact(userId, patch) {
   await messageDB.saveContact(userId, next);
   renderContacts();
   renderChatHeader();
+
+  // Debounced sync to server for multi-device support
+  if (window._contactSyncDebounce) clearTimeout(window._contactSyncDebounce);
+  window._contactSyncDebounce = setTimeout(() => {
+    syncContactsToServer().catch(() => {});
+  }, 2000);
+
   return next;
 }
 
