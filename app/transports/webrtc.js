@@ -2,15 +2,9 @@ import { initSignaling } from '../core/local-signaling.js';
 
 const DISCOVERY_INTERVAL = 1000;
 
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-];
-
 export class WebRTCTransport {
   name = 'WebRTC';
   peers = new Map();
-  voicePeers = new Map();
   discoveredPeers = new Set();
   onlinePeers = new Set();
   peerDirectory = new Map();
@@ -45,24 +39,6 @@ export class WebRTCTransport {
 
     this.signaling.onSignal('ice', ({ from, payload }) => {
       this.handleIceCandidate(from, payload);
-    });
-
-    this.signaling.onSignal('voice_offer', ({ from, payload }) => {
-      this.handleVoiceOffer(from, payload).catch((err) => {
-        console.error('Voice offer error:', err);
-      });
-    });
-
-    this.signaling.onSignal('voice_answer', ({ from, payload }) => {
-      this.handleVoiceAnswer(from, payload).catch((err) => {
-        console.error('Voice answer error:', err);
-      });
-    });
-
-    this.signaling.onSignal('voice_ice', ({ from, payload }) => {
-      this.handleVoiceIce(from, payload).catch((err) => {
-        console.warn('Voice ICE error:', err);
-      });
     });
   }
 
@@ -122,13 +98,37 @@ export class WebRTCTransport {
   }
 
   createPeerConnection(peerId) {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+    });
 
     const peerState = {
       pc,
       channel: null,
       connected: false,
-      iceCandidates: []
+      iceCandidates: [],
+      audioTransceiver: null,
+      localAudioStream: null,
+      expectVoiceAnswer: false
+    };
+
+    // Audio transceiver is added only when a voice call starts (avoids broken SDP renegotiation).
+
+    pc.ontrack = (event) => {
+      const track = event.track;
+      if (!track || track.kind !== 'audio') return;
+
+      let stream = event.streams[0];
+      if (!stream) {
+        stream = new MediaStream([track]);
+      }
+
+      const emit = () => this.emitRemoteAudioStream(peerId, stream);
+      emit();
+      track.addEventListener('unmute', () => emit(), { once: true });
+      track.addEventListener('ended', () => {
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
+      }, { once: true });
     };
 
     this.peers.set(peerId, peerState);
@@ -144,240 +144,186 @@ export class WebRTCTransport {
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
         peerState.connected = true;
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       }
+
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
         this.closePeer(peerId);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       }
     };
 
     return peerState;
   }
 
-  getOrCreateVoicePeer(peerId) {
-    let voice = this.voicePeers.get(peerId);
-    if (voice) return voice;
-
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    voice = {
-      pc,
-      localStream: null,
-      pendingIce: [],
-      pendingRemoteOffer: null,
-      offerWaiters: []
-    };
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) return;
-      this.signaling.sendSignal(peerId, 'voice_ice', event.candidate.toJSON()).catch(() => {});
-    };
-
-    pc.ontrack = (event) => {
-      const track = event.track;
-      if (!track || track.kind !== 'audio') return;
-      const stream = event.streams[0] || new MediaStream([track]);
-      track.enabled = true;
-      this.onRemoteAudioStreamCallback?.(peerId, stream);
-      track.addEventListener('unmute', () => {
-        this.onRemoteAudioStreamCallback?.(peerId, stream);
-      }, { once: true });
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        this.emitVoiceRemoteAudio(peerId);
-      }
-    };
-
-    this.voicePeers.set(peerId, voice);
-    return voice;
+  expectVoiceAnswer(peerId) {
+    const peerState = this.peers.get(peerId);
+    if (peerState) {
+      peerState.expectVoiceAnswer = true;
+    }
   }
 
-  notifyVoiceOfferWaiters(voice) {
-    const waiters = voice.offerWaiters.splice(0);
-    for (const resolve of waiters) resolve(true);
-  }
-
-  waitForVoiceOffer(voice, timeoutMs = 2500) {
-    if (voice.pendingRemoteOffer) return Promise.resolve(true);
-    return new Promise((resolve) => {
-      const timer = window.setTimeout(() => resolve(false), timeoutMs);
-      voice.offerWaiters.push(() => {
-        window.clearTimeout(timer);
-        resolve(true);
+  ensureAudioTransceiver(peerState) {
+    if (!peerState?.pc) return null;
+    if (!peerState.audioTransceiver) {
+      peerState.audioTransceiver = peerState.pc.addTransceiver('audio', {
+        direction: 'sendrecv'
       });
-    });
+    }
+    return peerState.audioTransceiver;
   }
 
-  async getLocalAudioStream() {
+  async waitForSignalingState(peerState, states, timeoutMs = 4000) {
+    const wanted = new Set(states);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (wanted.has(peerState.pc.signalingState)) return peerState.pc.signalingState;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return peerState.pc.signalingState;
+  }
+
+  async applyLocalAudioTrack(peerState, peerId) {
+    let stream;
     try {
-      return await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
         video: false
       });
     } catch (error) {
-      console.warn('Audio constraints not supported, retrying:', error);
-      return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      console.warn('Audio constraints not supported, retrying with simpler audio settings:', error);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     }
-  }
 
-  attachLocalAudioToVoicePeer(voice) {
-    if (voice.localStream) return voice.localStream;
-    throw new Error('Local audio stream missing');
-  }
-
-  async addLocalAudioToVoicePeer(peerId) {
-    const voice = this.getOrCreateVoicePeer(peerId);
-    if (voice.localStream) return voice.localStream;
-
-    const stream = await this.getLocalAudioStream();
-    voice.localStream = stream;
-    for (const track of stream.getAudioTracks()) {
-      voice.pc.addTrack(track, stream);
+    const transceiver = this.ensureAudioTransceiver(peerState);
+    const track = stream.getAudioTracks()[0];
+    peerState.localAudioStream = stream;
+    await transceiver.sender.replaceTrack(track);
+    try {
+      transceiver.sender.setStreams([stream]);
+    } catch (e) {
+      console.warn('setStreams:', e);
     }
+    transceiver.direction = 'sendrecv';
     return stream;
   }
 
-  async flushVoiceIce(voice) {
-    const pending = voice.pendingIce.splice(0);
-    for (const candidate of pending) {
-      try {
-        await voice.pc.addIceCandidate(candidate);
-      } catch (err) {
-        console.warn('Voice ICE add error:', err);
-      }
-    }
-  }
+  extractRemoteAudioStream(peerState) {
+    if (!peerState?.pc) return null;
 
-  emitVoiceRemoteAudio(peerId) {
-    const voice = this.voicePeers.get(peerId);
-    if (!voice?.pc) return;
-
-    const receivers = voice.pc.getReceivers?.() || [];
+    const receivers = peerState.pc.getReceivers?.() || [];
     for (const receiver of receivers) {
       const track = receiver.track;
       if (track?.kind === 'audio' && track.readyState !== 'ended') {
-        this.onRemoteAudioStreamCallback?.(peerId, new MediaStream([track]));
-        return;
+        return new MediaStream([track]);
       }
     }
-  }
 
-  async applyVoiceRemoteOffer(voice, peerId, sdp) {
-    const offer = new RTCSessionDescription({ type: 'offer', sdp });
-    if (voice.pc.signalingState === 'have-local-offer') {
-      await voice.pc.setLocalDescription({ type: 'rollback' });
-    }
-    await voice.pc.setRemoteDescription(offer);
-    await this.flushVoiceIce(voice);
-  }
-
-  async handleVoiceOffer(peerId, sdp) {
-    const voice = this.getOrCreateVoicePeer(peerId);
-    voice.pendingRemoteOffer = sdp;
-    this.notifyVoiceOfferWaiters(voice);
-
-    if (voice.localStream) {
-      await this.applyVoiceRemoteOffer(voice, peerId, sdp);
-      const answer = await voice.pc.createAnswer();
-      await voice.pc.setLocalDescription(answer);
-      await this.signaling.sendSignal(peerId, 'voice_answer', voice.pc.localDescription.sdp);
-      queueMicrotask(() => this.emitVoiceRemoteAudio(peerId));
-    }
-  }
-
-  async handleVoiceAnswer(peerId, sdp) {
-    const voice = this.voicePeers.get(peerId);
-    if (!voice) return;
-
-    if (voice.pc.signalingState !== 'have-local-offer') {
-      return;
+    const transceiver = peerState.audioTransceiver;
+    const track = transceiver?.receiver?.track;
+    if (track?.kind === 'audio' && track.readyState !== 'ended') {
+      return new MediaStream([track]);
     }
 
-    await voice.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-    await this.flushVoiceIce(voice);
-    queueMicrotask(() => this.emitVoiceRemoteAudio(peerId));
+    return null;
   }
 
-  async handleVoiceIce(peerId, candidate) {
-    const voice = this.voicePeers.get(peerId);
-    if (!voice) return;
-
-    const ice = new RTCIceCandidate(candidate);
-    if (!voice.pc.remoteDescription) {
-      voice.pendingIce.push(ice);
-      return;
+  emitRemoteAudioStream(peerId, stream = null) {
+    const peerState = this.peers.get(peerId);
+    if (!peerState) return;
+    const resolved = stream || this.extractRemoteAudioStream(peerState);
+    if (resolved) {
+      this.onRemoteAudioStreamCallback?.(peerId, resolved);
     }
-
-    try {
-      await voice.pc.addIceCandidate(ice);
-    } catch (err) {
-      console.warn('Voice ICE add error:', err);
-    }
-  }
-
-  expectVoiceAnswer(peerId) {
-    this.getOrCreateVoicePeer(peerId);
   }
 
   refreshRemoteAudio(peerId) {
-    this.emitVoiceRemoteAudio(peerId);
+    this.emitRemoteAudioStream(peerId);
   }
 
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
     await this.ready;
-    const voice = this.getOrCreateVoicePeer(peerId);
-    await this.addLocalAudioToVoicePeer(peerId);
+
+    if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
+      this.connectToPeer(peerId);
+    }
+
+    const peerState = await this.waitForPeerState(peerId, 12000);
+    if (!peerState?.pc) {
+      throw new Error('Peer connection not ready for audio');
+    }
+
+    await this.applyLocalAudioTrack(peerState, peerId);
 
     if (asOfferer) {
-      const offer = await voice.pc.createOffer();
-      await voice.pc.setLocalDescription(offer);
-      await this.signaling.sendSignal(peerId, 'voice_offer', voice.pc.localDescription.sdp);
+      const offer = await peerState.pc.createOffer({ iceRestart: false });
+      await peerState.pc.setLocalDescription(offer);
+      await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
       return;
     }
 
-    const gotOffer = await this.waitForVoiceOffer(voice, 2500);
-    if (gotOffer && voice.pendingRemoteOffer) {
-      await this.applyVoiceRemoteOffer(voice, peerId, voice.pendingRemoteOffer);
-      voice.pendingRemoteOffer = null;
-      const answer = await voice.pc.createAnswer();
-      await voice.pc.setLocalDescription(answer);
-      await this.signaling.sendSignal(peerId, 'voice_answer', voice.pc.localDescription.sdp);
-      queueMicrotask(() => this.emitVoiceRemoteAudio(peerId));
+    // Callee: answer caller's audio offer (do not create competing offer)
+    const state = await this.waitForSignalingState(peerState, ['have-remote-offer'], 5000);
+    if (state === 'have-remote-offer') {
+      const answer = await peerState.pc.createAnswer();
+      await peerState.pc.setLocalDescription(answer);
+      await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
+      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       return;
     }
 
-    const offer = await voice.pc.createOffer();
-    await voice.pc.setLocalDescription(offer);
-    await this.signaling.sendSignal(peerId, 'voice_offer', voice.pc.localDescription.sdp);
+    if (peerState.pc.signalingState === 'stable') {
+      const offer = await peerState.pc.createOffer();
+      await peerState.pc.setLocalDescription(offer);
+      await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+    }
   }
 
   async stopLocalAudio(peerId) {
-    this.closeVoicePeer(peerId);
+    await this.ready;
+    const peerState = this.peers.get(peerId);
+    if (!peerState) return;
+
+    if (peerState.localAudioStream) {
+      for (const t of peerState.localAudioStream.getTracks()) {
+        t.stop();
+      }
+      peerState.localAudioStream = null;
+    }
+
+    try {
+      await peerState.audioTransceiver?.sender.replaceTrack(null);
+      if (peerState.audioTransceiver) {
+        peerState.audioTransceiver.direction = 'inactive';
+      }
+    } catch (e) {
+      console.warn('stopLocalAudio replaceTrack:', e);
+    }
   }
 
   setLocalMicMuted(peerId, muted) {
-    const voice = this.voicePeers.get(peerId);
-    if (!voice?.localStream) return;
-    for (const track of voice.localStream.getAudioTracks()) {
+    const peerState = this.peers.get(peerId);
+    if (!peerState?.localAudioStream) return;
+    for (const track of peerState.localAudioStream.getAudioTracks()) {
       track.enabled = !muted;
     }
   }
 
-  closeVoicePeer(peerId) {
-    const voice = this.voicePeers.get(peerId);
-    if (!voice) return;
-
-    try {
-      for (const track of voice.localStream?.getTracks?.() || []) {
-        track.stop();
+  async waitForPeerState(peerId, timeoutMs) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const peerState = this.peers.get(peerId);
+      if (peerState?.pc) {
+        return peerState;
       }
-    } catch {}
-
-    try {
-      voice.pc.close();
-    } catch {}
-
-    this.voicePeers.delete(peerId);
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    return this.peers.get(peerId);
   }
 
   async connectToPeer(peerId) {
@@ -419,16 +365,19 @@ export class WebRTCTransport {
       };
     }
 
+    const offer = new RTCSessionDescription({ type: 'offer', sdp });
+
     try {
       if (peerState.pc.signalingState === 'have-local-offer') {
         await peerState.pc.setLocalDescription({ type: 'rollback' });
       }
 
-      await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+      await peerState.pc.setRemoteDescription(offer);
       await this.flushIceCandidates(peerState);
       const answer = await peerState.pc.createAnswer();
       await peerState.pc.setLocalDescription(answer);
       await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
+      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
       console.error('WebRTC offer handling error:', err);
       if (!peerState.pc.remoteDescription) {
@@ -439,11 +388,20 @@ export class WebRTCTransport {
 
   async handleRemoteAnswer(peerId, sdp) {
     const peer = this.peers.get(peerId);
-    if (!peer || peer.pc.signalingState !== 'have-local-offer') return;
+    if (!peer) return;
 
     try {
+      if (peer.pc.signalingState === 'stable') {
+        return;
+      }
+      if (peer.pc.signalingState !== 'have-local-offer') {
+        console.warn('Ignoring answer in state', peer.pc.signalingState);
+        return;
+      }
+
       await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
       await this.flushIceCandidates(peer);
+      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
       console.error('WebRTC answer apply error:', err);
     }
@@ -473,12 +431,16 @@ export class WebRTCTransport {
     }
 
     channel.onopen = () => {
-      if (peer) peer.connected = true;
+      if (peer) {
+        peer.connected = true;
+      }
       this.onPeerConnectedCallback?.(peerId);
     };
 
     channel.onclose = () => {
-      if (peer) peer.connected = false;
+      if (peer) {
+        peer.connected = false;
+      }
     };
 
     channel.onmessage = (event) => {
@@ -506,12 +468,12 @@ export class WebRTCTransport {
     }
 
     const existingPeer = this.peers.get(targetPeerId);
-    if (existingPeer?.channel?.readyState === 'open') {
+    if (existingPeer && existingPeer.channel && existingPeer.channel.readyState === 'open') {
       existingPeer.channel.send(JSON.stringify(packet));
       return;
     }
 
-    if (existingPeer?.channel?.readyState === 'connecting') {
+    if (existingPeer && existingPeer.channel && existingPeer.channel.readyState === 'connecting') {
       const peer = await this.waitForOpenPeer(targetPeerId, 500);
       if (peer) {
         peer.channel.send(JSON.stringify(packet));
@@ -535,15 +497,23 @@ export class WebRTCTransport {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peer = this.peers.get(peerId);
-      if (peer?.channel?.readyState === 'open') {
+      if (peer && peer.channel && peer.channel.readyState === 'open') {
         return peer;
       }
+
+      // Initiate connection if peer is online and not yet connected
       if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
         this.connectToPeer(peerId);
       }
+
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    return null;
+
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.channel || peer.channel.readyState !== 'open') {
+      return null;
+    }
+    return peer;
   }
 
   onMessage(callback) {
@@ -573,9 +543,6 @@ export class WebRTCTransport {
 
   async stop() {
     clearInterval(this.discoveryTimer);
-    for (const peerId of Array.from(this.voicePeers.keys())) {
-      this.closeVoicePeer(peerId);
-    }
     for (const peerId of Array.from(this.peers.keys())) {
       this.closePeer(peerId);
     }
@@ -583,9 +550,16 @@ export class WebRTCTransport {
   }
 
   closePeer(peerId) {
-    this.closeVoicePeer(peerId);
     const peer = this.peers.get(peerId);
     if (!peer) return;
+
+    try {
+      if (peer.localAudioStream) {
+        for (const t of peer.localAudioStream.getTracks()) {
+          t.stop();
+        }
+      }
+    } catch {}
 
     try {
       peer.channel?.close();

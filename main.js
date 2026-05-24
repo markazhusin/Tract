@@ -196,7 +196,7 @@ async function bindRemoteAudioStream(stream, peerId = null) {
   }
 
   el.srcObject = stream;
-  const played = await tryPlayRemoteAudio(4);
+  const played = await tryPlayRemoteAudio(8);
   if (!played && state.activeCall?.status === 'active') {
     const audioPeerId = peerId || state.activeCall.remotePeerId;
     if (audioPeerId) scheduleRemoteAudioRetry(audioPeerId);
@@ -1498,6 +1498,7 @@ async function tryStartCallerAudio(chatId) {
   const peerId = state.activeCall.remotePeerId || await resolvePeerForUser(chatId).catch(() => null);
   if (!peerId) return;
   state.activeCall.remotePeerId = peerId;
+  await flushPendingCallControls(chatId, peerId);
   await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: true }).catch((e) => {
     console.warn('Caller audio setup failed:', e);
   });
@@ -1960,8 +1961,9 @@ async function handleCallControl(packet, fromPeerId) {
       state.transport?.expectVoiceAnswer?.(peerId);
     }
     updateCallBar();
-    queueMicrotask(() => {
-      playRemoteAudioIfReady(peerId);
+    queueMicrotask(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      await playRemoteAudioIfReady(peerId);
       if (peerId) scheduleRemoteAudioRetry(peerId);
     });
     return;
@@ -2088,11 +2090,15 @@ function updateCallBar() {
   }
 
   if (ac.status === 'active') {
-    if (label) label.textContent = `Звонок · ${name}`;
+    if (label) {
+      label.textContent = state.remoteAudioNeedsUnlock
+        ? `Звонок · ${name} · нажмите «Включить звук»`
+        : `Звонок · ${name}`;
+    }
     if (actions) {
-      const micLabel = state.micMuted ? 'Мик вкл.' : 'Мик выкл.';
+      const micLabel = state.micMuted ? 'Включить мик' : 'Выключить мик';
       const unlockBtn = state.remoteAudioNeedsUnlock
-        ? '<button type="button" class="btn primary" id="callUnlockAudioBtn">Звук</button>'
+        ? '<button type="button" class="btn primary" id="callUnlockAudioBtn">Включить звук</button>'
         : '';
       actions.innerHTML = `
         ${unlockBtn}
@@ -2160,10 +2166,6 @@ window.startVoiceCall = async () => {
     setStatus('warn', 'Собеседник не найден онлайн — приглашение будет отправлено при появлении.');
   }
 
-  const audioPromise = targetPeerId
-    ? tryStartCallerAudio(chatId)
-    : Promise.resolve();
-
   const invited = await sendCallControl('invite', callId, chatId, targetPeerId, {
     senderName: state.profile.displayName
   });
@@ -2178,12 +2180,11 @@ window.startVoiceCall = async () => {
 
   if (!targetPeerId) {
     targetPeerId = await resolvePeerForUser(chatId).catch(() => null);
-    if (targetPeerId) {
-      state.activeCall.remotePeerId = targetPeerId;
-      tryStartCallerAudio(chatId).catch(() => {});
-    }
-  } else {
-    await audioPromise.catch(() => {});
+    if (targetPeerId) state.activeCall.remotePeerId = targetPeerId;
+  }
+
+  if (targetPeerId) {
+    await tryStartCallerAudio(chatId);
   }
 };
 
@@ -2214,6 +2215,7 @@ window.answerVoiceCall = async () => {
       peerId
     );
 
+    await new Promise((r) => setTimeout(r, 300));
     await playRemoteAudioIfReady(peerId);
     scheduleRemoteAudioRetry(peerId);
   } catch (e) {

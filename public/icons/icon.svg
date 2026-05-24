@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tract">
+  <rect width="512" height="512" rx="112" fill="#141515"/>
+  <path fill="#B7FFF9" d="M128 144h256v48H272v224h-32V192H128v-48z"/>
+</svg>

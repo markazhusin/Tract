@@ -538,7 +538,7 @@
       background: var(--bg-header);
       border-top: 1px solid var(--line);
     }
-    #chat.call-bar-visible #composer { padding-bottom: calc(56px + var(--safe-bottom)); }
+    #chat.call-bar-visible #composer { padding-bottom: calc(88px + var(--safe-bottom)); }
     #composerRow { display: flex; gap: 8px; align-items: center; }
     #messageInput {
       flex: 1;
@@ -929,38 +929,15 @@
       z-index: 40;
       background: var(--call-bar);
       border-top: 1px solid var(--line);
-      padding: 8px 12px calc(8px + var(--safe-bottom));
+      padding: 12px 14px calc(12px + var(--safe-bottom));
       display: flex;
-      flex-direction: row;
-      align-items: center;
+      flex-direction: column;
       gap: 10px;
       box-shadow: 0 -4px 24px rgba(0,0,0,0.3);
     }
-    #callBarLabel {
-      flex: 1;
-      min-width: 0;
-      font-size: 14px;
-      font-weight: 500;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #callBarActions {
-      display: flex;
-      gap: 6px;
-      flex-shrink: 0;
-      flex-wrap: nowrap;
-    }
-    #callBarActions .btn {
-      flex: 0 1 auto;
-      min-width: 0;
-      padding: 8px 10px;
-      font-size: 13px;
-      white-space: nowrap;
-    }
-    @media (min-width: 769px) {
-      #callBar { left: 380px; }
-    }
+    #callBarLabel { font-size: 15px; font-weight: 500; }
+    #callBarActions { display: flex; gap: 8px; flex-wrap: wrap; }
+    #callBarActions .btn { flex: 1; min-width: 120px; }
 
     audio#remoteAudio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
 
