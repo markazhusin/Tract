@@ -171,7 +171,7 @@ function cleanupExpiredPeers() {
 }
 
 app.post('/peer/register', (req, res) => {
-  const { peerId, roomId, userId, displayName, avatarData, hideOnline, lastSeen } = req.body;
+  const { peerId, roomId, userId, displayName, publicKeyHex, avatarData, hideOnline, lastSeen } = req.body;
   if (!peerId || !roomId || !userId) {
     return res.status(400).json({ error: 'peerId, roomId and userId are required' });
   }
@@ -182,6 +182,7 @@ app.post('/peer/register', (req, res) => {
     roomId,
     userId,
     displayName: displayName || userId,
+    publicKey: publicKeyHex || null,
     avatar: avatarData || null,
     hideOnline: Boolean(hideOnline),
     lastSeen: hideOnline ? null : (lastSeen || null),
@@ -194,7 +195,7 @@ app.post('/peer/register', (req, res) => {
 });
 
 app.post('/peer/heartbeat', (req, res) => {
-  const { peerId, roomId, displayName, avatarData, hideOnline, lastSeen } = req.body;
+  const { peerId, roomId, displayName, publicKeyHex, avatarData, hideOnline, lastSeen } = req.body;
   const key = peerKey(roomId, peerId);
   const peer = peers.get(key);
 
@@ -204,6 +205,7 @@ app.post('/peer/heartbeat', (req, res) => {
 
   peer.timestamp = Date.now();
   if (displayName) peer.displayName = displayName;
+  if (publicKeyHex) peer.publicKey = publicKeyHex;
   if (avatarData) peer.avatar = avatarData;
   peer.hideOnline = Boolean(hideOnline);
   peer.lastSeen = hideOnline ? null : (lastSeen || peer.lastSeen || null);

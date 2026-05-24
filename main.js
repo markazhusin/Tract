@@ -1,9 +1,13 @@
 import QRCode from 'qrcode';
 import {
   clearSessionPeerId,
+  decryptMessage,
+  encryptMessage,
   fetchIdentityFromServer,
+  fetchPeerPublicKey,
   getLegacyIdentityMetadata,
   getOrCreateSessionPeerId,
+  getPublicKeyHex,
   getStoredIdentityMetadata,
   registerIdentity,
   unlockIdentity,
@@ -110,6 +114,98 @@ function buildAppShareLink() {
   const u = new URL(window.location.href.split('#')[0]);
   u.search = '';
   return u.href;
+}
+
+async function updateInviteArtifacts() {
+  syncSignalingFromEnvironment();
+  const link = buildAppShareLink();
+  const input = $('inviteLink');
+  if (input) input.value = link;
+
+  const qr = $('inviteQr');
+  const hint = $('inviteHint');
+  if (!link) {
+    if (qr) qr.removeAttribute('src');
+    if (hint) hint.textContent = '';
+    return;
+  }
+
+  if (hint) hint.textContent = '';
+  if (qr) {
+    try {
+      qr.src = await QRCode.toDataURL(link, {
+        width: 196,
+        margin: 1,
+        color: { dark: '#0a0a0a', light: '#f4f4f4' }
+      });
+    } catch (e) {
+      console.error('QR generation failed:', e);
+    }
+  }
+}
+
+let inboxTimer = null;
+
+async function pullInbox() {
+  if (!state.profile || !state.transport?.signaling) return;
+  const signaling = state.transport.signaling;
+  try {
+    const data = await signaling.pullInbox(state.profile.userId);
+    const msgs = data?.messages || [];
+    if (!msgs.length) return;
+    const ackIds = [];
+    for (const entry of msgs) {
+      if (entry.type !== 'app_packet' || !entry.payload) continue;
+      if (entry.payload.type === 'text' && entry.payload.encrypted && entry.payload.senderId) {
+        const contact = state.contacts.get(entry.payload.senderId);
+        let senderPubKey = contact?.publicKeyHex;
+        if (!senderPubKey) {
+          senderPubKey = await fetchPeerPublicKey(resolveSignalingUrl(), entry.payload.senderId);
+        }
+        if (senderPubKey) {
+          try {
+            const plaintext = await decryptMessage(
+              entry.payload.ciphertext, entry.payload.iv,
+              entry.payload.senderPublicKey || senderPubKey,
+              state.keyPair
+            );
+            const packet = {
+              ...entry.payload,
+              content: plaintext,
+              encrypted: false
+            };
+            const chatId = entry.payload.senderId;
+            const pktId = packet.packetId || `${chatId}:${packet.timestamp}`;
+            if (state.receivedPacketIds.has(pktId)) continue;
+            state.receivedPacketIds.add(pktId);
+            const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
+            packet._dbId = savedId;
+            if (state.currentChatId !== chatId) {
+              state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
+              refreshDocTitle();
+            }
+            if (state.currentChatId === chatId) {
+              addMessageToUI(packet, false);
+            }
+            await upsertContact(chatId, {
+              displayName: packet.senderName || state.contacts.get(chatId)?.displayName || chatId,
+              online: false,
+              lastMsg: packet.content,
+              lastTime: packet.timestamp
+            });
+            ackIds.push(entry.id);
+          } catch (e) {
+            console.warn('Inbox decrypt failed:', e);
+          }
+        }
+      }
+    }
+    if (ackIds.length && signaling.ackInbox) {
+      await signaling.ackInbox(state.profile.userId, ackIds);
+    }
+  } catch (e) {
+    console.warn('Inbox pull error:', e);
+  }
 }
 
 function getTotalUnread() {
@@ -951,6 +1047,8 @@ async function bootstrapAuthenticatedSession(auth) {
 window.logoutAccount = async () => {
   sessionStorage.removeItem(SESSION_PASSWORD_KEY);
   localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+  clearInterval(inboxTimer);
+  inboxTimer = null;
   stopRingTone();
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
@@ -1084,28 +1182,40 @@ async function processIncomingPacket(packet, fromPeerId) {
     return;
   }
 
-  if (packet.type === 'call') {
-    await handleCallControl(packet, fromPeerId);
-    return;
-  }
+    if (packet.type === 'call') {
+      await handleCallControl(packet, fromPeerId);
+      return;
+    }
 
-  if (packet.type !== 'text') return;
+    if (packet.type !== 'text') return;
 
-  let pktId = packet.packetId;
-  if (!pktId) {
-    pktId = `${packet.senderId || fromPeerId}:${packet.timestamp}:${packet.content}`;
-  }
-  if (state.receivedPacketIds.has(pktId)) {
-    return;
-  }
-  state.receivedPacketIds.add(pktId);
+    // Decrypt E2E
+    let content = packet.content;
+    if (packet.encrypted && packet.iv && packet.senderPublicKey) {
+      try {
+        content = await decryptMessage(packet.content, packet.iv, packet.senderPublicKey, state.keyPair);
+      } catch (e) {
+        console.warn('Decrypt failed:', e);
+      }
+    }
 
-  if (packet.senderId === state.profile?.userId) return;
-  if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
+    // Deduplicate by packet.packetId (added on send). If missing, use fingerprint.
+    let pktId = packet.packetId;
+    if (!pktId) {
+      pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${content}`;
+    }
+    if (state.receivedPacketIds.has(pktId)) {
+      return;
+    }
+    state.receivedPacketIds.add(pktId);
 
-  const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
-  const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
-  packet._dbId = savedId;
+    if (packet.senderId === state.profile?.userId) return;
+    if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
+
+    const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
+  const displayPacket = { ...packet, content, encrypted: false };
+  const savedId = await messageDB.saveMessage(displayPacket, chatId, false, { isOutgoing: false });
+  displayPacket._dbId = savedId;
 
   const existingContact = state.contacts.get(chatId);
   const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
@@ -1118,24 +1228,29 @@ async function processIncomingPacket(packet, fromPeerId) {
     notifyNewMessage({
       chatId,
       title: getContactLabel(existingContact) || resolvedDisplayName || chatId,
-      body: truncate(String(packet.content || ''), 120)
+      body: truncate(String(content || ''), 120)
     });
   }
 
   if (state.currentChatId === chatId) {
-    addMessageToUI(packet, false);
+    addMessageToUI(displayPacket, false);
   }
 
   const roomId = state.transport?.options?.roomId || resolveRoomId();
   const wasNew = !state.contacts.has(chatId);
-  await upsertContact(chatId, {
+
+  const contactPatch = {
     displayName: resolvedDisplayName,
     activePeerId: fromPeerId,
     online: true,
     roomId,
-    lastMsg: packet.content,
+    lastMsg: content,
     lastTime: packet.timestamp
-  });
+  };
+  if (packet.senderPublicKey) {
+    contactPatch.publicKeyHex = packet.senderPublicKey;
+  }
+  await upsertContact(chatId, contactPatch);
 
   if (wasNew) {
     state.transport?.setAllowedUserIds?.(Array.from(state.contacts.keys()));
@@ -1183,15 +1298,14 @@ window.connectHandshake = async () => {
 
   state.multiplexer = new Multiplexer(state.keyPair);
   const hideOnline = Boolean(localStorage.getItem('tract.hideOnline'));
+  const myPublicKeyHex = getPublicKeyHex(state.keyPair);
   state.transport = new WebRTCTransport(state.myPeerId, {
     serverUrl,
     roomId,
     userId: state.profile.userId,
     displayName: state.profile.displayName,
-    avatarData: getAvatarUrl(state.profile.userId),
-    hideOnline,
-    lastSeen: hideOnline ? null : Date.now(),
-    allowedUserIds: new Set(Array.from(state.contacts.keys()))
+    publicKeyHex: myPublicKeyHex,
+    allowedUserIds: new Set(state.contacts.keys())
   });
   state.multiplexer.register(state.transport);
 
@@ -1203,7 +1317,8 @@ window.connectHandshake = async () => {
       serverUrl,
       roomId,
       userId: state.profile.userId,
-      displayName: state.profile.displayName
+      displayName: state.profile.displayName,
+      publicKeyHex: myPublicKeyHex
     });
     state.multiplexer.register(state.signalingRelay);
   } catch (e) {
@@ -1212,27 +1327,15 @@ window.connectHandshake = async () => {
 
   state.transport.onPeerDiscovery(async (_peerId, peerMeta) => {
     if (peerMeta.userId === state.profile.userId) return;
-
-    const isNew = !state.contacts.has(peerMeta.userId);
-    const existingContact = state.contacts.get(peerMeta.userId) || {};
-
-    // Resolve best displayName: prefer server metadata if it differs from userId
-    const resolvedDisplayName =
-      (peerMeta.displayName && peerMeta.displayName !== peerMeta.userId)
-        ? peerMeta.displayName
-        : (existingContact.displayName && existingContact.displayName !== peerMeta.userId)
-          ? existingContact.displayName
-          : peerMeta.displayName || peerMeta.userId;
+    if (!state.contacts.has(peerMeta.userId)) return;
 
     await upsertContact(peerMeta.userId, {
-      displayName: resolvedDisplayName,
+      displayName: peerMeta.displayName || peerMeta.userId,
       activePeerId: peerMeta.peerId,
-      avatarUrl: peerMeta.avatar || existingContact.avatarUrl || null,
       online: true,
-      hideOnline: Boolean(peerMeta.hideOnline),
-      lastSeen: peerMeta.lastSeen || existingContact.lastSeen || null,
       roomId,
-      lastMsg: existingContact.lastMsg || 'Онлайн'
+      publicKeyHex: peerMeta.publicKey || state.contacts.get(peerMeta.userId)?.publicKeyHex,
+      lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
     });
 
     // If this is a new contact, update WebRTC allowedUserIds so it can connect
@@ -1290,19 +1393,14 @@ window.connectHandshake = async () => {
   state.transport.onPeerConnected(async (peerId) => {
     const userId = findUserIdByPeerId(peerId);
     if (!userId) return;
-    // Retry pending messages now that data channel is open
     try {
       const pending = await messageDB.getUndeliveredMessages(userId);
       for (const msg of pending) {
-        try {
-          await state.multiplexer.send(msg, peerId);
-          await messageDB.markMessageSent(msg.id);
-          markMessageDelivered(msg.id);
-        } catch (e) {
-          console.warn('onPeerConnected send failed:', e);
+        const delivered = await state.transport.send(msg.data, peerId).catch(() => false);
+        if (delivered) {
+          await messageDB.markMessageSent(msg.data.id || msg.data.packetId);
         }
       }
-      await flushPendingCallControls(userId, peerId);
     } catch (e) {
       console.warn('onPeerConnected retry failed:', e);
     }
@@ -1318,12 +1416,10 @@ window.connectHandshake = async () => {
 
   try {
     await state.transport.ready;
-    if (state.signalingRelay) {
-      await state.signalingRelay.ready;
-    }
-    bindInboxSync();
-    await pullUserInbox();
     await updateInviteArtifacts();
+    pullInbox().catch((e) => console.warn('Inbox pull after connect:', e));
+    clearInterval(inboxTimer);
+    inboxTimer = setInterval(() => pullInbox().catch(() => {}), 30000);
   } catch (error) {
     console.error('Handshake connect failed:', error);
   }
@@ -1362,7 +1458,8 @@ window.addContactById = async () => {
         displayName: peer.displayName || userId,
         activePeerId: peer.peerId,
         online: true,
-        roomId: peer.roomId
+        roomId: peer.roomId,
+        publicKeyHex: peer.publicKey || existing?.publicKeyHex
       });
     }
   }
@@ -1668,6 +1765,7 @@ window.sendCurrentMessage = async () => {
     content: text,
     senderId: state.profile.userId,
     senderName: state.profile.displayName,
+    senderPublicKey: getPublicKeyHex(state.keyPair),
     timestamp: Date.now()
   };
 
@@ -1692,87 +1790,43 @@ async function deliverOutgoingMessage(chatId, packet) {
   const contact = state.contacts.get(chatId);
   packet.recipientId = chatId;
   const targetPeerId = await resolvePeerForUser(chatId);
-  let storedOnServer = false;
+
+  const encryptedPacket = { ...packet };
+  let recipientPubKey = contact?.publicKeyHex;
+  if (!recipientPubKey) {
+    recipientPubKey = await fetchPeerPublicKey(resolveSignalingUrl(), chatId);
+  }
+  if (recipientPubKey) {
+    try {
+      const { ciphertext, iv } = await encryptMessage(packet.content, recipientPubKey, state.keyPair);
+      encryptedPacket.content = ciphertext;
+      encryptedPacket.iv = iv;
+      encryptedPacket.encrypted = true;
+      encryptedPacket.senderPublicKey = getPublicKeyHex(state.keyPair);
+    } catch (e) {
+      console.warn('Encrypt failed, sending plaintext:', e);
+    }
+  }
 
   try {
-    if (state.signalingRelay) {
-      await state.signalingRelay.ready;
-      await state.signalingRelay.send(packet, targetPeerId, chatId);
-      storedOnServer = true;
-    }
-  } catch (error) {
-    console.warn('[deliver] server relay failed:', error?.message || error);
-  }
-
-  if (targetPeerId) {
-    try {
-      await state.transport.send(packet, targetPeerId);
-    } catch (error) {
-      console.warn('[deliver] p2p failed (server copy may exist):', error?.message || error);
-    }
-  }
-
-  if (storedOnServer) {
+    await state.multiplexer.send(encryptedPacket, targetPeerId);
     await messageDB.markMessageSent(packet._dbId || packet.id);
     await upsertContact(chatId, {
       ...contact,
-      activePeerId: targetPeerId || contact?.activePeerId || null,
-      online: Boolean(targetPeerId),
+      activePeerId: targetPeerId,
+      online: true,
       lastMsg: packet.content,
       lastTime: packet.timestamp
     });
     markMessageDelivered(packet._dbId || packet.id);
-  } else if (!targetPeerId) {
-    console.log('[deliver] peer offline, waiting for server relay:', chatId);
-  }
-}
-
-function markMessageDelivered(messageId) {
-  if (messageId === undefined) return;
-  const node = document.querySelector(`.msg[data-message-id="${CSS.escape(String(messageId))}"]`);
-  node?.classList.remove('pending');
-}
-
-async function updateInviteArtifacts() {
-  syncSignalingFromEnvironment();
-  const link = buildAppShareLink();
-  const input = $('inviteLink');
-  if (input) input.value = link;
-
-  const qr = $('inviteQr');
-  const hint = $('inviteHint');
-  if (!link) {
-    if (qr) qr.removeAttribute('src');
-    if (hint) hint.textContent = '';
-    return;
-  }
-
-  if (hint) {
-    hint.textContent = '';
-  }
-
-  if (qr) {
-    try {
-      qr.src = await QRCode.toDataURL(link, {
-        width: 196,
-        margin: 1,
-        color: {
-          dark: '#0a0a0a',
-          light: '#f4f4f4'
-        }
-      });
-    } catch (error) {
-      console.error('QR generation failed:', error);
-    }
+  } catch (error) {
+    console.warn('Send failed:', error);
   }
 }
 
 function renderProfile() {
   const isAuthenticated = Boolean(state.profile);
-  
-  if (!isAuthenticated) {
-    return;
-  }
+  if (!isAuthenticated) return;
 
   $('displayNameInput').value = state.profile.displayName;
   renderProfileCards();
@@ -1782,7 +1836,7 @@ function renderProfile() {
 function renderContacts() {
   const container1 = $('contacts');
   const container2 = $('contactsList');
-  
+
   const renderContactItem = ([id, contact], isActive) => {
     const unread = state.unreadCounts.get(id) || 0;
     const initials = getContactInitials(contact.displayName || id);
@@ -1807,7 +1861,6 @@ function renderContacts() {
       ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
     `;
 
-    // Avatar click → open profile
     const avatarEl = btn.querySelector('.contact-avatar-clickable');
     if (avatarEl) {
       avatarEl.addEventListener('click', (e) => {
@@ -1873,7 +1926,7 @@ function renderContacts() {
       }
     }
   };
-  
+
   render(container1, false);
   render(container2, true);
 }

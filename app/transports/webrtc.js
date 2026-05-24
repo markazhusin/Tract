@@ -200,6 +200,43 @@ export class WebRTCTransport {
     this.emitRemoteAudioStream(peerId);
   }
 
+  async waitForStableSignaling(peerId, timeoutMs = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const peerState = this.peers.get(peerId);
+      if (peerState?.pc && peerState.pc.signalingState === 'stable') {
+        return peerState;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const peerState = this.peers.get(peerId);
+    if (!peerState?.pc) return null;
+    return peerState.pc.signalingState === 'stable' ? peerState : null;
+  }
+
+  async prepareAndSendAudioOffer(peerId) {
+    const peerState = this.peers.get(peerId);
+    if (!peerState?.pc) throw new Error('No peer connection');
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: false
+    }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true, video: false }));
+
+    peerState.localAudioStream = stream;
+    const track = stream.getAudioTracks()[0];
+    await peerState.audioTransceiver.sender.replaceTrack(track);
+    try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
+    peerState.audioTransceiver.direction = 'sendrecv';
+
+    const stable = await this.waitForStableSignaling(peerId, 8000);
+    if (!stable) throw new Error('Signaling state not stable for renegotiation');
+
+    const offer = await peerState.pc.createOffer();
+    await peerState.pc.setLocalDescription(offer);
+    await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+  }
+
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
     await this.ready;
 
@@ -212,44 +249,7 @@ export class WebRTCTransport {
       throw new Error('Peer connection not ready for audio');
     }
 
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-        video: false
-      });
-    } catch (error) {
-      console.warn('Audio constraints not supported, retrying with simpler audio settings:', error);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    }
-
-    peerState.localAudioStream = stream;
-    const track = stream.getAudioTracks()[0];
-    await peerState.audioTransceiver.sender.replaceTrack(track);
-    try {
-      peerState.audioTransceiver.sender.setStreams([stream]);
-    } catch (e) {
-      console.warn('setStreams:', e);
-    }
-    this.ensureAudioReceive(peerState);
-
-    if (asOfferer) {
-      // Caller: create offer with audio sendrecv
-      const offer = await peerState.pc.createOffer();
-      await peerState.pc.setLocalDescription(offer);
-      await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
-    } else {
-      // Callee: renegotiate so caller knows we're sending audio too
-      try {
-        const offer = await peerState.pc.createOffer();
-        await peerState.pc.setLocalDescription(offer);
-        await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
-      } catch (e) {
-        // If renegotiation fails (e.g. signaling state issue), that's ok —
-        // the caller's audio will still reach us via the existing transceiver
-        console.warn('Callee renegotiation offer failed (non-fatal):', e);
-      }
-    }
+    await this.prepareAndSendAudioOffer(peerId);
   }
 
   async stopLocalAudio(peerId) {

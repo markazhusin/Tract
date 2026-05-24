@@ -180,6 +180,51 @@ export function unlockSimpleIdentity() {
   };
 }
 
+function getOwnPublicKeyHex() {
+  const stored = getStoredIdentityMetadata();
+  return stored?.publicKeyHex || null;
+}
+
+export async function encryptMessage(plaintext, recipientPublicKeyHex, ownKeyPair) {
+  const recipientPubKey = hexToBytes(recipientPublicKeyHex);
+  const sharedPoint = secp.getSharedSecret(ownKeyPair.privateKey, recipientPubKey, true);
+  const sharedX = sharedPoint.subarray(1);
+  const keyBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', sharedX));
+  const aesKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, encoded);
+  return {
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+    iv: bytesToBase64(iv)
+  };
+}
+
+export async function decryptMessage(ciphertextB64, ivB64, senderPublicKeyHex, ownKeyPair) {
+  const senderPubKey = hexToBytes(senderPublicKeyHex);
+  const sharedPoint = secp.getSharedSecret(ownKeyPair.privateKey, senderPubKey, true);
+  const sharedX = sharedPoint.subarray(1);
+  const keyBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', sharedX));
+  const aesKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+  const ciphertext = base64ToBytes(ciphertextB64);
+  const iv = base64ToBytes(ivB64);
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext);
+  return new TextDecoder().decode(decrypted);
+}
+
+export async function fetchPeerPublicKey(serverUrl, userId) {
+  try {
+    const res = await fetch(`${serverUrl.replace(/\/$/, '')}/identity/${encodeURIComponent(userId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.identityBlob) return null;
+    const blob = JSON.parse(data.identityBlob);
+    return blob.publicKeyHex || null;
+  } catch {
+    return null;
+  }
+}
+
 export function updateStoredDisplayName(displayName) {
   const stored = getStoredIdentityMetadata();
   if (!stored) return;
