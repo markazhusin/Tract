@@ -402,6 +402,26 @@
     #chatHeaderMain { flex: 1; min-width: 0; }
     #chatTitle { font-size: 17px; font-weight: 600; }
     #chatSubtitle { color: var(--muted); font-size: 13px; margin-top: 1px; }
+    #chatHeaderAvatar {
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 600;
+      color: #141515;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    #chatHeaderAvatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
 
     .header-actions {
       display: flex;
@@ -798,8 +818,6 @@
 
       .empty { color: var(--muted); }
 
-      .contact-item { min-height: 72px; }
-
       /* Overlay pages for new message / create group / group info */
       #newMessagePage,
       #createGroupPage,
@@ -813,9 +831,20 @@
         will-change: transform;
         pointer-events: none;
       }
+      #contactProfilePage {
+        position: fixed; inset: 0; z-index: 200;
+        background: var(--bg);
+        display: flex; flex-direction: column;
+        visibility: hidden;
+        transform: translateX(100%);
+        transition: visibility 0s 0.28s, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        will-change: transform;
+        pointer-events: none;
+      }
       #newMessagePage.open,
       #createGroupPage.open,
-      #groupInfoPage.open {
+      #groupInfoPage.open,
+      #contactProfilePage.open {
         visibility: visible;
         transform: translateX(0);
         transition: visibility 0s 0s, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
@@ -831,9 +860,37 @@
         display: block;
       }
 
+      #sidebar {
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
       @media (max-width: 768px) {
-        #sidebar.chat-open { transform: translateX(-100%); }
-        #chat { position: relative; z-index: 10; }
+        #app {
+          overflow: hidden;
+        }
+        #sidebar {
+          position: fixed;
+          inset: 0 auto auto 0;
+          width: 100%;
+          max-width: 100%;
+          background: var(--bg);
+          z-index: 20;
+          transform: translateX(0);
+        }
+        #sidebar.chat-open {
+          transform: translateX(-100%);
+          pointer-events: none;
+        }
+        #chat {
+          position: relative;
+          z-index: 10;
+          width: 100%;
+          min-width: 0;
+        }
+        #chatHeader {
+          padding-left: 12px;
+          padding-right: 12px;
+        }
         .header-back-btn { display: flex; }
       }
     </style>
