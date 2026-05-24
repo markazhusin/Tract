@@ -189,8 +189,14 @@ function scheduleRemoteAudioRetry(peerId) {
 async function bindRemoteAudioStream(stream, peerId = null) {
   const el = $('remoteAudio');
   if (!el || !stream) return;
+
+  const tracks = stream.getAudioTracks?.() || [];
+  for (const track of tracks) {
+    track.enabled = true;
+  }
+
   el.srcObject = stream;
-  const played = await tryPlayRemoteAudio(6);
+  const played = await tryPlayRemoteAudio(8);
   if (!played && state.activeCall?.status === 'active') {
     const audioPeerId = peerId || state.activeCall.remotePeerId;
     if (audioPeerId) scheduleRemoteAudioRetry(audioPeerId);
@@ -1955,7 +1961,11 @@ async function handleCallControl(packet, fromPeerId) {
       state.transport?.expectVoiceAnswer?.(peerId);
     }
     updateCallBar();
-    queueMicrotask(() => playRemoteAudioIfReady(peerId));
+    queueMicrotask(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      await playRemoteAudioIfReady(peerId);
+      if (peerId) scheduleRemoteAudioRetry(peerId);
+    });
     return;
   }
 
@@ -2191,21 +2201,23 @@ window.answerVoiceCall = async () => {
     ac.status = 'active';
     updateCallBar();
 
-    // Start audio (callee sends renegotiation offer with sendrecv)
+    // Callee: attach mic and answer caller's WebRTC audio offer
     await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
 
-    // Notify caller that we accepted
     await state.multiplexer.send(
       {
         type: 'call',
         action: 'accept',
         callId: ac.callId,
-        senderId: state.profile.userId
+        senderId: state.profile.userId,
+        recipientId: ac.peerUserId
       },
       peerId
     );
 
+    await new Promise((r) => setTimeout(r, 300));
     await playRemoteAudioIfReady(peerId);
+    scheduleRemoteAudioRetry(peerId);
   } catch (e) {
     console.warn('Answer failed:', e);
     stopRingTone();
