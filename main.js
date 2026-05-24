@@ -14,6 +14,13 @@ import {
 import { Multiplexer } from './app/core/multiplexer.js';
 import { WebRTCTransport } from './app/transports/webrtc.js';
 import { messageDB } from './app/core/database.js';
+import {
+  initPwa,
+  notifyNewMessage,
+  setNotificationsEnabled,
+  syncNotificationsToggle,
+  updatePwaBadge
+} from './app/pwa.js';
 
 const SIGNALING_URL_KEY = 'tract.signaling.url';
 const ROOM_ID_KEY = 'tract.room.id';
@@ -102,9 +109,14 @@ function buildAppShareLink() {
   return u.href;
 }
 
+function getTotalUnread() {
+  return [...state.unreadCounts.values()].reduce((a, b) => a + b, 0);
+}
+
 function refreshDocTitle() {
-  const n = [...state.unreadCounts.values()].reduce((a, b) => a + b, 0);
+  const n = getTotalUnread();
   document.title = n > 0 ? `(${n}) Tract` : 'Tract';
+  updatePwaBadge(n);
 }
 
 function $(id) {
@@ -519,6 +531,7 @@ function updateSettingsPanel() {
     toggle.checked = hidden;
     updateHideOnlineLabel(hidden);
   }
+  syncNotificationsToggle();
 }
 
 async function init() {
@@ -526,6 +539,8 @@ async function init() {
   syncSignalingFromEnvironment();
   window.addEventListener('resize', updateMobileLayout);
   initSwipeGestures();
+  initPwa({ onOpenChat: (chatId) => openChatFromDeepLink(chatId) });
+  syncNotificationsToggle();
 
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
@@ -581,6 +596,42 @@ function applyInviteParams() {
     localStorage.setItem(ROOM_ID_KEY, room);
   }
 }
+
+function consumeChatDeepLink() {
+  const params = new URLSearchParams(window.location.search);
+  const chatId = params.get('chat');
+  if (!chatId) return null;
+  params.delete('chat');
+  const next = params.toString();
+  const url = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`;
+  window.history.replaceState({}, '', url);
+  return normalizeLogin(chatId);
+}
+
+async function openChatFromDeepLink(chatId) {
+  if (!chatId || !state.profile) return;
+  if (!state.contacts.has(chatId)) return;
+  await openChat(chatId);
+  const sidebar = $('sidebar');
+  if (sidebar && window.matchMedia('(max-width: 768px)').matches) {
+    sidebar.classList.add('chat-open');
+  }
+}
+
+window.toggleNotifications = async () => {
+  const toggle = $('notificationsToggle');
+  if (!toggle) return;
+  const result = await setNotificationsEnabled(toggle.checked);
+  if (!result.ok) {
+    if (result.reason === 'denied') {
+      setStatus('warn', 'Разрешите уведомления в настройках браузера для этого сайта');
+    } else if (result.reason === 'unsupported') {
+      setStatus('warn', 'Браузер не поддерживает уведомления');
+    } else {
+      setStatus('warn', 'Уведомления не включены');
+    }
+  }
+};
 
 function openGate(mode, copy = {}) {
   $('authGate').hidden = false;
@@ -746,6 +797,11 @@ async function bootstrapAuthenticatedSession(auth) {
   queueMicrotask(() => {
     connectHandshake().catch((e) => console.warn('Auto-connect:', e));
   });
+
+  const deepLinkChat = consumeChatDeepLink();
+  if (deepLinkChat) {
+    openChatFromDeepLink(deepLinkChat).catch(() => {});
+  }
 }
 
 window.logoutAccount = async () => {
@@ -1057,9 +1113,19 @@ window.connectHandshake = async () => {
     const savedId = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: false });
     packet._dbId = savedId;
 
+    const existingContact = state.contacts.get(chatId);
+    const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
+      ? packet.senderName
+      : (existingContact?.displayName || chatId);
+
     if (state.currentChatId !== chatId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
       refreshDocTitle();
+      notifyNewMessage({
+        chatId,
+        title: getContactLabel(existingContact) || resolvedDisplayName || chatId,
+        body: truncate(String(packet.content || ''), 120)
+      });
     }
     // If viewing this chat, render incoming message
     if (state.currentChatId === chatId) {
@@ -1067,10 +1133,6 @@ window.connectHandshake = async () => {
     }
 
     // Auto-add or update contact with real displayName from packet
-    const existingContact = state.contacts.get(chatId);
-    const resolvedDisplayName = packet.senderName && packet.senderName !== chatId
-      ? packet.senderName
-      : (existingContact?.displayName || chatId);
 
     const wasNew = !state.contacts.has(chatId);
     await upsertContact(chatId, {

@@ -280,6 +280,18 @@ app.get('/identity/:userId', (req, res) => {
 });
 
 const distDir = path.join(__dirname, 'dist');
+
+app.use((req, res, next) => {
+  if (req.path === '/sw.js') {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+  }
+  if (req.path === '/manifest.webmanifest') {
+    res.type('application/manifest+json');
+  }
+  next();
+});
+
 app.use(express.static(distDir));
 
 app.get('*', (req, res, next) => {
