@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IDENTITY_STORE_PATH = path.join(__dirname, 'data', 'identity-store.json');
 const INBOX_STORE_PATH = path.join(__dirname, 'data', 'message-inbox.json');
+const CONTACT_STORE_PATH = path.join(__dirname, 'data', 'contact-store.json');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +19,8 @@ const sseClients = new Map(); // key (roomId:peerId) -> Set<res>
 const identityStore = new Map();
 /** Persistent inbox by @login userId — survives logout, peer timeout, redeploy */
 const userInbox = new Map();
+/** Persistent contact list by @login userId */
+const contactStore = new Map();
 const PEER_TTL_MS = 15000;
 const MAX_INBOX_PER_USER = 5000;
 const CALL_INBOX_TTL_MS = 90_000;
@@ -74,6 +77,33 @@ function saveInboxStore() {
     console.warn('[Inbox] Failed to save to disk:', err.message);
   }
 }
+
+function loadContactStore() {
+  try {
+    if (fs.existsSync(CONTACT_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(CONTACT_STORE_PATH, 'utf8'));
+      for (const [userId, contacts] of Object.entries(data)) {
+        contactStore.set(userId, contacts);
+      }
+      console.log(`[Contacts] Loaded ${contactStore.size} user contact lists from disk`);
+    }
+  } catch (err) {
+    console.warn('[Contacts] Failed to load from disk:', err.message);
+  }
+}
+
+function saveContactStore() {
+  try {
+    const dir = path.dirname(CONTACT_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const data = Object.fromEntries(contactStore);
+    fs.writeFileSync(CONTACT_STORE_PATH, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    console.warn('[Contacts] Failed to save to disk:', err.message);
+  }
+}
+
+loadContactStore();
 
 function resolvePeerUserId(roomId, peerId) {
   if (!peerId) return null;
@@ -427,6 +457,22 @@ app.get('/identity/:userId', (req, res) => {
     return res.status(404).json({ error: 'identity not found' });
   }
   res.json({ identityBlob: record.blob, updatedAt: record.updatedAt });
+});
+
+app.post('/contacts/save', (req, res) => {
+  const { userId, contacts } = req.body;
+  if (!userId || !Array.isArray(contacts)) {
+    return res.status(400).json({ error: 'userId and contacts array are required' });
+  }
+  contactStore.set(userId, contacts);
+  saveContactStore();
+  res.json({ status: 'ok', count: contacts.length });
+});
+
+app.get('/contacts/load/:userId', (req, res) => {
+  const { userId } = req.params;
+  const contacts = contactStore.get(userId) || [];
+  res.json({ contacts });
 });
 
 const distDir = path.join(__dirname, 'dist');

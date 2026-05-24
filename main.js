@@ -973,6 +973,7 @@ async function bootstrapAuthenticatedSession(auth) {
   }
 
   state.contacts.clear();
+  await syncContactsFromServer();
   await restoreContacts();
   await loadOwnAvatar();
 
@@ -1291,7 +1292,9 @@ window.connectHandshake = async () => {
     await upsertContact(peerMeta.userId, {
       displayName: peerMeta.displayName || peerMeta.userId,
       activePeerId: peerMeta.peerId,
-      online: true,
+      online: !peerMeta.hideOnline,
+      hideOnline: Boolean(peerMeta.hideOnline),
+      lastSeen: peerMeta.lastSeen || null,
       roomId,
       publicKeyHex: peerMeta.publicKey || state.contacts.get(peerMeta.userId)?.publicKeyHex,
       lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
@@ -1384,6 +1387,57 @@ window.connectHandshake = async () => {
   }
 };
 
+async function checkUserExists(userId) {
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return false;
+  try {
+    const response = await fetch(new URL(`/identity/${encodeURIComponent(userId)}`, serverUrl));
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function syncContactsToServer() {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  const contacts = Array.from(state.contacts.values());
+  try {
+    await fetch(new URL('/contacts/save', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.profile.userId, contacts })
+    });
+  } catch (e) {
+    console.warn('Contact sync to server failed:', e);
+  }
+}
+
+async function syncContactsFromServer() {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    const response = await fetch(new URL(`/contacts/load/${encodeURIComponent(state.profile.userId)}`, serverUrl));
+    if (!response.ok) return;
+    const { contacts = [] } = await response.json();
+    for (const contact of contacts) {
+      if (!contact || contact.id === state.profile.userId) continue;
+      const existing = state.contacts.get(contact.id);
+      if (existing) {
+        if ((contact.updatedAt || 0) > (existing.updatedAt || 0)) {
+          await upsertContact(contact.id, { ...existing, ...contact });
+        }
+      } else {
+        await upsertContact(contact.id, contact);
+      }
+    }
+  } catch (e) {
+    console.warn('Contact sync from server failed:', e);
+  }
+}
+
 window.addContactById = async () => {
   const primaryInput = $('addUserId');
   const sourceInput = primaryInput;
@@ -1394,6 +1448,12 @@ window.addContactById = async () => {
     return;
   }
   if (userId === state.profile.userId) return;
+
+  const exists = await checkUserExists(userId);
+  if (!exists) {
+    setStatus('error', 'Пользователь с таким логином не найден');
+    return;
+  }
 
   // Create or update contact with temporary displayName (will be updated from peer discovery)
   const existing = state.contacts.get(userId);
@@ -1416,7 +1476,9 @@ window.addContactById = async () => {
       await upsertContact(userId, {
         displayName: peer.displayName || userId,
         activePeerId: peer.peerId,
-        online: true,
+        online: !peer.hideOnline,
+        hideOnline: Boolean(peer.hideOnline),
+        lastSeen: peer.lastSeen || null,
         roomId: peer.roomId,
         publicKeyHex: peer.publicKey || existing?.publicKeyHex
       });
@@ -1426,6 +1488,7 @@ window.addContactById = async () => {
   if (primaryInput) primaryInput.value = '';
   renderContacts();
   await openChat(userId);
+  syncContactsToServer().catch(() => {});
 };
 
 window.copyAppShareLink = async () => {
