@@ -44,7 +44,9 @@ const state = {
   unreadCounts: new Map(),
   micMuted: false,
   selectedMessageIds: new Set(),
-  ringTone: null
+  ringTone: null,
+  remoteAudioNeedsUnlock: false,
+  remoteAudioRetryTimer: null
 };
 
 function defaultSignalingUrl() {
@@ -133,31 +135,88 @@ function isValidLogin(value) {
   return LOGIN_PATTERN.test(value);
 }
 
-async function bindRemoteAudioStream(stream) {
-  const el = $('remoteAudio');
-  if (!el || !stream) return;
-  el.srcObject = stream;
-  el.muted = false;
-  el.volume = 1;
-  try {
-    await el.play();
-  } catch (e) {
-    console.warn('Remote audio play:', e);
-    setStatus('warn', 'Ткните по странице или снова нажмите «Ответить» — браузер мог заблокировать звук');
+function stopRemoteAudioRetry() {
+  if (state.remoteAudioRetryTimer) {
+    window.clearInterval(state.remoteAudioRetryTimer);
+    state.remoteAudioRetryTimer = null;
   }
 }
 
-async function playRemoteAudioIfReady() {
+async function tryPlayRemoteAudio(maxAttempts = 1) {
   const el = $('remoteAudio');
-  if (!el?.srcObject) return;
+  if (!el?.srcObject) return false;
   el.muted = false;
   el.volume = 1;
-  try {
-    await el.play();
-  } catch {
-    setStatus('warn', 'Разрешите звук для сайта в настройках вкладки');
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      await el.play();
+      state.remoteAudioNeedsUnlock = false;
+      if (state.activeCall?.status === 'active') updateCallBar();
+      return true;
+    } catch (e) {
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      } else {
+        console.warn('Remote audio play:', e);
+        state.remoteAudioNeedsUnlock = true;
+        if (state.activeCall?.status === 'active') updateCallBar();
+      }
+    }
+  }
+  return false;
+}
+
+function scheduleRemoteAudioRetry(peerId) {
+  stopRemoteAudioRetry();
+  if (!state.activeCall || state.activeCall.status !== 'active') return;
+
+  let tries = 0;
+  state.remoteAudioRetryTimer = window.setInterval(() => {
+    tries += 1;
+    if (!state.activeCall || state.activeCall.status !== 'active' || tries > 20) {
+      stopRemoteAudioRetry();
+      return;
+    }
+    state.transport?.refreshRemoteAudio?.(peerId);
+    tryPlayRemoteAudio(1).then((ok) => {
+      if (ok) stopRemoteAudioRetry();
+    });
+  }, 500);
+}
+
+async function bindRemoteAudioStream(stream, peerId = null) {
+  const el = $('remoteAudio');
+  if (!el || !stream) return;
+  el.srcObject = stream;
+  const played = await tryPlayRemoteAudio(6);
+  if (!played && state.activeCall?.status === 'active') {
+    const audioPeerId = peerId || state.activeCall.remotePeerId;
+    if (audioPeerId) scheduleRemoteAudioRetry(audioPeerId);
   }
 }
+
+async function playRemoteAudioIfReady(peerId = null) {
+  const audioPeerId = peerId || state.activeCall?.remotePeerId;
+  if (audioPeerId) {
+    state.transport?.refreshRemoteAudio?.(audioPeerId);
+  }
+  const played = await tryPlayRemoteAudio(4);
+  if (!played && state.activeCall?.status === 'active' && audioPeerId) {
+    scheduleRemoteAudioRetry(audioPeerId);
+  }
+  return played;
+}
+
+window.unlockRemoteAudio = async () => {
+  const peerId = state.activeCall?.remotePeerId
+    || state.contacts.get(state.activeCall?.peerUserId || '')?.activePeerId;
+  if (peerId) state.transport?.refreshRemoteAudio?.(peerId);
+  const played = await tryPlayRemoteAudio(4);
+  if (!played) {
+    setStatus('warn', 'Нажмите «Включить звук» на панели звонка или разрешите звук для сайта');
+  }
+};
 
 // ==================== VIEW NAVIGATION ====================
 let currentView = 'chats';
@@ -1067,8 +1126,8 @@ window.connectHandshake = async () => {
     }
   });
 
-  state.transport.onRemoteAudioStream((_peerId, stream) => {
-    bindRemoteAudioStream(stream);
+  state.transport.onRemoteAudioStream((peerId, stream) => {
+    bindRemoteAudioStream(stream, peerId);
   });
 
   state.multiplexer.onMessage(async (packet, fromPeerId) => {
@@ -1697,6 +1756,8 @@ window.goBackFromChat = () => {
 };
 
 async function hangupCallAudio(peerId) {
+  stopRemoteAudioRetry();
+  state.remoteAudioNeedsUnlock = false;
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
   if (state.transport && peerId) {
@@ -1762,6 +1823,10 @@ async function handleCallControl(packet, fromPeerId) {
       return;
     }
 
+    if (fromPeerId) {
+      state.transport?.expectVoiceAnswer?.(fromPeerId);
+    }
+
     const existingContact = state.contacts.get(peerUserId);
     const resolvedDisplayName = packet.senderName && packet.senderName !== peerUserId
       ? packet.senderName
@@ -1801,8 +1866,13 @@ async function handleCallControl(packet, fromPeerId) {
   if (action === 'accept' && callId && state.activeCall?.role === 'caller' && state.activeCall.callId === callId) {
     stopRingTone();
     state.activeCall.status = 'active';
+    const peerId = state.activeCall.remotePeerId || fromPeerId;
+    if (peerId) {
+      state.activeCall.remotePeerId = peerId;
+      state.transport?.expectVoiceAnswer?.(peerId);
+    }
     updateCallBar();
-    queueMicrotask(() => playRemoteAudioIfReady());
+    queueMicrotask(() => playRemoteAudioIfReady(peerId));
     return;
   }
 
@@ -1927,13 +1997,23 @@ function updateCallBar() {
   }
 
   if (ac.status === 'active') {
-    if (label) label.textContent = `Звонок · ${name}`;
+    if (label) {
+      label.textContent = state.remoteAudioNeedsUnlock
+        ? `Звонок · ${name} · нажмите «Включить звук»`
+        : `Звонок · ${name}`;
+    }
     if (actions) {
       const micLabel = state.micMuted ? 'Включить мик' : 'Выключить мик';
+      const unlockBtn = state.remoteAudioNeedsUnlock
+        ? '<button type="button" class="btn primary" id="callUnlockAudioBtn">Включить звук</button>'
+        : '';
       actions.innerHTML = `
+        ${unlockBtn}
         <button type="button" class="btn subtle" id="callMuteBtn">${micLabel}</button>
         <button type="button" class="btn subtle" id="callEndBtn">Завершить</button>
       `;
+      const unlockEl = $('callUnlockAudioBtn');
+      if (unlockEl) unlockEl.onclick = () => window.unlockRemoteAudio();
       $('callMuteBtn').onclick = () => window.toggleCallMic();
       $('callEndBtn').onclick = () => window.endVoiceCall();
     }
@@ -2042,7 +2122,7 @@ window.answerVoiceCall = async () => {
       peerId
     );
 
-    await playRemoteAudioIfReady();
+    await playRemoteAudioIfReady(peerId);
   } catch (e) {
     console.warn('Answer failed:', e);
     stopRingTone();

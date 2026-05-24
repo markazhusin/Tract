@@ -112,7 +112,7 @@ export class WebRTCTransport {
       expectVoiceAnswer: false
     };
 
-    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'inactive' });
+    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
 
     pc.ontrack = (event) => {
       const track = event.track;
@@ -123,9 +123,12 @@ export class WebRTCTransport {
         stream = new MediaStream([track]);
       }
 
-      const emit = () => this.onRemoteAudioStreamCallback?.(peerId, stream);
+      const emit = () => this.emitRemoteAudioStream(peerId, stream);
       emit();
       track.addEventListener('unmute', () => emit(), { once: true });
+      track.addEventListener('ended', () => {
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
+      }, { once: true });
     };
 
     this.peers.set(peerId, peerState);
@@ -155,7 +158,46 @@ export class WebRTCTransport {
     const peerState = this.peers.get(peerId);
     if (peerState) {
       peerState.expectVoiceAnswer = true;
+      this.ensureAudioReceive(peerState);
     }
+  }
+
+  ensureAudioReceive(peerState) {
+    if (!peerState?.audioTransceiver) return;
+    peerState.audioTransceiver.direction = peerState.localAudioStream ? 'sendrecv' : 'recvonly';
+  }
+
+  extractRemoteAudioStream(peerState) {
+    if (!peerState?.pc) return null;
+
+    const receivers = peerState.pc.getReceivers?.() || [];
+    for (const receiver of receivers) {
+      const track = receiver.track;
+      if (track?.kind === 'audio' && track.readyState !== 'ended') {
+        return new MediaStream([track]);
+      }
+    }
+
+    const transceiver = peerState.audioTransceiver;
+    const track = transceiver?.receiver?.track;
+    if (track?.kind === 'audio' && track.readyState !== 'ended') {
+      return new MediaStream([track]);
+    }
+
+    return null;
+  }
+
+  emitRemoteAudioStream(peerId, stream = null) {
+    const peerState = this.peers.get(peerId);
+    if (!peerState) return;
+    const resolved = stream || this.extractRemoteAudioStream(peerState);
+    if (resolved) {
+      this.onRemoteAudioStreamCallback?.(peerId, resolved);
+    }
+  }
+
+  refreshRemoteAudio(peerId) {
+    this.emitRemoteAudioStream(peerId);
   }
 
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
@@ -189,7 +231,7 @@ export class WebRTCTransport {
     } catch (e) {
       console.warn('setStreams:', e);
     }
-    peerState.audioTransceiver.direction = 'sendrecv';
+    this.ensureAudioReceive(peerState);
 
     if (asOfferer) {
       // Caller: create offer with audio sendrecv
@@ -291,6 +333,8 @@ export class WebRTCTransport {
       };
     }
 
+    this.ensureAudioReceive(peerState);
+
     if (peerState.pc.remoteDescription) {
       // Renegotiation offer (e.g. callee adding audio track)
       try {
@@ -299,6 +343,7 @@ export class WebRTCTransport {
         const answer = await peerState.pc.createAnswer();
         await peerState.pc.setLocalDescription(answer);
         await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
+        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       } catch (err) {
         console.error('WebRTC renegotiation error:', err);
       }
@@ -311,6 +356,7 @@ export class WebRTCTransport {
       const answer = await peerState.pc.createAnswer();
       await peerState.pc.setLocalDescription(answer);
       await this.signaling.sendSignal(peerId, 'answer', answer.sdp);
+      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
       console.error('WebRTC answer error:', err);
       this.closePeer(peerId);
@@ -325,6 +371,7 @@ export class WebRTCTransport {
       await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
 
       await this.flushIceCandidates(peer);
+      queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
       console.error('WebRTC answer apply error:', err);
     }
