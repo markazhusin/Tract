@@ -1020,24 +1020,12 @@ window.connectHandshake = async () => {
     }
 
     if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === chatId) {
-      if (state.activeCall.remotePeerId !== peerMeta.peerId) {
-        state.activeCall.remotePeerId = peerMeta.peerId;
-      }
+      state.activeCall.remotePeerId = peerMeta.peerId;
       try {
-        const audioPromise = state.transport.startAudioCallWithLocalMedia(peerMeta.peerId, { asOfferer: false }).catch((e) => {
+        await flushPendingCallControls(chatId, peerMeta.peerId);
+        await state.transport.startAudioCallWithLocalMedia(peerMeta.peerId, { asOfferer: true }).catch((e) => {
           console.warn('Caller audio setup failed when peer appeared:', e);
         });
-        await state.multiplexer.send(
-          {
-            type: 'call',
-            action: 'invite',
-            callId: state.activeCall.callId,
-            senderId: state.profile.userId,
-            senderName: state.profile.displayName
-          },
-          peerMeta.peerId
-        );
-        await audioPromise;
       } catch (e) {
         console.warn('Pending call invite failed when peer appeared:', e);
       }
@@ -1217,6 +1205,7 @@ window.clearCurrentHistory = async (scope = 'me') => {
   if (scope === 'all') {
     await sendMessageControl({ action: 'clear_chat' }, chatId);
   }
+  await clearPendingCallControls(chatId);
   await messageDB.deleteChat(chatId);
   state.selectedMessageIds.clear();
   const contact = state.contacts.get(chatId);
@@ -1290,13 +1279,21 @@ async function queuePendingMessageControl(chatId, packet) {
   await messageDB.saveSetting(key, pending);
 }
 
-async function sendCallControl(action, callId, userId, peerId = null) {
+const MAX_PENDING_CALL_AGE_MS = 45000;
+
+async function clearPendingCallControls(chatId) {
+  if (!chatId) return;
+  await messageDB.saveSetting(pendingCallControlsKey(chatId), []);
+}
+
+async function sendCallControl(action, callId, userId, peerId = null, extra = {}) {
   if (!userId || !state.multiplexer || !state.profile) return false;
   const packet = {
     type: 'call',
     action,
     callId,
-    senderId: state.profile.userId
+    senderId: state.profile.userId,
+    ...extra
   };
 
   let targetPeerId = peerId;
@@ -1306,7 +1303,7 @@ async function sendCallControl(action, callId, userId, peerId = null) {
 
   if (!targetPeerId) {
     await queuePendingCallControl(userId, packet);
-    return false;
+    return true;
   }
 
   try {
@@ -1314,7 +1311,7 @@ async function sendCallControl(action, callId, userId, peerId = null) {
     return true;
   } catch (error) {
     await queuePendingCallControl(userId, packet);
-    return false;
+    return true;
   }
 }
 
@@ -1327,26 +1324,51 @@ async function queuePendingCallControl(chatId, packet) {
   const pending = await messageDB.getSetting(key) || [];
   pending.push({
     ...packet,
-    controlId: packet.controlId || crypto.randomUUID()
+    controlId: packet.controlId || crypto.randomUUID(),
+    queuedAt: Date.now()
   });
   await messageDB.saveSetting(key, pending);
+}
+
+function filterFreshCallControls(pending) {
+  const now = Date.now();
+  const fresh = (pending || []).filter((p) => now - (p.queuedAt || 0) < MAX_PENDING_CALL_AGE_MS);
+  const nonInvites = fresh.filter((p) => p.action !== 'invite');
+  const invites = fresh.filter((p) => p.action === 'invite');
+  const latestInvite = invites.length ? invites[invites.length - 1] : null;
+  return [...nonInvites, ...(latestInvite ? [latestInvite] : [])];
 }
 
 async function flushPendingCallControls(chatId, targetPeerId) {
   if (!state.multiplexer || !chatId || !targetPeerId) return;
   const key = pendingCallControlsKey(chatId);
-  const pending = await messageDB.getSetting(key) || [];
-  if (!pending.length) return;
+  const pending = filterFreshCallControls(await messageDB.getSetting(key) || []);
+  if (!pending.length) {
+    await messageDB.saveSetting(key, []);
+    return;
+  }
 
   const remaining = [];
   for (const packet of pending) {
+    const { controlId, queuedAt, ...outgoing } = packet;
     try {
-      await state.multiplexer.send(packet, targetPeerId);
+      await state.multiplexer.send(outgoing, targetPeerId);
     } catch (error) {
       remaining.push(packet);
     }
   }
   await messageDB.saveSetting(key, remaining);
+}
+
+async function tryStartCallerAudio(chatId) {
+  if (state.activeCall?.role !== 'caller' || state.activeCall?.peerUserId !== chatId) return;
+  const peerId = state.activeCall.remotePeerId || await resolvePeerForUser(chatId).catch(() => null);
+  if (!peerId) return;
+  state.activeCall.remotePeerId = peerId;
+  await flushPendingCallControls(chatId, peerId);
+  await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: true }).catch((e) => {
+    console.warn('Caller audio setup failed:', e);
+  });
 }
 
 async function flushPendingMessageControls(chatId, targetPeerId) {
@@ -1733,6 +1755,13 @@ async function handleCallControl(packet, fromPeerId) {
   const peerUserId = packet.senderId || findUserIdByPeerId(fromPeerId);
 
   if (action === 'invite' && peerUserId && callId) {
+    if (state.activeCall?.status === 'active') return;
+    if (state.activeCall?.callId === callId) return;
+    if (state.activeCall?.status === 'incoming' && state.activeCall.peerUserId === peerUserId) return;
+    if (state.activeCall?.status === 'ringing' && state.activeCall.role === 'caller' && state.activeCall.peerUserId === peerUserId) {
+      return;
+    }
+
     const existingContact = state.contacts.get(peerUserId);
     const resolvedDisplayName = packet.senderName && packet.senderName !== peerUserId
       ? packet.senderName
@@ -1779,6 +1808,7 @@ async function handleCallControl(packet, fromPeerId) {
 
   if (action === 'reject' && callId && state.activeCall?.callId === callId) {
     stopRingTone();
+    await clearPendingCallControls(state.activeCall.peerUserId);
     state.activeCall = null;
     updateCallBar();
     return;
@@ -1786,7 +1816,9 @@ async function handleCallControl(packet, fromPeerId) {
 
   if (action === 'end' && callId && state.activeCall?.callId === callId) {
     stopRingTone();
+    const endedChatId = state.activeCall.peerUserId;
     await hangupCallAudio(fromPeerId);
+    await clearPendingCallControls(endedChatId);
     state.activeCall = null;
     state.micMuted = false;
     updateCallBar();
@@ -1798,6 +1830,7 @@ async function handleMessageControl(packet, fromPeerId) {
   if (packet.action === 'delete_messages') {
     await messageDB.deleteMessagesByPacketIds(chatId, packet.packetIds || []);
   } else if (packet.action === 'clear_chat') {
+    await clearPendingCallControls(chatId);
     await messageDB.deleteChat(chatId);
   } else {
     return;
@@ -1937,55 +1970,48 @@ function updateMobileLayout() {
 
 window.startVoiceCall = async () => {
   if (!state.currentChatId || !state.transport || !state.multiplexer || !state.profile) return;
-  const contact = state.contacts.get(state.currentChatId);
   if (state.activeCall) return;
+
+  const chatId = state.currentChatId;
+  await clearPendingCallControls(chatId);
 
   const callId = crypto.randomUUID();
   state.activeCall = {
     callId,
-    peerUserId: state.currentChatId,
-    remotePeerId: contact?.activePeerId || null,
+    peerUserId: chatId,
+    remotePeerId: null,
     status: 'ringing',
     role: 'caller'
   };
   startRingTone('outgoing');
   updateCallBar();
 
-  const targetPeerId = await resolvePeerForUser(state.currentChatId).catch(() => null);
+  let targetPeerId = await resolvePeerForUser(chatId).catch(() => null);
   if (targetPeerId) {
     state.activeCall.remotePeerId = targetPeerId;
   } else {
     setStatus('warn', 'Собеседник не найден онлайн — приглашение будет отправлено при появлении.');
   }
 
+  const invited = await sendCallControl('invite', callId, chatId, targetPeerId, {
+    senderName: state.profile.displayName
+  });
+
+  if (!invited) {
+    stopRingTone();
+    state.activeCall = null;
+    updateCallBar();
+    setStatus('error', 'Не удалось позвонить');
+    return;
+  }
+
+  if (!targetPeerId) {
+    targetPeerId = await resolvePeerForUser(chatId).catch(() => null);
+    if (targetPeerId) state.activeCall.remotePeerId = targetPeerId;
+  }
+
   if (targetPeerId) {
-    const audioSetup = state.transport.startAudioCallWithLocalMedia(targetPeerId, { asOfferer: true })
-      .catch((e) => {
-        if (state.activeCall?.callId !== callId) return;
-        console.warn('Caller audio setup failed:', e);
-      });
-
-    try {
-      await state.multiplexer.send(
-        {
-          type: 'call',
-          action: 'invite',
-          callId,
-          senderId: state.profile.userId,
-          senderName: state.profile.displayName
-        },
-        targetPeerId
-      );
-    } catch (e) {
-      console.warn('Invite failed:', e);
-      stopRingTone();
-      state.activeCall = null;
-      updateCallBar();
-      setStatus('error', 'Не удалось позвонить');
-      return;
-    }
-
-    await audioSetup;
+    await tryStartCallerAudio(chatId);
   }
 };
 
@@ -2033,9 +2059,11 @@ window.declineVoiceCall = async () => {
   stopRingTone();
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
+  const chatId = ac.peerUserId;
   state.activeCall = null;
   updateCallBar();
-  await sendCallControl('reject', ac.callId, ac.peerUserId, peerId);
+  await sendCallControl('reject', ac.callId, chatId, peerId);
+  await clearPendingCallControls(chatId);
 };
 
 window.endVoiceCall = async () => {
@@ -2050,10 +2078,12 @@ window.endVoiceCall = async () => {
 
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;
+  const chatId = ac.peerUserId;
   state.activeCall = null;
   state.micMuted = false;
   updateCallBar();
-  await sendCallControl('end', ac.callId, ac.peerUserId, peerId);
+  await sendCallControl('end', ac.callId, chatId, peerId);
+  await clearPendingCallControls(chatId);
   await hangupCallAudio(peerId);
 };
 
