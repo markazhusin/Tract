@@ -146,6 +146,17 @@ function normalizeUserId(value) {
   return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
 }
 
+function removeInboxEntries(userId, predicate) {
+  const normalized = normalizeUserId(userId);
+  if (!normalized) return false;
+  const inbox = userInbox.get(normalized) || [];
+  const filtered = inbox.filter((entry) => !predicate(entry));
+  if (filtered.length === inbox.length) return false;
+  userInbox.set(normalized, filtered);
+  saveInboxStore();
+  return true;
+}
+
 function isPersistentAppPacket(type, payload) {
   if (type !== 'app_packet' || !payload || typeof payload !== 'object') return false;
   return payload.type === 'text' || payload.type === 'message_control' || payload.type === 'call';
@@ -369,6 +380,14 @@ app.post('/signal', (req, res) => {
 
   const recipientUserId = normalizeUserId(toUserId) || resolvePeerUserId(roomId, to);
   const fromUserId = resolvePeerUserId(roomId, from);
+
+  if (payload?.type === 'message_control' && recipientUserId) {
+    if (payload.action === 'delete_messages' && Array.isArray(payload.packetIds)) {
+      removeInboxEntries(recipientUserId, (entry) => entry.payload?.packetId && payload.packetIds.includes(entry.payload.packetId));
+    } else if (payload.action === 'clear_chat' && fromUserId) {
+      removeInboxEntries(recipientUserId, (entry) => entry.type === 'app_packet' && entry.fromUserId === fromUserId && entry.toUserId === recipientUserId);
+    }
+  }
 
   if (isPersistentAppPacket(type, payload) && recipientUserId) {
     enqueueUserInbox(recipientUserId, {
@@ -601,19 +620,22 @@ app.post('/groups/message', (req, res) => {
 
   const perRecipient = packet.perRecipient || {};
   const messageId = crypto.randomUUID();
+  let deliveredCount = 0;
 
   for (const member of group.members) {
     if (member.userId === fromUserId) continue;
 
+    const recipientCrypto = perRecipient[member.userId];
+    if (!recipientCrypto) {
+      console.warn(`[Groups] Skipping ${member.userId} because group message is not encrypted for them`);
+      continue;
+    }
+
     const memberPayload = { ...packet };
     delete memberPayload.perRecipient;
-
-    const recipientCrypto = perRecipient[member.userId];
-    if (recipientCrypto) {
-      memberPayload.content = recipientCrypto.content;
-      memberPayload.iv = recipientCrypto.iv;
-      memberPayload.encrypted = true;
-    }
+    memberPayload.content = recipientCrypto.content;
+    memberPayload.iv = recipientCrypto.iv;
+    memberPayload.encrypted = true;
 
     enqueueUserInbox(normalizeUserId(member.userId), {
       id: messageId,
@@ -623,9 +645,14 @@ app.post('/groups/message', (req, res) => {
       payload: memberPayload,
       timestamp: Date.now()
     });
+    deliveredCount += 1;
   }
 
-  res.json({ status: 'ok', messageId });
+  if (deliveredCount === 0) {
+    return res.status(400).json({ error: 'No group recipients could be encrypted' });
+  }
+
+  res.json({ status: 'ok', messageId, deliveredCount });
 });
 
 app.post('/groups/delete-messages', (req, res) => {

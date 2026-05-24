@@ -3021,7 +3021,6 @@ window.openContactProfile = (userId) => {
 
   const contact = state.contacts.get(userId) || { id: userId, online: false };
   const avatarEl = $('profileModalAvatar');
-  const gallery = $('profileAvatarGallery');
   const nameEl = $('profileModalName');
   const idEl = $('profileModalId');
   const statusEl = $('profileModalStatus');
@@ -3029,9 +3028,8 @@ window.openContactProfile = (userId) => {
   const blockBtn = $('profileBlockBtn');
   const blockLabel = $('profileBlockLabel');
   const deleteBtn = $('profileDeleteBtn');
-  const deleteAvatarBtn = $('profileDeleteAvatarBtn');
 
-  if (!avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn || !gallery) return;
+  if (!avatarEl || !nameEl || !idEl || !statusEl || !callBtn || !blockBtn) return;
 
   nameEl.textContent = getContactLabel(contact);
   idEl.textContent = userId;
