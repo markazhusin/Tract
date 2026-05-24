@@ -999,10 +999,12 @@ async function bootstrapAuthenticatedSession(auth) {
   await updateInviteArtifacts();
   updateMobileLayout();
 
-  // Periodic contact sync across devices
+  // Periodic contact & group sync across devices
   if (window._contactSyncTimer) clearInterval(window._contactSyncTimer);
-  window._contactSyncTimer = setInterval(() => {
-    syncContactsFromServer().catch(() => {});
+  window._contactSyncTimer = setInterval(async () => {
+    await syncContactsFromServer();
+    await loadGroups();
+    renderContacts();
   }, 30000);
 
   queueMicrotask(() => {
