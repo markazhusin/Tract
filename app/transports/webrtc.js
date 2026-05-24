@@ -8,6 +8,7 @@ export class WebRTCTransport {
   discoveredPeers = new Set();
   onlinePeers = new Set();
   peerDirectory = new Map();
+  peerMetaFingerprints = new Map();
   onMessageCallback = null;
   onPeerDiscoveryCallback = null;
   onPeerOfflineCallback = null;
@@ -56,11 +57,16 @@ export class WebRTCTransport {
 
     for (const peer of peers) {
       this.peerDirectory.set(peer.peerId, peer);
+
+      const fp = JSON.stringify({ hideOnline: peer.hideOnline, lastSeen: peer.lastSeen, displayName: peer.displayName, avatar: peer.avatar });
+      const prevFp = this.peerMetaFingerprints.get(peer.peerId);
+
       if (!this.discoveredPeers.has(peer.peerId)) {
         this.discoveredPeers.add(peer.peerId);
-      }
-
-      if (!this.onlinePeers.has(peer.peerId)) {
+        this.peerMetaFingerprints.set(peer.peerId, fp);
+        this.onPeerDiscoveryCallback?.(peer.peerId, peer);
+      } else if (fp !== prevFp) {
+        this.peerMetaFingerprints.set(peer.peerId, fp);
         this.onPeerDiscoveryCallback?.(peer.peerId, peer);
       }
 
@@ -73,6 +79,7 @@ export class WebRTCTransport {
     for (const peerId of Array.from(this.onlinePeers)) {
       if (nextOnline.has(peerId)) continue;
       this.onlinePeers.delete(peerId);
+      this.peerMetaFingerprints.delete(peerId);
       const peerMeta = this.peerDirectory.get(peerId);
       this.peerDirectory.delete(peerId);
       this.closePeer(peerId);

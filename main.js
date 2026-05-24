@@ -1310,7 +1310,7 @@ window.connectHandshake = async () => {
     if (peerMeta.userId === state.profile.userId) return;
     if (!state.contacts.has(peerMeta.userId)) return;
 
-    await upsertContact(peerMeta.userId, {
+    const patch = {
       displayName: peerMeta.displayName || peerMeta.userId,
       activePeerId: peerMeta.peerId,
       online: !peerMeta.hideOnline,
@@ -1319,7 +1319,17 @@ window.connectHandshake = async () => {
       roomId,
       publicKeyHex: peerMeta.publicKey || state.contacts.get(peerMeta.userId)?.publicKeyHex,
       lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
-    });
+    };
+
+    if (peerMeta.avatar) {
+      patch.avatarUrl = peerMeta.avatar;
+      const key = getAvatarStorageKey(peerMeta.userId);
+      if (localStorage.getItem(key) !== peerMeta.avatar) {
+        localStorage.setItem(key, peerMeta.avatar);
+      }
+    }
+
+    await upsertContact(peerMeta.userId, patch);
 
     // If this is a new contact, update WebRTC allowedUserIds so it can connect
     if (isNew) {
