@@ -587,9 +587,9 @@ app.get('/group/:groupId', (req, res) => {
 });
 
 app.post('/groups/message', (req, res) => {
-  const { groupId, from, fromUserId, payload } = req.body;
-  if (!groupId || !payload) {
-    return res.status(400).json({ error: 'groupId and payload are required' });
+  const { groupId, fromUserId, packet } = req.body;
+  if (!groupId || !packet) {
+    return res.status(400).json({ error: 'groupId and packet are required' });
   }
 
   const group = groupStore.get(groupId);
@@ -599,23 +599,77 @@ app.post('/groups/message', (req, res) => {
     return res.status(403).json({ error: 'not a group member' });
   }
 
-  const messageEntry = {
-    id: crypto.randomUUID(),
-    groupId,
-    fromUserId: fromUserId || null,
-    payload,
-    timestamp: Date.now()
-  };
+  const perRecipient = packet.perRecipient || {};
+  const messageId = crypto.randomUUID();
 
   for (const member of group.members) {
     if (member.userId === fromUserId) continue;
+
+    const memberPayload = { ...packet };
+    delete memberPayload.perRecipient;
+
+    const recipientCrypto = perRecipient[member.userId];
+    if (recipientCrypto) {
+      memberPayload.content = recipientCrypto.content;
+      memberPayload.iv = recipientCrypto.iv;
+      memberPayload.encrypted = true;
+    }
+
     enqueueUserInbox(normalizeUserId(member.userId), {
-      ...messageEntry,
-      type: 'app_packet'
+      id: messageId,
+      groupId,
+      fromUserId: fromUserId || null,
+      type: 'app_packet',
+      payload: memberPayload,
+      timestamp: Date.now()
     });
   }
 
-  res.json({ status: 'ok', messageId: messageEntry.id });
+  res.json({ status: 'ok', messageId });
+});
+
+app.post('/groups/delete-messages', (req, res) => {
+  const { groupId, userId, packetIds } = req.body;
+  if (!groupId || !Array.isArray(packetIds) || !packetIds.length) {
+    return res.status(400).json({ error: 'groupId and packetIds array are required' });
+  }
+
+  const group = groupStore.get(groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+
+  if (!group.members.some((m) => m.userId === userId)) {
+    return res.status(403).json({ error: 'not a group member' });
+  }
+
+  const pidSet = new Set(packetIds);
+
+  for (const member of group.members) {
+    const inbox = userInbox.get(normalizeUserId(member.userId));
+    if (!inbox) continue;
+    const filtered = inbox.filter((entry) => !(entry.payload?.packetId && pidSet.has(entry.payload.packetId)));
+    if (filtered.length !== inbox.length) {
+      userInbox.set(normalizeUserId(member.userId), filtered);
+    }
+    // Deliver deletion signal so online clients also remove locally
+    enqueueUserInbox(normalizeUserId(member.userId), {
+      type: 'app_packet',
+      id: crypto.randomUUID(),
+      groupId,
+      fromUserId: userId,
+      payload: {
+        type: 'message_control',
+        action: 'delete_messages',
+        packetIds,
+        senderId: userId,
+        recipientId: groupId,
+        timestamp: Date.now()
+      },
+      timestamp: Date.now()
+    });
+  }
+  saveInboxStore();
+
+  res.json({ status: 'ok', removed: packetIds.length });
 });
 
 const distDir = path.join(__dirname, 'dist');

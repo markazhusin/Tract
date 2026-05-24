@@ -1145,38 +1145,38 @@ async function processIncomingPacket(packet, fromPeerId) {
     return;
   }
 
-    if (packet.type === 'call') {
-      await handleCallControl(packet, fromPeerId);
-      return;
+  if (packet.type === 'call') {
+    await handleCallControl(packet, fromPeerId);
+    return;
+  }
+
+  if (packet.type !== 'text') return;
+
+  // Decrypt E2E
+  let content = packet.content;
+  if (packet.encrypted && packet.iv && packet.senderPublicKey) {
+    try {
+      content = await decryptMessage(packet.content, packet.iv, packet.senderPublicKey, state.keyPair);
+    } catch (e) {
+      console.warn('Decrypt failed:', e);
     }
+  }
 
-    if (packet.type !== 'text') return;
+  // Deduplicate by packet.packetId (added on send). If missing, use fingerprint.
+  let pktId = packet.packetId;
+  if (!pktId) {
+    pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${content}`;
+  }
+  if (state.receivedPacketIds.has(pktId)) {
+    return;
+  }
+  state.receivedPacketIds.add(pktId);
 
-    // Decrypt E2E
-    let content = packet.content;
-    if (packet.encrypted && packet.iv && packet.senderPublicKey) {
-      try {
-        content = await decryptMessage(packet.content, packet.iv, packet.senderPublicKey, state.keyPair);
-      } catch (e) {
-        console.warn('Decrypt failed:', e);
-      }
-    }
+  if (packet.senderId === state.profile?.userId) return;
+  if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
 
-    // Deduplicate by packet.packetId (added on send). If missing, use fingerprint.
-    let pktId = packet.packetId;
-    if (!pktId) {
-      pktId = `${packet.senderId||fromPeerId}:${packet.timestamp}:${content}`;
-    }
-    if (state.receivedPacketIds.has(pktId)) {
-      return;
-    }
-    state.receivedPacketIds.add(pktId);
-
-    if (packet.senderId === state.profile?.userId) return;
-    if (packet.packetId && await messageDB.hasMessagePacket(packet.packetId)) return;
-
-    const isGroup = packet.recipientId && packet.recipientId.startsWith('#');
-    const chatId = isGroup ? packet.recipientId : (packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId);
+  const isGroup = packet.recipientId && packet.recipientId.startsWith('#');
+  const chatId = isGroup ? packet.recipientId : (packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId);
   const displayPacket = { ...packet, content, encrypted: false };
   const savedId = await messageDB.saveMessage(displayPacket, chatId, false, { isOutgoing: false });
   displayPacket._dbId = savedId;
@@ -1186,10 +1186,11 @@ async function processIncomingPacket(packet, fromPeerId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
       refreshDocTitle();
       const group = state.groups.get(chatId);
+      const senderLabel = packet.senderName || packet.senderId || '';
       notifyNewMessage({
         chatId,
         title: group?.name || chatId,
-        body: truncate(String(content || ''), 120)
+        body: senderLabel ? `${senderLabel}: ${truncate(String(content || ''), 120)}` : truncate(String(content || ''), 120)
       });
     }
     if (state.currentChatId === chatId) {
@@ -1802,7 +1803,27 @@ window.deleteSelectedMessages = async (scope = 'me') => {
   const packetIds = selected.map((message) => message.packetId).filter(Boolean);
 
   if (scope === 'all') {
-    await sendMessageControl({ action: 'delete_messages', packetIds }, chatId);
+    const isGroup = chatId.startsWith('#');
+    if (isGroup) {
+      const serverUrl = resolveSignalingUrl();
+      if (serverUrl) {
+        try {
+          await fetch(new URL('/groups/delete-messages', serverUrl), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              groupId: chatId,
+              userId: state.profile.userId,
+              packetIds
+            })
+          });
+        } catch (e) {
+          console.warn('Group delete for everyone failed:', e);
+        }
+      }
+    } else {
+      await sendMessageControl({ action: 'delete_messages', packetIds }, chatId);
+    }
   }
 
   await messageDB.deleteMessages(ids);
@@ -2086,22 +2107,43 @@ async function deliverOutgoingMessage(chatId, packet) {
   const group = state.groups.get(chatId);
 
   if (group) {
-    // Group message — send via server
     const serverUrl = resolveSignalingUrl();
     if (!serverUrl) return;
+
+    const members = group.members.filter((m) => m.userId !== state.profile.userId);
+    const perRecipient = {};
+
+    for (const member of members) {
+      const contact = state.contacts.get(member.userId);
+      let pubKey = contact?.publicKeyHex;
+      if (!pubKey) {
+        pubKey = await fetchPeerPublicKey(serverUrl, member.userId);
+      }
+      if (pubKey) {
+        try {
+          const { ciphertext, iv } = await encryptMessage(packet.content, pubKey, state.keyPair);
+          perRecipient[member.userId] = { content: ciphertext, iv };
+        } catch (e) {
+          console.warn(`Encrypt for ${member.userId} failed:`, e);
+        }
+      }
+    }
+
+    const { content: _plaintext, ...packetMeta } = packet;
     try {
       const response = await fetch(new URL('/groups/message', serverUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           groupId: chatId,
-          from: state.myPeerId,
           fromUserId: state.profile.userId,
-          payload: {
-            ...packet,
+          packet: {
+            ...packetMeta,
             senderId: state.profile.userId,
             senderName: state.profile.displayName,
-            recipientId: chatId
+            senderPublicKey: getPublicKeyHex(state.keyPair),
+            recipientId: chatId,
+            perRecipient
           }
         })
       });
@@ -2479,28 +2521,31 @@ async function handleCallControl(packet, fromPeerId) {
 }
 
 async function handleMessageControl(packet, fromPeerId) {
-  const chatId = packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId;
+  const isGroup = packet.recipientId && packet.recipientId.startsWith('#');
+  const chatId = isGroup ? packet.recipientId : (packet.senderId || findUserIdByPeerId(fromPeerId) || fromPeerId);
   if (packet.action === 'delete_messages') {
     await messageDB.deleteMessagesByPacketIds(chatId, packet.packetIds || []);
+    if (state.currentChatId === chatId) {
+      state.selectedMessageIds.clear();
+      await renderChatHistory(chatId);
+    }
   } else if (packet.action === 'clear_chat') {
     await clearPendingCallControls(chatId);
     await messageDB.deleteChat(chatId);
-  } else {
-    return;
-  }
-
-  if (state.currentChatId === chatId) {
-    state.selectedMessageIds.clear();
-    await renderChatHistory(chatId);
-  }
-
-  const contact = state.contacts.get(chatId);
-  if (contact) {
-    await upsertContact(chatId, {
-      ...contact,
-      lastMsg: '',
-      lastTime: 0
-    });
+    if (state.currentChatId === chatId) {
+      state.selectedMessageIds.clear();
+      await renderChatHistory(chatId);
+    }
+    if (!isGroup) {
+      const contact = state.contacts.get(chatId);
+      if (contact) {
+        await upsertContact(chatId, {
+          ...contact,
+          lastMsg: '',
+          lastTime: 0
+        });
+      }
+    }
   }
 }
 
