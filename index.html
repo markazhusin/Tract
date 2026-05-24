@@ -818,6 +818,19 @@
 
       .empty { color: var(--muted); }
 
+      /* Auth gate: full-screen overlay, above everything */
+      #authGate {
+        position: fixed; inset: 0; z-index: 300;
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #authGate[hidden] { display: none; }
+
+      /* App hidden before auth */
+      #app[hidden] { display: none; }
+
       /* Overlay pages for new message / create group / group info */
       #newMessagePage,
       #createGroupPage,
@@ -825,9 +838,8 @@
         position: fixed; inset: 0; z-index: 200;
         background: var(--bg);
         display: flex; flex-direction: column;
-        visibility: hidden;
         transform: translateX(100%);
-        transition: visibility 0s 0.28s, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         will-change: transform;
         pointer-events: none;
       }
@@ -835,9 +847,8 @@
         position: fixed; inset: 0; z-index: 200;
         background: var(--bg);
         display: flex; flex-direction: column;
-        visibility: hidden;
         transform: translateX(100%);
-        transition: visibility 0s 0.28s, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         will-change: transform;
         pointer-events: none;
       }
@@ -845,9 +856,7 @@
       #createGroupPage.open,
       #groupInfoPage.open,
       #contactProfilePage.open {
-        visibility: visible;
         transform: translateX(0);
-        transition: visibility 0s 0s, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         pointer-events: auto;
       }
 
@@ -951,7 +960,7 @@
   </div>
 
   <!-- MAIN APP -->
-  <div id="app">
+  <div id="app" hidden>
     <!-- SIDEBAR -->
     <aside id="sidebar">
       <div class="sidebar-header">

@@ -844,6 +844,7 @@ function openGate(mode, copy = {}) {
 
 function closeGate() {
   $('authGate').hidden = true;
+  $('app').hidden = false;
 }
 
 window.showRegister = () => openGate('register', {
@@ -1037,6 +1038,7 @@ window.logoutAccount = async () => {
   renderChatHeader();
   $('messages').innerHTML = '<div class="empty-chat">Сессия завершена</div>';
   setStatus('offline', 'Вы вышли из аккаунта');
+  $('app').hidden = true;
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
   if (identity) {
