@@ -1,0 +1,18 @@
+{
+  "name": "TRACT",
+  "short_name": "TRACT",
+  "description": "Приватный P2P чат для безопасного общения.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#141515",
+  "theme_color": "#141515",
+  "icons": [
+    {
+      "src": "assets/tract.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ]
+}
