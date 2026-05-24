@@ -105,102 +105,6 @@ function buildAppShareLink() {
 function refreshDocTitle() {
   const n = [...state.unreadCounts.values()].reduce((a, b) => a + b, 0);
   document.title = n > 0 ? `(${n}) Tract` : 'Tract';
-  updateUnreadBadge(n);
-  updateAppBadge(n);
-}
-
-function updateUnreadBadge(count) {
-  const badge = $('unreadBadge');
-  if (!badge) return;
-  const total = typeof count === 'number' ? count : [...state.unreadCounts.values()].reduce((a, b) => a + b, 0);
-  if (total > 0) {
-    badge.textContent = total > 99 ? '99+' : String(total);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
-}
-
-async function updateAppBadge(total) {
-  if (!('setAppBadge' in navigator) || typeof navigator.setAppBadge !== 'function') return;
-  try {
-    if (total > 0) {
-      await navigator.setAppBadge(total);
-    } else {
-      await navigator.clearAppBadge();
-    }
-  } catch (error) {
-    console.debug('App badge not available:', error);
-  }
-}
-
-function isStandalonePWA() {
-  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
-function isIos() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent || '');
-}
-
-async function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return;
-  try {
-    await navigator.serviceWorker.register('./service-worker.js');
-  } catch (error) {
-    console.warn('Service worker registration failed:', error);
-  }
-}
-
-async function promptPwaPermissionsIfNeeded() {
-  if (!isStandalonePWA() || !isIos()) return;
-  if (localStorage.getItem('tract.pwaPermissionsRequested')) return;
-  localStorage.setItem('tract.pwaPermissionsRequested', '1');
-
-  if ('Notification' in window && Notification.permission === 'default') {
-    await requestNotificationPermission();
-  }
-  if (navigator.mediaDevices?.getUserMedia) {
-    await requestMicrophonePermission();
-  }
-}
-
-async function requestNotificationPermission() {
-  try {
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-      new Notification('TRACT', {
-        body: 'Уведомления включены для PWA',
-        silent: true
-      });
-    }
-  } catch (error) {
-    console.warn('Notification permission failed:', error);
-  }
-}
-
-async function requestMicrophonePermission() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    stream.getTracks().forEach((track) => track.stop());
-  } catch (error) {
-    console.warn('Microphone permission failed:', error);
-  }
-}
-
-function showIncomingNotification(packet, chatId) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  if (document.visibilityState === 'visible' && state.currentChatId === chatId) return;
-  const title = packet.senderName || chatId || 'TRACT';
-  const body = packet.content ? truncate(packet.content, 120) : 'Новое сообщение';
-  try {
-    new Notification(title, {
-      body,
-      tag: `tract-${chatId}`,
-      renotify: true
-    });
-  } catch (error) {
-    console.warn('Notification failed:', error);
-  }
 }
 
 function $(id) {
@@ -663,8 +567,6 @@ async function init() {
   renderProfile();
   renderChatHeader();
   updateMobileLayout();
-  registerServiceWorker().catch(() => {});
-  promptPwaPermissionsIfNeeded().catch(() => {});
 }
 
 function applyInviteParams() {
@@ -1158,7 +1060,6 @@ window.connectHandshake = async () => {
     if (state.currentChatId !== chatId) {
       state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
       refreshDocTitle();
-      showIncomingNotification(packet, chatId);
     }
     // If viewing this chat, render incoming message
     if (state.currentChatId === chatId) {
