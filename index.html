@@ -3,6 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#050508">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tract">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon.svg">
   <title>TRACT</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons&display=block">
   <style>
@@ -953,7 +960,7 @@
   </style>
 </head>
 <body>
-  <audio id="remoteAudio" autoplay playsinline></audio>
+  <audio id="remoteAudio" autoplay playsinline webkit-playsinline></audio>
 
   <!-- Hidden elements referenced by JS -->
   <span id="selfId" hidden></span>
@@ -1079,6 +1086,20 @@
                   <span id="settingUserId" style="font-size:13px;color:var(--muted);"></span>
                 </div>
                 <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
+              </div>
+
+              <div class="settings-section-title">УВЕДОМЛЕНИЯ</div>
+              <div class="settings-section">
+                <div class="toggle-row">
+                  <div>
+                    <div class="toggle-label">Push-уведомления</div>
+                    <div class="toggle-sublabel">Сообщения, когда вкладка в фоне или приложение свёрнуто</div>
+                  </div>
+                  <div class="toggle-switch">
+                    <span class="toggle-value" id="notificationsStatusLabel">Выключены</span>
+                    <input type="checkbox" id="notificationsToggle" onchange="toggleNotifications()">
+                  </div>
+                </div>
               </div>
 
               <div class="settings-section-title">КОНФИДЕНЦИАЛЬНОСТЬ</div>
