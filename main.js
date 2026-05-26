@@ -366,8 +366,110 @@ function getOriginalAvatarUrl(userId) {
   const key = 'tract.avatar.original.' + userId;
   const stored = localStorage.getItem(key);
   if (stored) return stored;
-  // Fall back to cropped version
   return getAvatarUrl(userId);
+}
+
+const _originalCache = new Map();
+async function fetchOriginalFromServer(userId) {
+  if (_originalCache.has(userId)) return _originalCache.get(userId);
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return null;
+  try {
+    const res = await fetch(new URL('/profile/avatar/' + encodeURIComponent(userId), serverUrl).toString());
+    if (!res.ok) return null;
+    const data = await res.json();
+    const original = data.avatarOriginal || data.avatarData;
+    _originalCache.set(userId, original);
+    return original;
+  } catch {
+    return null;
+  }
+}
+
+function enableAvatarPeek(el, userId) {
+  const isTouch = 'ontouchstart' in window;
+  let startY = 0;
+  let isDragging = false;
+  let ratio = 0;
+  let originalSrc = null;
+  let animFrame = null;
+
+  function apply(r) {
+    ratio = r;
+    const img = el.querySelector('img');
+    if (!img) return;
+    const radius = (1 - r) * 50;
+    img.style.borderRadius = radius + '%';
+    if (r > 0.5 && originalSrc && img.src !== originalSrc) {
+      img.src = originalSrc;
+    } else if (r <= 0.5 && originalSrc) {
+      const normal = getAvatarUrl(userId);
+      if (normal && img.src !== normal) img.src = normal;
+    }
+  }
+
+  function animateOut(from) {
+    if (animFrame) cancelAnimationFrame(animFrame);
+    const startTime = performance.now();
+    function tick(now) {
+      const t = Math.min(1, (now - startTime) / 200);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const r = from * (1 - eased);
+      apply(r);
+      if (t < 1) animFrame = requestAnimationFrame(tick);
+      else { apply(0); isDragging = false; }
+    }
+    animFrame = requestAnimationFrame(tick);
+  }
+
+  if (isTouch) {
+    el.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+      startY = e.touches[0].clientY;
+      isDragging = true;
+      ratio = 0;
+      if (!originalSrc) {
+        fetchOriginalFromServer(userId).then(src => { originalSrc = src; });
+      }
+    }, { passive: true });
+
+    el.addEventListener('touchmove', (e) => {
+      if (!isDragging || e.touches.length !== 1) return;
+      const dy = e.touches[0].clientY - startY;
+      if (dy <= 0) { apply(0); return; }
+      apply(Math.min(1, dy / 150));
+    }, { passive: true });
+
+    el.addEventListener('touchend', () => {
+      if (!isDragging) return;
+      if (ratio > 0) animateOut(ratio);
+      else isDragging = false;
+    }, { passive: true });
+  } else {
+    el.addEventListener('mousedown', (e) => {
+      if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+      startY = e.clientY;
+      isDragging = true;
+      ratio = 0;
+      if (!originalSrc) {
+        fetchOriginalFromServer(userId).then(src => { originalSrc = src; });
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dy = e.clientY - startY;
+      if (dy <= 0) { apply(0); return; }
+      apply(Math.min(1, dy / 150));
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!isDragging) return;
+      if (ratio > 0) animateOut(ratio);
+      else isDragging = false;
+    });
+  }
 }
 
 function getAvatarHistory(userId) {
@@ -793,7 +895,7 @@ function openAvatarCropModal(imageSrc, onConfirm) {
     function draw() {
       ctx.clearRect(0, 0, W, H);
       ctx.drawImage(img, 0, 0, W, H);
-      // Dark overlay with circular hole using clip evenodd
+      // Dark overlay with circular hole
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, 0, W, H);
@@ -802,7 +904,7 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
-      // Border
+      // Circle border
       ctx.strokeStyle = 'rgba(183,255,249,0.9)';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -835,7 +937,7 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       cleanupFns = [];
     }
 
-    // Click to center crop
+    // Click/tap to center circle
     canvas.addEventListener('click', (e) => {
       const p = canvasPos(e.clientX, e.clientY);
       cropX = p.x;
@@ -846,7 +948,6 @@ function openAvatarCropModal(imageSrc, onConfirm) {
 
     // Mouse drag
     const onMouseDown = (e) => {
-      e.preventDefault();
       dragging = true;
       const p = canvasPos(e.clientX, e.clientY);
       lastX = p.x; lastY = p.y;
@@ -863,12 +964,12 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       clampCrop();
       draw();
     };
-    window.addEventListener('mousemove', onMouseMove);
-    cleanupFns.push(() => window.removeEventListener('mousemove', onMouseMove));
+    document.addEventListener('mousemove', onMouseMove);
+    cleanupFns.push(() => document.removeEventListener('mousemove', onMouseMove));
 
     const onMouseUp = () => { dragging = false; };
-    window.addEventListener('mouseup', onMouseUp);
-    cleanupFns.push(() => window.removeEventListener('mouseup', onMouseUp));
+    document.addEventListener('mouseup', onMouseUp);
+    cleanupFns.push(() => document.removeEventListener('mouseup', onMouseUp));
 
     // Wheel resize
     const onWheel = (e) => {
@@ -881,30 +982,32 @@ function openAvatarCropModal(imageSrc, onConfirm) {
     cleanupFns.push(() => canvas.removeEventListener('wheel', onWheel));
 
     // Touch events
+    let touchDragId = null;
     const onTouchStart = (e) => {
-      e.preventDefault();
       if (e.touches.length === 1) {
         dragging = true;
+        touchDragId = e.touches[0].identifier;
         const p = canvasPos(e.touches[0].clientX, e.touches[0].clientY);
         lastX = p.x; lastY = p.y;
         lastPinchDist = null;
       } else if (e.touches.length === 2) {
         dragging = false;
+        touchDragId = null;
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         lastPinchDist = Math.sqrt(dx * dx + dy * dy);
       }
     };
-    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchstart', onTouchStart, { passive: true });
     cleanupFns.push(() => canvas.removeEventListener('touchstart', onTouchStart));
 
     const onTouchMove = (e) => {
-      e.preventDefault();
       if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (lastPinchDist !== null) {
+          const oldR = cropR;
           cropR = Math.max(20, Math.min(minDim * 0.5, cropR + (dist - lastPinchDist) * 0.5));
           clampCrop();
           draw();
@@ -913,21 +1016,23 @@ function openAvatarCropModal(imageSrc, onConfirm) {
         return;
       }
       if (!dragging || e.touches.length !== 1) return;
-      const p = canvasPos(e.touches[0].clientX, e.touches[0].clientY);
+      const touch = e.touches[0];
+      if (touch.identifier !== touchDragId) return;
+      const p = canvasPos(touch.clientX, touch.clientY);
       cropX += p.x - lastX;
       cropY += p.y - lastY;
       lastX = p.x; lastY = p.y;
       clampCrop();
       draw();
     };
-    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: true });
     cleanupFns.push(() => canvas.removeEventListener('touchmove', onTouchMove));
 
     const onTouchEnd = (e) => {
       if (e.touches.length < 2) lastPinchDist = null;
-      if (e.touches.length === 0) dragging = false;
+      if (e.touches.length === 0) { dragging = false; touchDragId = null; }
     };
-    canvas.addEventListener('touchend', onTouchEnd);
+    canvas.addEventListener('touchend', onTouchEnd, { passive: true });
     cleanupFns.push(() => canvas.removeEventListener('touchend', onTouchEnd));
 
     cancelBtn.onclick = () => { cleanup(); modal.remove(); };
@@ -939,15 +1044,15 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       out.width = size;
       out.height = size;
       const oc = out.getContext('2d');
-      oc.beginPath();
-      oc.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-      oc.clip();
       const imgScaleX = img.width / W;
       const imgScaleY = img.height / H;
       const srcX = (cropX - cropR) * imgScaleX;
       const srcY = (cropY - cropR) * imgScaleY;
       const srcW = cropR * 2 * imgScaleX;
       const srcH = cropR * 2 * imgScaleY;
+      oc.beginPath();
+      oc.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      oc.clip();
       oc.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, size, size);
       const result = out.toDataURL('image/jpeg', 0.88);
       modal.remove();
@@ -965,7 +1070,12 @@ function renderProfileCards() {
   const avatarSettings = $('profileAvatarSettings');
   const nameSettings = $('profileNameSettings');
   const idSettings = $('profileUserIdSettings');
-  if (avatarSettings) setAvatarHtml(avatarSettings, state.profile.userId, initials);
+  if (avatarSettings) {
+    setAvatarHtml(avatarSettings, state.profile.userId, initials);
+    enableAvatarPeek(avatarSettings, state.profile.userId);
+    avatarSettings.onclick = () => openAvatarViewer();
+    avatarSettings.style.cursor = 'pointer';
+  }
   if (nameSettings) nameSettings.textContent = state.profile.displayName;
   if (idSettings) idSettings.textContent = state.profile.userId;
 }
@@ -3764,6 +3874,7 @@ window.openContactProfile = (userId) => {
   const avatarUrl = getAvatarUrl(userId);
   if (avatarUrl) {
     avatarEl.innerHTML = `<img src="${escapeHtml(avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
+    enableAvatarPeek(avatarEl, userId);
   } else {
     avatarEl.textContent = getContactInitials(getContactLabel(contact));
   }
