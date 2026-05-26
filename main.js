@@ -421,23 +421,20 @@ async function uploadAvatarToServer(userId, avatarData, originalData = null) {
   }
 }
 
-async function deleteAvatarFromServer(userId, avatarId) {
-  if (!userId || !avatarId) return null;
+async function deleteAvatarFromServer(userId) {
+  if (!userId) return null;
   const serverUrl = resolveSignalingUrl();
   if (!serverUrl) return null;
 
   try {
-    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}/${encodeURIComponent(avatarId)}`, serverUrl).toString(), {
+    const response = await fetch(new URL(`/profile/avatar/${encodeURIComponent(userId)}`, serverUrl).toString(), {
       method: 'DELETE'
     });
     if (!response.ok) {
       throw new Error(`Delete failed ${response.status}`);
     }
     const data = await response.json();
-    return {
-      avatarData: data.avatarData || null,
-      avatars: Array.isArray(data.avatars) ? data.avatars : []
-    };
+    return data;
   } catch (error) {
     console.warn('Avatar deletion failed:', error);
     return null;
@@ -652,6 +649,39 @@ function openAvatarViewer() {
   btnRow.appendChild(cancelBtn);
   btnRow.appendChild(setPhotoBtn);
 
+  // Delete button (only if avatar exists)
+  if (avatarUrl) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'Удалить фото';
+    deleteBtn.style.cssText = [
+      'padding:12px 28px', 'border-radius:10px', 'background:rgba(229,101,101,0.15)',
+      'color:var(--danger)', 'font-size:15px', 'border:none', 'cursor:pointer',
+      'transition:opacity 0.2s'
+    ].join(';');
+    deleteBtn.onmouseenter = () => { deleteBtn.style.opacity = '0.7'; };
+    deleteBtn.onmouseleave = () => { deleteBtn.style.opacity = '1'; };
+    deleteBtn.onclick = async () => {
+      modal.remove();
+      const result = await deleteAvatarFromServer(state.profile.userId);
+      if (result) {
+        localStorage.removeItem(getAvatarStorageKey(state.profile.userId));
+        localStorage.removeItem(getAvatarHistoryStorageKey(state.profile.userId));
+        localStorage.removeItem('tract.avatar.original.' + state.profile.userId);
+        if (state.transport) {
+          state.transport.options.avatarData = null;
+          state.transport.signaling.post('/peer/heartbeat', {
+            peerId: state.myPeerId,
+            roomId: state.transport.options.roomId,
+            avatarData: ''
+          }).catch(() => {});
+        }
+        renderProfileCards();
+        renderContacts();
+      }
+    };
+    btnRow.appendChild(deleteBtn);
+  }
+
   modal.appendChild(closeBtn);
   modal.appendChild(displayImg);
   if (history.length > 1) modal.appendChild(galleryRow);
@@ -742,14 +772,16 @@ function openAvatarCropModal(imageSrc, onConfirm) {
     function draw() {
       ctx.clearRect(0, 0, W, H);
       ctx.drawImage(img, 0, 0, W, H);
+      // Dark overlay with circular hole using clip evenodd
       ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
+      ctx.clip('evenodd');
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.beginPath();
-      ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
-      ctx.fill();
       ctx.restore();
+      // Border
       ctx.strokeStyle = 'rgba(183,255,249,0.9)';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -762,6 +794,7 @@ function openAvatarCropModal(imageSrc, onConfirm) {
     let dragging = false;
     let lastX = 0, lastY = 0;
     let lastPinchDist = null;
+    let cleanupFns = [];
 
     function canvasPos(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
@@ -776,14 +809,31 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       cropY = Math.max(cropR, Math.min(H - cropR, cropY));
     }
 
-    canvas.addEventListener('mousedown', (e) => {
+    function cleanup() {
+      cleanupFns.forEach(fn => fn());
+      cleanupFns = [];
+    }
+
+    // Click to center crop
+    canvas.addEventListener('click', (e) => {
+      const p = canvasPos(e.clientX, e.clientY);
+      cropX = p.x;
+      cropY = p.y;
+      clampCrop();
+      draw();
+    });
+
+    // Mouse drag
+    const onMouseDown = (e) => {
       e.preventDefault();
       dragging = true;
       const p = canvasPos(e.clientX, e.clientY);
       lastX = p.x; lastY = p.y;
-    });
+    };
+    canvas.addEventListener('mousedown', onMouseDown);
+    cleanupFns.push(() => canvas.removeEventListener('mousedown', onMouseDown));
 
-    window.addEventListener('mousemove', (e) => {
+    const onMouseMove = (e) => {
       if (!dragging) return;
       const p = canvasPos(e.clientX, e.clientY);
       cropX += p.x - lastX;
@@ -791,18 +841,26 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       lastX = p.x; lastY = p.y;
       clampCrop();
       draw();
-    });
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    cleanupFns.push(() => window.removeEventListener('mousemove', onMouseMove));
 
-    window.addEventListener('mouseup', () => { dragging = false; });
+    const onMouseUp = () => { dragging = false; };
+    window.addEventListener('mouseup', onMouseUp);
+    cleanupFns.push(() => window.removeEventListener('mouseup', onMouseUp));
 
-    canvas.addEventListener('wheel', (e) => {
+    // Wheel resize
+    const onWheel = (e) => {
       e.preventDefault();
       cropR = Math.max(20, Math.min(minDim * 0.5, cropR - e.deltaY * 0.4));
       clampCrop();
       draw();
-    }, { passive: false });
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    cleanupFns.push(() => canvas.removeEventListener('wheel', onWheel));
 
-    canvas.addEventListener('touchstart', (e) => {
+    // Touch events
+    const onTouchStart = (e) => {
       e.preventDefault();
       if (e.touches.length === 1) {
         dragging = true;
@@ -815,9 +873,11 @@ function openAvatarCropModal(imageSrc, onConfirm) {
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         lastPinchDist = Math.sqrt(dx * dx + dy * dy);
       }
-    }, { passive: false });
+    };
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    cleanupFns.push(() => canvas.removeEventListener('touchstart', onTouchStart));
 
-    canvas.addEventListener('touchmove', (e) => {
+    const onTouchMove = (e) => {
       e.preventDefault();
       if (e.touches.length === 2) {
         const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -838,16 +898,21 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       lastX = p.x; lastY = p.y;
       clampCrop();
       draw();
-    }, { passive: false });
+    };
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    cleanupFns.push(() => canvas.removeEventListener('touchmove', onTouchMove));
 
-    canvas.addEventListener('touchend', (e) => {
+    const onTouchEnd = (e) => {
       if (e.touches.length < 2) lastPinchDist = null;
       if (e.touches.length === 0) dragging = false;
-    });
+    };
+    canvas.addEventListener('touchend', onTouchEnd);
+    cleanupFns.push(() => canvas.removeEventListener('touchend', onTouchEnd));
 
-    cancelBtn.onclick = () => modal.remove();
+    cancelBtn.onclick = () => { cleanup(); modal.remove(); };
 
     confirmBtn.onclick = () => {
+      cleanup();
       const size = 256;
       const out = document.createElement('canvas');
       out.width = size;
@@ -1023,6 +1088,15 @@ function openGate(mode, copy = {}) {
 }
 
 function closeGate() {
+  // Stamp post-auth DOM from template (only on first login)
+  if (!$('app')) {
+    const tmpl = document.getElementById('postAuth');
+    if (tmpl) {
+      const clone = tmpl.content.cloneNode(true);
+      tmpl.remove();
+      document.body.appendChild(clone);
+    }
+  }
   $('authGate').hidden = true;
   $('app').hidden = false;
 }
@@ -1249,7 +1323,7 @@ async function bootstrapAuthenticatedSession(auth) {
   await updateInviteArtifacts();
   updateMobileLayout();
 
-  if (state.profile?.userId === '@tract-admin') {
+  if (state.profile?.userId === '@creator') {
     const panel = $('adminPanel');
     const section = $('adminSection');
     if (panel) panel.style.display = '';

@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon.svg">
-  <title>TRACT</title>
+  <title></title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons&display=block">
   <style>
     :root {
@@ -1111,7 +1111,6 @@
   <!-- AUTH GATE -->
   <div id="authGate">
     <div id="authShell">
-      <img src="assets/tract.svg" alt="Tract" style="width:120px;height:auto;margin:0 auto;">
       <div id="authTitle" style="text-align:center;font-size:18px;font-weight:600;margin:8px 0 4px;"></div>
       <div id="registerPanel" class="stack" style="gap:12px;" hidden>
         <div class="field">
@@ -1154,6 +1153,8 @@
     </div>
   </div>
 
+  <!-- POST-AUTH CONTENT (hidden until login) -->
+  <template id="postAuth">
   <!-- CALL BAR -->
   <div id="callBar" hidden>
     <div id="callBarLabel"></div>
@@ -1165,7 +1166,6 @@
     <!-- SIDEBAR -->
     <aside id="sidebar">
       <div class="sidebar-header">
-        <img src="assets/tract.svg" alt="Tract" style="height:26px;width:auto;">
         <div class="sidebar-header-right">
           <button type="button" class="sidebar-header-btn" onclick="openNewMessage()" title="Новое сообщение"><span class="material-icons">edit</span></button>
           <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки"><span class="material-icons">settings</span></button>
@@ -1490,6 +1490,7 @@
     <span>Доступна новая версия</span>
     <button type="button" class="sw-update-btn">Обновить</button>
   </div>
+  </template>
 
   <script type="module" src="main.js"></script>
 </body>

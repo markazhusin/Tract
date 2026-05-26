@@ -225,6 +225,7 @@ func setupRoutes(router *gin.Engine) {
 	// Profile / Avatars
 	router.POST("/profile/avatar", handleProfileAvatarStore)
 	router.GET("/profile/avatar/:userId", handleProfileAvatarGet)
+	router.DELETE("/profile/avatar/:userId", handleProfileAvatarDelete)
 
 	// Contacts
 	router.POST("/contacts/save", handleContactsSave)
@@ -688,6 +689,25 @@ func handleProfileAvatarGet(c *gin.Context) {
 	original, _ := store.GetAvatarOriginal(normalized)
 
 	c.JSON(200, gin.H{"avatarData": data, "avatarOriginal": original})
+}
+
+func handleProfileAvatarDelete(c *gin.Context) {
+	userId := c.Param("userId")
+	normalized := normalizeUserId(userId)
+
+	if err := store.DeleteAvatar(normalized); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update peers and notify devices
+	server.UpdatePeersAvatar(normalized, "")
+	server.SendToUserPeers(normalized, &signaling.Signal{
+		Type: "avatar-changed",
+	})
+
+	log.Printf("[Avatar] Deleted for %s", normalized)
+	c.JSON(200, gin.H{"status": "ok"})
 }
 
 // ==================== CONTACTS ====================

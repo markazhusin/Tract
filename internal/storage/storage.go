@@ -767,6 +767,16 @@ func (s *Storage) GetAvatarForAdmin(userId string) string {
 	return s.avatars[userId]
 }
 
+func (s *Storage) DeleteAvatar(userId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.avatars, userId)
+	delete(s.avatarOriginals, userId)
+	s.saveJSON("avatar-store.json", s.avatars)
+	s.saveJSON("avatar-original-store.json", s.avatarOriginals)
+	return nil
+}
+
 func generateID() string {
 	const chars = "0123456789abcdef"
 	b := make([]byte, 32)
