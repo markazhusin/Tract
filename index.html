@@ -525,6 +525,7 @@
       animation: msgAppear 0.2s ease;
     }
     @keyframes msgAppear { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     .msg.sent {
       align-self: flex-end;
       background: var(--bubble-out);
@@ -1109,7 +1110,7 @@
               <!-- Profile Section -->
               <div class="settings-section" style="padding:20px;">
                 <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
-                  <div class="avatar-upload" id="avatarUploadWrapper" onclick="document.getElementById('avatarUploadInput').click()">
+                    <div class="avatar-upload" id="avatarUploadWrapper" onclick="openAvatarViewer()">
                     <div class="card-avatar" id="profileAvatarSettings" style="width:80px;height:80px;min-width:80px;font-size:36px;">−</div>
                     <div class="avatar-crop-frame"></div>
                     <div class="avatar-camera-overlay"><span class="material-icons" style="font-size:13px;">photo_camera</span></div>
@@ -1132,7 +1133,6 @@
                   <span style="font-size:13px;color:var(--muted);">Логин: </span>
                   <span id="settingUserId" style="font-size:13px;color:var(--muted);"></span>
                 </div>
-                <button type="button" class="btn primary" onclick="saveOwnProfile()">Сохранить</button>
               </div>
 
               <div class="settings-section-title">УВЕДОМЛЕНИЯ</div>

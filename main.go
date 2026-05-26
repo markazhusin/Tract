@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	SUPERUSER_ID = "@tract-admin"
+	SUPERUSER_ID = "@creator"
 	PEER_TTL_MS  = 15000
 )
 
@@ -138,20 +138,37 @@ func bootstrapAdminInvite() {
 		invites = make(map[string]*storage.InviteRecord)
 	}
 
-	if _, exists := invites["admin-bootstrap"]; !exists {
-		code := fmt.Sprintf("inv-%s", generateShortID())
-		invites[code] = &storage.InviteRecord{
-			UsedBy:    "",
-			CreatedBy: "system",
-			CreatedAt: time.Now().UnixMilli(),
-		}
-		store.SaveInvites(invites)
+	const bootstrapMarker = "__bootstrap__"
 
-		fmt.Printf("\n  === ADMIN BOOTSTRAP INVITE ===\n")
-		fmt.Printf("  Register the superuser at: %s\n", code)
-		fmt.Printf("  URL: ?invite=%s\n", code)
-		fmt.Printf("  ==============================\n\n")
+	// Check if bootstrap invite exists and is still unused
+	if marker, exists := invites[bootstrapMarker]; exists && marker.UsedBy != "" {
+		code := marker.UsedBy
+		if inv, ok := invites[code]; ok && inv.UsedBy == "" {
+			fmt.Printf("\n  === ADMIN BOOTSTRAP INVITE ===\n")
+			fmt.Printf("  URL: ?invite=%s\n", code)
+			fmt.Printf("  ==============================\n\n")
+			return
+		}
 	}
+
+	// Create fresh bootstrap invite
+	code := fmt.Sprintf("inv-%s", generateShortID())
+	invites[code] = &storage.InviteRecord{
+		UsedBy:    "",
+		CreatedBy: "system",
+		CreatedAt: time.Now().UnixMilli(),
+	}
+	invites[bootstrapMarker] = &storage.InviteRecord{
+		UsedBy:    code,
+		CreatedBy: "system",
+		CreatedAt: time.Now().UnixMilli(),
+	}
+	store.SaveInvites(invites)
+
+	fmt.Printf("\n  === ADMIN BOOTSTRAP INVITE ===\n")
+	fmt.Printf("  Register the superuser at: %s\n", code)
+	fmt.Printf("  URL: ?invite=%s\n", code)
+	fmt.Printf("  ==============================\n\n")
 }
 
 func generateShortID() string {

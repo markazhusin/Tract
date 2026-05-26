@@ -475,6 +475,8 @@ async function ensureAvatarForContact(userId, contact = state.contacts.get(userI
   return latest;
 }
 
+// ==================== AVATAR VIEWER & CROP (Telegram-style) ====================
+
 window.handleAvatarUpload = async (event) => {
   const file = event.target.files?.[0];
   if (!file || !state.profile) return;
@@ -505,8 +507,138 @@ window.handleAvatarUpload = async (event) => {
     }
     renderProfileCards();
     renderContacts();
+    // Re-open viewer with updated avatar
+    openAvatarViewer();
   });
 };
+
+function openAvatarViewer() {
+  const existing = document.getElementById('avatarViewerModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'avatarViewerModal';
+  modal.style.cssText = [
+    'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.92)', 'z-index:300',
+    'display:flex', 'flex-direction:column', 'align-items:center',
+    'justify-content:center', 'gap:20px', 'padding:24px',
+    'animation:fadeIn 0.2s ease'
+  ].join(';');
+
+  // Close button
+  const closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '&times;';
+  closeBtn.style.cssText = [
+    'position:absolute', 'top:16px', 'right:20px', 'background:none',
+    'border:none', 'color:#fff', 'font-size:32px', 'cursor:pointer',
+    'z-index:1', 'width:44px', 'height:44px', 'display:flex',
+    'align-items:center', 'justify-content:center', 'border-radius:50%'
+  ].join(';');
+  closeBtn.onclick = () => modal.remove();
+
+  // Avatar display
+  const avatarUrl = getAvatarUrl(state.profile.userId);
+  const displayImg = document.createElement('div');
+  displayImg.style.cssText = [
+    'width:min(60vw,300px)', 'height:min(60vw,300px)', 'border-radius:50%',
+    'overflow:hidden', 'background:var(--panel-input)', 'flex-shrink:0',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'font-size:72px', 'color:var(--text)', 'box-shadow:0 8px 40px rgba(0,0,0,0.5)'
+  ].join(';');
+
+  if (avatarUrl) {
+    displayImg.innerHTML = `<img src="${escapeHtml(avatarUrl)}" style="width:100%;height:100%;object-fit:cover;">`;
+  } else {
+    displayImg.textContent = getContactInitials(state.profile.displayName);
+  }
+
+  // Gallery: previous avatars from localStorage history
+  const historyKey = getAvatarHistoryStorageKey(state.profile.userId);
+  let history = [];
+  try {
+    history = JSON.parse(localStorage.getItem(historyKey) || '[]');
+  } catch {}
+
+  const galleryRow = document.createElement('div');
+  galleryRow.style.cssText = [
+    'display:flex', 'gap:10px', 'overflow-x:auto', 'padding:8px 4px',
+    'max-width:min(80vw,400px)', 'scrollbar-width:none'
+  ].join(';');
+
+  for (const item of history) {
+    if (!item.avatarData) continue;
+    const thumb = document.createElement('div');
+    thumb.style.cssText = [
+      'width:48px', 'height:48px', 'min-width:48px', 'border-radius:50%',
+      'overflow:hidden', 'cursor:pointer', 'border:2px solid rgba(255,255,255,0.2)',
+      'transition:border-color 0.2s'
+    ].join(';');
+    thumb.innerHTML = `<img src="${item.avatarData}" style="width:100%;height:100%;object-fit:cover;">`;
+    thumb.onmouseenter = () => { thumb.style.borderColor = 'rgba(183,255,249,0.8)'; };
+    thumb.onmouseleave = () => { thumb.style.borderColor = 'rgba(255,255,255,0.2)'; };
+    thumb.onclick = () => {
+      displayImg.innerHTML = `<img src="${item.avatarData}" style="width:100%;height:100%;object-fit:cover;">`;
+    };
+    galleryRow.appendChild(thumb);
+  }
+
+  // Buttons
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;justify-content:center;';
+
+  const setPhotoBtn = document.createElement('button');
+  setPhotoBtn.textContent = 'Установить новое фото';
+  setPhotoBtn.style.cssText = [
+    'padding:12px 28px', 'border-radius:10px', 'background:var(--accent,#B7FFF9)',
+    'color:#141515', 'font-size:15px', 'font-weight:600', 'border:none',
+    'cursor:pointer', 'transition:opacity 0.2s'
+  ].join(';');
+  setPhotoBtn.onmouseenter = () => { setPhotoBtn.style.opacity = '0.85'; };
+  setPhotoBtn.onmouseleave = () => { setPhotoBtn.style.opacity = '1'; };
+  setPhotoBtn.onclick = () => {
+    modal.remove();
+    document.getElementById('avatarUploadInput').click();
+  };
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Закрыть';
+  cancelBtn.style.cssText = [
+    'padding:12px 28px', 'border-radius:10px', 'background:rgba(255,255,255,0.1)',
+    'color:#f5f5f5', 'font-size:15px', 'border:none', 'cursor:pointer',
+    'transition:opacity 0.2s'
+  ].join(';');
+  cancelBtn.onmouseenter = () => { cancelBtn.style.opacity = '0.7'; };
+  cancelBtn.onmouseleave = () => { cancelBtn.style.opacity = '1'; };
+  cancelBtn.onclick = () => modal.remove();
+
+  btnRow.appendChild(cancelBtn);
+  btnRow.appendChild(setPhotoBtn);
+
+  modal.appendChild(closeBtn);
+  modal.appendChild(displayImg);
+  if (history.length > 1) modal.appendChild(galleryRow);
+  modal.appendChild(btnRow);
+  document.body.appendChild(modal);
+
+  // Swipe down to close
+  let touchStartY = 0;
+  modal.addEventListener('touchstart', (e) => {
+    if (e.target === modal || e.target === displayImg) {
+      touchStartY = e.touches[0].clientY;
+    }
+  }, { passive: true });
+  modal.addEventListener('touchend', (e) => {
+    if (touchStartY && e.changedTouches[0].clientY - touchStartY > 80) {
+      modal.remove();
+    }
+    touchStartY = 0;
+  }, { passive: true });
+
+  // Close on backdrop click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove();
+  });
+}
 
 function openAvatarCropModal(imageSrc, onConfirm) {
   const existing = document.getElementById('avatarCropModal');
@@ -515,32 +647,32 @@ function openAvatarCropModal(imageSrc, onConfirm) {
   const modal = document.createElement('div');
   modal.id = 'avatarCropModal';
   modal.style.cssText = [
-    'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.9)', 'z-index:300',
+    'position:fixed', 'inset:0', 'background:rgba(0,0,0,0.92)', 'z-index:310',
     'display:flex', 'flex-direction:column', 'align-items:center',
-    'justify-content:center', 'gap:16px', 'padding:20px'
+    'justify-content:center', 'gap:16px', 'padding:20px',
+    'animation:fadeIn 0.2s ease'
   ].join(';');
 
   const title = document.createElement('div');
-  title.textContent = 'Перетащите круг · колесо/пинч — размер';
-  title.style.cssText = 'color:#f5f5f5;font-size:14px;font-weight:500;text-align:center;';
+  title.textContent = 'Переместите и измените размер';
+  title.style.cssText = 'color:rgba(255,255,255,0.7);font-size:13px;font-weight:400;text-align:center;';
 
-  // Single canvas for everything
   const canvas = document.createElement('canvas');
   canvas.style.cssText = [
-    'display:block', 'border-radius:8px', 'touch-action:none',
-    'cursor:move', 'max-width:min(340px,90vw)', 'max-height:min(340px,60vh)'
+    'display:block', 'border-radius:12px', 'touch-action:none',
+    'cursor:move', 'max-width:min(90vw,360px)', 'max-height:60vh'
   ].join(';');
 
   const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:12px;';
+  btnRow.style.cssText = 'display:flex;gap:12px;margin-top:4px;';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Отмена';
-  cancelBtn.style.cssText = 'padding:10px 24px;border-radius:8px;background:rgba(255,255,255,0.1);color:#f5f5f5;font-size:15px;border:none;cursor:pointer;';
+  cancelBtn.style.cssText = 'padding:12px 28px;border-radius:10px;background:rgba(255,255,255,0.1);color:#f5f5f5;font-size:15px;border:none;cursor:pointer;';
 
   const confirmBtn = document.createElement('button');
   confirmBtn.textContent = 'Готово';
-  confirmBtn.style.cssText = 'padding:10px 24px;border-radius:8px;background:#B7FFF9;color:#141515;font-size:15px;font-weight:600;border:none;cursor:pointer;';
+  confirmBtn.style.cssText = 'padding:12px 28px;border-radius:10px;background:var(--accent,#B7FFF9);color:#141515;font-size:15px;font-weight:600;border:none;cursor:pointer;';
 
   btnRow.appendChild(cancelBtn);
   btnRow.appendChild(confirmBtn);
@@ -551,8 +683,9 @@ function openAvatarCropModal(imageSrc, onConfirm) {
 
   const img = new Image();
   img.onload = () => {
-    const maxSize = Math.min(340, window.innerWidth * 0.9, window.innerHeight * 0.55);
-    const scale = Math.min(maxSize / img.width, maxSize / img.height);
+    const maxW = Math.min(window.innerWidth * 0.9, 360);
+    const maxH = window.innerHeight * 0.55;
+    const scale = Math.min(maxW / img.width, maxH / img.height);
     const W = Math.round(img.width * scale);
     const H = Math.round(img.height * scale);
 
@@ -569,10 +702,8 @@ function openAvatarCropModal(imageSrc, onConfirm) {
     let cropY = H / 2;
 
     function draw() {
-      // Draw image
       ctx.clearRect(0, 0, W, H);
       ctx.drawImage(img, 0, 0, W, H);
-      // Dark overlay outside circle
       ctx.save();
       ctx.fillStyle = 'rgba(0,0,0,0.55)';
       ctx.fillRect(0, 0, W, H);
@@ -581,9 +712,8 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      // Circle border
       ctx.strokeStyle = 'rgba(183,255,249,0.9)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.arc(cropX, cropY, cropR, 0, Math.PI * 2);
       ctx.stroke();
@@ -591,7 +721,6 @@ function openAvatarCropModal(imageSrc, onConfirm) {
 
     draw();
 
-    // ---- Pointer events (mouse + touch unified) ----
     let dragging = false;
     let lastX = 0, lastY = 0;
     let lastPinchDist = null;
@@ -689,7 +818,6 @@ function openAvatarCropModal(imageSrc, onConfirm) {
       oc.beginPath();
       oc.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
       oc.clip();
-      // Map canvas crop coords back to original image coords
       const imgScaleX = img.width / W;
       const imgScaleY = img.height / H;
       const srcX = (cropX - cropR) * imgScaleX;
@@ -1168,9 +1296,17 @@ window.logoutAccount = async () => {
   }
 };
 
-window.saveOwnProfile = async () => {
+// Auto-save display name on input (debounced)
+let _displayNameTimer = null;
+$('displayNameInput')?.addEventListener('input', () => {
+  clearTimeout(_displayNameTimer);
+  _displayNameTimer = setTimeout(saveOwnProfile, 400);
+});
+
+async function saveOwnProfile() {
   if (!state.profile) return;
   const displayName = $('displayNameInput').value.trim() || 'Anonymous';
+  if (state.profile.displayName === displayName) return;
   state.profile.displayName = displayName;
   updateStoredDisplayName(displayName);
   await uploadIdentityToServer(resolveSignalingUrl());
@@ -1184,7 +1320,7 @@ window.saveOwnProfile = async () => {
     }).catch(() => {});
   }
   await updateInviteArtifacts();
-};
+}
 
 function updateHideOnlineLabel(hidden) {
   const label = $('hideOnlineLabel');
