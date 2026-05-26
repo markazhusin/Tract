@@ -4077,12 +4077,15 @@ window.deleteContactFromProfile = async () => {
   const userId = state.profileViewUserId;
   if (!userId) return;
   closeContactProfile();
+  // Remove from in-memory state FIRST (so syncContactsToServer sends correct data)
+  state.contacts.delete(userId);
+  state.unreadCounts.delete(userId);
   // Delete messages and contact from DB
   await messageDB.deleteChat(userId);
   await messageDB.deleteContact(userId);
-  // Remove from in-memory state
-  state.contacts.delete(userId);
-  state.unreadCounts.delete(userId);
+  // Sync contacts to server (without the deleted one)
+  await syncContactsToServer().catch(() => {});
+  // Update UI
   if (state.currentChatId === userId) {
     state.currentChatId = null;
     state.selectedMessageIds.clear();
