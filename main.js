@@ -2835,6 +2835,8 @@ function updateSendButtonIcon() {
   }
 }
 
+window.updateSendButtonIcon = updateSendButtonIcon;
+
 window.sendCurrentMessage = async () => {
   const input = $('messageInput');
   const text = input.value.trim();
