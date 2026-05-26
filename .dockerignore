@@ -1,0 +1,8 @@
+data/
+tract-server
+.git/
+.gitignore
+*.md
+.vscode/
+.idea/
+node_modules/
