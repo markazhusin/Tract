@@ -3,20 +3,27 @@ const ICON = '/icons/icon.svg';
 const BADGE = '/icons/badge.svg';
 
 let swRegistration = null;
+let swUpdateCheckTimer = null;
+let swUpdateToastTimer = null;
+const SW_UPDATE_INTERVAL = 300000; // 5min
 
 export function initPwa({ onOpenChat } = {}) {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       swRegistration = reg;
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
       reg.addEventListener('updatefound', () => {
         const worker = reg.installing;
-        worker?.addEventListener('statechange', () => {
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
           if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-            worker.postMessage({ type: 'SKIP_WAITING' });
+            handleSwUpdate(reg);
           }
         });
       });
+      // Check for updates periodically
+      swUpdateCheckTimer = setInterval(() => {
+        reg.update().catch(() => {});
+      }, SW_UPDATE_INTERVAL);
     }).catch((err) => console.warn('[PWA] service worker:', err));
 
     navigator.serviceWorker.addEventListener('message', (event) => {
@@ -27,8 +34,51 @@ export function initPwa({ onOpenChat } = {}) {
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) syncNotificationsToggle();
+    if (!document.hidden) {
+      syncNotificationsToggle();
+      // Also check for SW updates when page becomes visible
+      swRegistration?.update().catch(() => {});
+    }
   });
+}
+
+function handleSwUpdate(reg) {
+  // Try to get the waiting worker (set after install when skipWaiting not called yet)
+  let worker = reg.waiting;
+  // Fallback: use installing worker if no waiting worker
+  if (!worker) worker = reg.installing;
+  if (!worker) return;
+
+  // Show update toast
+  const toast = document.getElementById('swUpdateToast');
+  if (toast) {
+    toast.classList.add('visible');
+    clearTimeout(swUpdateToastTimer);
+    swUpdateToastTimer = setTimeout(() => {
+      toast.classList.remove('visible');
+    }, 10000);
+  }
+
+  // Reload on user tap or after timeout
+  const reloadFn = () => {
+    worker.postMessage({ type: 'SKIP_WAITING' });
+    window.location.reload();
+  };
+
+  if (toast) {
+    toast.onclick = reloadFn;
+    const btn = toast.querySelector('.sw-update-btn');
+    if (btn) btn.onclick = (e) => {
+      e.stopPropagation();
+      reloadFn();
+    };
+  }
+
+  // Auto-reload after 30s if user hasn't interacted
+  setTimeout(() => {
+    if (toast) toast.classList.remove('visible');
+    reloadFn();
+  }, 30000);
 }
 
 export function isNotificationsEnabled() {

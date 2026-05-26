@@ -1058,10 +1058,46 @@
         }
         .header-back-btn { display: flex; }
       }
+
+      .sw-update-toast {
+        position: fixed;
+        bottom: 80px;
+        left: 50%;
+        transform: translateX(-50%) translateY(100px);
+        background: var(--accent);
+        color: #000;
+        padding: 10px 20px;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 9999;
+        opacity: 0;
+        transition: opacity 0.3s, transform 0.3s;
+        pointer-events: none;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      }
+      .sw-update-toast.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+        pointer-events: auto;
+      }
+      .sw-update-btn {
+        background: #000;
+        color: var(--accent);
+        border: none;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
     </style>
 </head>
 <body>
-  <audio id="remoteAudio" autoplay playsinline webkit-playsinline></audio>
+  <audio id="remoteAudio" autoplay playsinline webkit-playsinline style="position:absolute;width:0;height:0;opacity:0;pointer-events:none"></audio>
 
   <!-- Hidden elements referenced by JS -->
   <span id="selfId" hidden></span>
@@ -1448,6 +1484,11 @@
         </button>
       </div>
     </div>
+  </div>
+
+  <div id="swUpdateToast" class="sw-update-toast">
+    <span>Доступна новая версия</span>
+    <button type="button" class="sw-update-btn">Обновить</button>
   </div>
 
   <script type="module" src="main.js"></script>

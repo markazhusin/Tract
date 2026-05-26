@@ -192,6 +192,23 @@ function isValidLogin(value) {
   return LOGIN_PATTERN.test(value);
 }
 
+// Try to play remote audio on any user interaction during a call
+document.addEventListener('click', () => {
+  if (state.activeCall && state.remoteAudioNeedsUnlock) {
+    const peerId = state.activeCall.remotePeerId;
+    if (peerId) state.transport?.refreshRemoteAudio?.(peerId);
+    tryPlayRemoteAudio(3).catch(() => {});
+  }
+}, true);
+
+document.addEventListener('touchstart', () => {
+  if (state.activeCall && state.remoteAudioNeedsUnlock) {
+    const peerId = state.activeCall.remotePeerId;
+    if (peerId) state.transport?.refreshRemoteAudio?.(peerId);
+    tryPlayRemoteAudio(3).catch(() => {});
+  }
+}, true);
+
 function stopRemoteAudioRetry() {
   if (state.remoteAudioRetryTimer) {
     window.clearInterval(state.remoteAudioRetryTimer);
@@ -1557,6 +1574,7 @@ window.connectHandshake = async () => {
     userId: state.profile.userId,
     displayName: state.profile.displayName,
     publicKeyHex: myPublicKeyHex,
+    hideOnline,
     allowedUserIds: new Set(state.contacts.keys())
   });
   state.multiplexer.register(state.transport);

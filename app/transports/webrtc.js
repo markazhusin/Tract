@@ -2,6 +2,34 @@ import { initSignaling } from '../core/local-signaling.js';
 
 const DISCOVERY_INTERVAL = 1000;
 
+function getIceServers() {
+  const config = [];
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const iceParam = params.get('ice');
+    if (iceParam) {
+      for (const entry of iceParam.split(',')) {
+        const trimmed = entry.trim();
+        if (!trimmed) continue;
+        if (trimmed.includes('turn:')) {
+          const parts = trimmed.replace('turn:', '').split('@');
+          if (parts.length === 2) {
+            const [credentials, host] = parts;
+            const [username, credential] = credentials.split(':');
+            config.push({ urls: `turn:${host}`, username, credential });
+          }
+        } else {
+          config.push({ urls: trimmed });
+        }
+      }
+    }
+  } catch {}
+  if (!config.length) {
+    config.push({ urls: ['stun:stun.l.google.com:19302'] });
+  }
+  return config;
+}
+
 export class WebRTCTransport {
   name = 'WebRTC';
   peers = new Map();
@@ -106,7 +134,7 @@ export class WebRTCTransport {
 
   createPeerConnection(peerId) {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+      iceServers: getIceServers()
     });
 
     const peerState = {
@@ -232,6 +260,12 @@ export class WebRTCTransport {
 
     peerState.localAudioStream = stream;
     const track = stream.getAudioTracks()[0];
+
+    // Add audio transceiver if it doesn't exist (e.g. initial connection had no audio)
+    if (!peerState.audioTransceiver) {
+      peerState.audioTransceiver = peerState.pc.addTransceiver(track);
+    }
+
     await peerState.audioTransceiver.sender.replaceTrack(track);
     try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
     peerState.audioTransceiver.direction = 'sendrecv';
@@ -252,9 +286,7 @@ export class WebRTCTransport {
 
     if (!this.peers.has(peerId)) {
       if (this.onlinePeers.has(peerId)) {
-        // Create peer connection but don't send offer yet
         const peerState = this.createPeerConnection(peerId);
-        // Still set up data channel if needed
         if (asOfferer) {
           const channel = peerState.pc.createDataChannel('tract', { ordered: true });
           this.setupDataChannel(channel, peerId);
@@ -263,14 +295,33 @@ export class WebRTCTransport {
             this.setupDataChannel(event.channel, peerId);
           };
         }
+        // Send initial offer immediately so data channel is established
+        try {
+          const offer = await peerState.pc.createOffer();
+          await peerState.pc.setLocalDescription(offer);
+          await this.signaling.sendSignal(peerId, 'offer', offer.sdp);
+        } catch (err) {
+          console.error('WebRTC initiate error:', err);
+          throw err;
+        }
       } else {
         throw new Error('Peer not online');
       }
     }
 
+    // Wait for data channel to open before audio renegotiation
+    // This prevents SDP race conditions between initial data channel and audio offers
     const peerState = await this.waitForPeerState(peerId, 12000);
-    if (!peerState?.pc || !peerState.audioTransceiver) {
-      throw new Error('Peer connection not ready for audio');
+    if (!peerState?.pc) {
+      throw new Error('Peer connection not ready');
+    }
+    const dcOpen = peerState.channel && peerState.channel.readyState === 'open';
+    if (!dcOpen) {
+      const opened = await this.waitForOpenPeer(peerId, 10000);
+      if (!opened) {
+        // Proceed anyway — audio renegotiation may still work
+        console.warn('Data channel not open, attempting audio renegotiation');
+      }
     }
 
     await this.prepareAndSendAudioOffer(peerId);
