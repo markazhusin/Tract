@@ -1445,11 +1445,6 @@ window.connectHandshake = async () => {
 
     await upsertContact(peerMeta.userId, patch);
 
-    // If this is a new contact, update WebRTC allowedUserIds so it can connect
-    if (isNew) {
-      state.transport.setAllowedUserIds(Array.from(state.contacts.keys()));
-    }
-
     const chatId = peerMeta.userId;
 
     // Resend any pending (undelivered) messages for this user

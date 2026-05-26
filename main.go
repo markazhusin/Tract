@@ -1,15 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	"image/png"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -244,10 +251,10 @@ func handleSSE(c *gin.Context) {
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
 	c.String(http.StatusOK, ":ok\n\n")
+	c.Writer.Flush()
 
 	clientChan := make(chan *signaling.Signal, 100)
 	server.RegisterSSEClient(roomId, peerId, clientChan)
@@ -261,9 +268,15 @@ func handleSSE(c *gin.Context) {
 		case signal := <-clientChan:
 			data, _ := json.Marshal(signal)
 			fmt.Fprintf(w, "data: %s\n\n", data)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 			return true
 		case <-ticker.C:
 			fmt.Fprintf(w, ":keepalive\n\n")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 			return true
 		case <-c.Request.Context().Done():
 			return false
@@ -327,6 +340,15 @@ func handlePeerHeartbeat(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "peer not found"})
 		return
 	}
+
+	// Override peer avatar with server-stored avatar for cross-device sync
+	if peerUserId := server.GetPeerUserId(req.RoomId, req.PeerId); peerUserId != "" {
+		normalized := normalizeUserId(peerUserId)
+		if storedAvatar, exists := store.GetAvatar(normalized); exists && storedAvatar != "" {
+			server.OverridePeerAvatar(req.RoomId, req.PeerId, storedAvatar)
+		}
+	}
+
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
@@ -600,12 +622,24 @@ func handleProfileAvatarStore(c *gin.Context) {
 	}
 
 	normalized := normalizeUserId(req.UserId)
-	if err := store.StoreAvatar(normalized, req.AvatarData); err != nil {
+
+	// Strip EXIF/metadata from uploaded image by re-encoding as PNG
+	cleaned := stripImageMetadata(req.AvatarData)
+
+	if err := store.StoreAvatar(normalized, cleaned); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(200, gin.H{"status": "ok"})
+	// Update all connected peers for this userId with the new avatar
+	server.UpdatePeersAvatar(normalized, cleaned)
+
+	// Notify all devices of this user that their avatar changed (SSE)
+	server.SendToUserPeers(normalized, &signaling.Signal{
+		Type: "avatar-changed",
+	})
+
+	c.JSON(200, gin.H{"status": "ok", "avatarData": cleaned})
 }
 
 var avatarCache sync.Map
@@ -1173,4 +1207,32 @@ func generateID() string {
 		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
 	}
 	return string(b)
+}
+
+// stripImageMetadata decodes an image from a data URL and re-encodes as PNG,
+// stripping all EXIF and other metadata in the process.
+// Returns the original data URL if decoding fails.
+func stripImageMetadata(dataURL string) string {
+	comma := strings.Index(dataURL, ",")
+	if comma < 0 {
+		return dataURL
+	}
+	b64data := dataURL[comma+1:]
+
+	decoded, err := base64.StdEncoding.DecodeString(b64data)
+	if err != nil {
+		return dataURL
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(decoded))
+	if err != nil {
+		return dataURL
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return dataURL
+	}
+
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 }

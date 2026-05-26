@@ -274,6 +274,60 @@ func (s *Server) UnregisterSSEClient(roomId, peerId string, ch chan<- *Signal) {
 
 // ==================== HELPERS ====================
 
+// UpdatePeersAvatar updates the Avatar field on ALL connected peers for a given userId.
+func (s *Server) UpdatePeersAvatar(userId, avatar string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, peer := range s.peers {
+		if peer.UserId == userId {
+			peer.Avatar = avatar
+		}
+	}
+}
+
+// OverridePeerAvatar sets the Avatar field on a specific peer.
+func (s *Server) OverridePeerAvatar(roomId, peerId, avatar string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := peerKey(roomId, peerId)
+	peer, ok := s.peers[key]
+	if !ok {
+		return false
+	}
+	peer.Avatar = avatar
+	return true
+}
+
+// SendToUserPeers sends a signal to all SSE-connected peers of a given userId.
+func (s *Server) SendToUserPeers(userId string, signal *Signal) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, peer := range s.peers {
+		if peer.UserId == userId {
+			key := peerKey(peer.RoomId, peer.PeerId)
+			if clients, ok := s.sseClients[key]; ok {
+				for ch := range clients {
+					select {
+					case ch <- signal:
+					default:
+					}
+				}
+			}
+		}
+	}
+}
+
+// GetPeerUserId returns the userId for a given peer connection.
+func (s *Server) GetPeerUserId(roomId, peerId string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key := peerKey(roomId, peerId)
+	if p, ok := s.peers[key]; ok {
+		return p.UserId
+	}
+	return ""
+}
+
 func (s *Server) IsUserOnline(userId string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
