@@ -1,8 +1,9 @@
 data/
-tract-server
 .git/
 .gitignore
-*.md
 .vscode/
 .idea/
+.kilo/
 node_modules/
+dist/
+tract-server
