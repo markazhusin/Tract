@@ -18,4 +18,5 @@ WORKDIR /app
 COPY --from=frontend /app/dist ./dist
 COPY --from=backend /app/tract-server .
 EXPOSE 8877
+VOLUME /app/data
 CMD ["./tract-server"]

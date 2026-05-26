@@ -1011,8 +1011,15 @@ async function init() {
       const auth = await unlockIdentity(sessionPw);
       await bootstrapAuthenticatedSession(auth);
       return;
-    } catch {
-      sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+    } catch (error) {
+      console.error('Auto-login failed:', error);
+      // Only clear session storage on decrypt error, keep localStorage password for retry
+      if (error.name === 'OperationError') {
+        sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+        localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+      } else {
+        sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+      }
     }
   }
 
@@ -1282,9 +1289,9 @@ window.loginAccount = async () => {
 
   $('authError').textContent = '';
 
+  let auth;
   try {
     const sameLocalLogin = storedIdentity?.userId && normalizeLogin(storedIdentity.userId) === login;
-    let auth;
     if (sameLocalLogin) {
       auth = await unlockIdentity(password);
     } else {
@@ -1297,13 +1304,26 @@ window.loginAccount = async () => {
         return;
       }
     }
+  } catch (error) {
+    console.error('Login decrypt failed:', error);
+    if (error.name === 'OperationError') {
+      $('authError').textContent = 'Неверный пароль';
+    } else if (error.message?.includes('Identity not found')) {
+      $('authError').textContent = 'Аккаунт не найден';
+    } else {
+      $('authError').textContent = `Ошибка: ${error.message || 'неизвестная'}`;
+    }
+    return;
+  }
+
+  try {
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
     await uploadIdentityToServer(resolveSignalingUrl());
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
-    console.error('Login failed:', error);
-    $('authError').textContent = 'Неверный пароль';
+    console.error('Login session start failed:', error);
+    $('authError').textContent = `Ошибка: ${error.message || 'не удалось открыть сессию'}`;
   }
 };
 
