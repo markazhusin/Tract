@@ -241,6 +241,10 @@ func setupRoutes(router *gin.Engine) {
 	router.POST("/groups/message", handleGroupMessage)
 	router.POST("/groups/delete-messages", handleGroupDeleteMessages)
 
+	// Messaging (pending/delayed for offline users)
+	router.POST("/messaging/pending", handleQueuePendingMessage)
+	router.POST("/messaging/flush-pending", handleFlushPendingMessages)
+
 	// Admin
 	router.POST("/admin/users", handleAdminUsers)
 	router.POST("/admin/ban", handleAdminBan)
@@ -1273,6 +1277,66 @@ func generateID() string {
 		b[i] = charset[n.Int64()]
 	}
 	return string(b)
+}
+
+// ==================== MESSAGING (PENDING FOR OFFLINE) ====================
+
+// handleQueuePendingMessage queues a message for a user who may be offline.
+// This ensures messages are delivered when the recipient comes online later.
+func handleQueuePendingMessage(c *gin.Context) {
+	var req struct {
+		ToUserId string                 `json:"toUserId"`
+		Packet   map[string]interface{} `json:"packet"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "invalid request"})
+		return
+	}
+
+	if req.ToUserId == "" || req.Packet == nil {
+		c.JSON(400, gin.H{"error": "toUserId and packet are required"})
+		return
+	}
+
+	normalized := normalizeUserId(req.ToUserId)
+	if normalized == "" {
+		c.JSON(400, gin.H{"error": "invalid toUserId"})
+		return
+	}
+
+	// Store in inbox for later delivery
+	store.EnqueuePendingMessageControl(normalized, req.Packet)
+
+	c.JSON(200, gin.H{"status": "ok"})
+}
+
+// handleFlushPendingMessages retrieves and clears pending messages for the user.
+// Called when user comes online to process queued deletion/clear commands.
+func handleFlushPendingMessages(c *gin.Context) {
+	var req struct {
+		UserId string `json:"userId"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "invalid request"})
+		return
+	}
+
+	normalized := normalizeUserId(req.UserId)
+	if normalized == "" {
+		c.JSON(400, gin.H{"error": "userId required"})
+		return
+	}
+
+	// Get and clear pending message_control packets
+	pending, err := store.GetPendingMessageControls(normalized)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{"messages": pending, "cleared": true})
 }
 
 // stripImageMetadata decodes an image from a data URL and re-encodes as PNG,

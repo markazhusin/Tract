@@ -28,8 +28,8 @@
       --online: #4dcd5e;
       --danger: #e56565;
       --call-bar: #050508;
-      --safe-bottom: env(safe-area-inset-bottom, 0px);
-      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, constant(safe-area-inset-bottom, 0px));
+      --safe-top: env(safe-area-inset-top, constant(safe-area-inset-top, 0px));
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     [hidden] { display: none !important; }
@@ -77,6 +77,7 @@
       align-items: center;
       gap: 10px;
     }
+    #appLogo { width:36px; height:36px; display:block; }
     #sidebar .sidebar-header h1 {
       font-size: 18px;
       font-weight: 600;
@@ -424,22 +425,23 @@
     }
 
     /* ===== CHAT AREA ===== */
-    #chat {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      background: var(--bg);
-    }
-    #chatHeader {
-      flex-shrink: 0;
-      padding: calc(10px + var(--safe-top)) 12px 10px;
-      background: var(--bg-header);
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
+#chat {
+       flex: 1;
+       display: flex;
+       flex-direction: column;
+       min-width: 0;
+       background: var(--bg);
+       padding-bottom: 60px;
+     }
+     #chatHeader {
+       flex-shrink: 0;
+       padding: calc(10px + var(--safe-top)) 12px 10px;
+       background: var(--bg-header);
+       border-bottom: 1px solid var(--line);
+       display: flex;
+       align-items: center;
+       gap: 8px;
+     }
     #chatHeaderMain { flex: 1; min-width: 0; }
     #chatTitle { font-size: 17px; font-weight: 600; }
     #chatSubtitle { color: var(--muted); font-size: 13px; margin-top: 1px; }
@@ -504,17 +506,17 @@
       justify-content: center;
     }
 
-    /* Messages */
-    #messages {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding: 10px 12px 6px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
+/* Messages */
+     #messages {
+       flex: 1;
+       min-height: 0;
+       overflow-y: auto;
+       -webkit-overflow-scrolling: touch;
+       padding: 10px 12px calc(60px + var(--safe-bottom));
+       display: flex;
+       flex-direction: column;
+       gap: 4px;
+     }
     .msg {
       max-width: min(480px, 80%);
       padding: 6px 10px 5px;
@@ -594,30 +596,43 @@
     .chat-menu button:hover { background: var(--panel-input); }
     .chat-menu .danger { color: var(--danger); }
 
-    /* Composer */
-    #composer {
-      flex-shrink: 0;
-      padding: 8px 10px calc(10px + var(--safe-bottom));
-      background: var(--bg-header);
-      border-top: 1px solid var(--line);
-    }
-    #chat.call-bar-visible #composer { padding-bottom: calc(88px + var(--safe-bottom)); }
-    #composerRow { display: flex; gap: 8px; align-items: center; }
-    #messageInput {
-      flex: 1;
-      background: var(--panel-input);
-      border: 1px solid transparent;
-      color: var(--text);
-      padding: 10px 16px;
-      border-radius: 22px;
-      min-width: 0;
-    }
-    #messageInput:focus { outline: none; }
-    #composerRow .btn.primary {
-      flex: 0 0 auto;
-      padding: 10px 18px;
-      border-radius: 22px;
-    }
+/* Composer */
+     #composer {
+       flex-shrink: 0;
+       padding: 8px 10px calc(10px + var(--safe-bottom));
+       background: var(--bg-header);
+       border-top: 1px solid var(--line);
+       position: fixed;
+       bottom: 0;
+       left: 380px;
+       right: 0;
+       z-index: 20;
+     }
+     #chat.call-bar-visible #composer { padding-bottom: calc(88px + var(--safe-bottom)); }
+     #composerRow { display: flex; gap: 8px; align-items: center; }
+     #messageInput {
+       flex: 1;
+       background: var(--panel-input);
+       border: 1px solid transparent;
+       color: var(--text);
+       padding: 10px 16px;
+       border-radius: 22px;
+       min-width: 0;
+     }
+     #messageInput:focus { outline: none; }
+     #sendBtn {
+       flex: 0 0 auto;
+       padding: 0;
+       width:44px;
+       height:44px;
+       border-radius: 22px;
+       display:flex;
+       align-items:center;
+       justify-content:center;
+     }
+     #sendBtn .material-icons {
+       font-size: 22px;
+     }
       /* Checkbox contact item for group member selection */
       .contact-checkbox-item {
         padding: 10px 12px;
@@ -1047,10 +1062,14 @@
           pointer-events: none;
         }
         #chat {
-          position: relative;
-          z-index: 10;
+          position: fixed;
+          inset: 0;
           width: 100%;
           min-width: 0;
+        }
+        #composer {
+          left: 0;
+          right: 0;
         }
         #chatHeader {
           padding-left: 12px;
@@ -1111,6 +1130,7 @@
   <!-- AUTH GATE -->
   <div id="authGate">
     <div id="authShell">
+      <img id="authLogo" src="/tract.svg" alt="Tract" style="width:72px;height:72px;display:block;margin:8px auto;">
       <div id="authTitle" style="text-align:center;font-size:18px;font-weight:600;margin:8px 0 4px;"></div>
       <div id="registerPanel" class="stack" style="gap:12px;" hidden>
         <div class="field">
@@ -1166,6 +1186,7 @@
     <!-- SIDEBAR -->
     <aside id="sidebar">
       <div class="sidebar-header">
+        <img id="appLogo" src="/tract.svg" alt="Tract">
         <div class="sidebar-header-right">
           <button type="button" class="sidebar-header-btn" onclick="openNewMessage()" title="Новое сообщение"><span class="material-icons">edit</span></button>
           <button type="button" class="sidebar-header-btn" onclick="switchView('settings')" title="Настройки"><span class="material-icons">settings</span></button>
@@ -1325,15 +1346,15 @@
         <button type="button" class="btn" onclick="clearMessageSelection()">Снять</button>
       </div>
 
-      <footer id="composer">
-        <div id="composerRow">
-          <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
-            onkeydown="if(event.key==='Enter') sendCurrentMessage()">
-          <button type="button" class="btn primary" id="sendBtn" onclick="sendCurrentMessage()" title="Отправить">
-            <span class="material-icons">send</span>
-          </button>
-        </div>
-      </footer>
+<footer id="composer">
+         <div id="composerRow">
+           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
+             onkeydown="if(event.key==='Enter') sendCurrentMessage()" oninput="updateSendButtonIcon()">
+           <button type="button" class="btn primary" id="sendBtn" onclick="sendCurrentMessage()" title="Отправить">
+             <span class="material-icons">mic</span>
+           </button>
+         </div>
+       </footer>
     </main>
   </div>
 
@@ -1374,7 +1395,7 @@
         </button>
         <button type="button" class="profile-page-action-btn danger" id="profileDeleteBtn" onclick="deleteContactFromProfile()">
           <span class="material-icons">delete</span>
-          Удалить
+          Удалить контакт
         </button>
       </div>
 
