@@ -373,14 +373,19 @@ export class WebRTCTransport {
       peerState.localAudioStream = null;
     }
 
-    try {
-      await peerState.audioTransceiver?.sender.replaceTrack(null);
-      if (peerState.audioTransceiver) {
-        peerState.audioTransceiver.direction = 'recvonly';
+    if (peerState.audioTransceiver) {
+      try {
+        await peerState.audioTransceiver.sender.replaceTrack(null);
+        try { peerState.audioTransceiver.sender.setStreams([]); } catch {}
+        peerState.audioTransceiver.direction = 'inactive';
+        peerState.audioTransceiver.stop();
+      } catch (e) {
+        console.warn('stopLocalAudio transceiver:', e);
       }
-    } catch (e) {
-      console.warn('stopLocalAudio replaceTrack:', e);
+      peerState.audioTransceiver = null;
     }
+
+    peerState.expectVoiceAnswer = false;
   }
 
   setLocalMicMuted(peerId, muted) {
@@ -395,7 +400,7 @@ export class WebRTCTransport {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const peerState = this.peers.get(peerId);
-      if (peerState && peerState.pc && peerState.audioTransceiver) {
+      if (peerState && peerState.pc) {
         return peerState;
       }
       await new Promise((r) => setTimeout(r, 30));
