@@ -259,10 +259,24 @@ function scheduleRemoteAudioRetry(peerId) {
   }, 500);
 }
 
+let _remoteAudioStream = null;
+
 async function bindRemoteAudioStream(stream, peerId = null) {
   const el = $('remoteAudio');
   if (!el || !stream) return;
-  el.srcObject = stream;
+
+  // Accumulate tracks into a single persistent stream so replacing srcObject
+  // doesn't kill playback (browsers may block play() on new stream objects)
+  if (!_remoteAudioStream) {
+    _remoteAudioStream = new MediaStream();
+    el.srcObject = _remoteAudioStream;
+  }
+  for (const track of stream.getAudioTracks()) {
+    if (!_remoteAudioStream.getTrackById(track.id)) {
+      _remoteAudioStream.addTrack(track);
+    }
+  }
+
   const played = await tryPlayRemoteAudio(6);
   if (!played && state.activeCall?.status === 'active') {
     const audioPeerId = peerId || state.activeCall.remotePeerId;
@@ -472,21 +486,28 @@ async function fetchAvatarFromServer(userId) {
 
 async function loadOwnAvatar() {
   if (!state.profile) return null;
-  const avatars = await fetchAvatarGalleryFromServer(state.profile.userId);
-  if (avatars.length) {
-    saveAvatarHistory(state.profile.userId, avatars);
-    renderProfileCards();
-    renderContacts();
-    return avatars[avatars.length - 1].avatarData;
-  }
 
+  // Show cached avatar immediately
   const existing = localStorage.getItem(getAvatarStorageKey(state.profile.userId));
   if (existing) {
     renderProfileCards();
     renderContacts();
-    return existing;
   }
-  return null;
+
+  // Fetch latest from server and update if available
+  try {
+    const avatars = await fetchAvatarGalleryFromServer(state.profile.userId);
+    if (avatars.length) {
+      saveAvatarHistory(state.profile.userId, avatars);
+      renderProfileCards();
+      renderContacts();
+      return avatars[avatars.length - 1].avatarData;
+    }
+  } catch (e) {
+    console.warn('loadOwnAvatar server fetch failed, using cache:', e);
+  }
+
+  return existing || null;
 }
 
 async function ensureAvatarForContact(userId, contact = state.contacts.get(userId)) {
@@ -1361,6 +1382,7 @@ window.logoutAccount = async () => {
   stopRingTone();
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
+  _remoteAudioStream = null;
   state.activeCall = null;
   state.micMuted = false;
   state.unreadCounts.clear();
@@ -2760,7 +2782,7 @@ function renderContacts() {
       ? 'Заблокирован'
       : contact.lastMsg
         ? truncate(contact.lastMsg, 40)
-        : (contact.online ? 'В сети' : 'Не в сети');
+        : '';
     const time = contact.lastTime ? formatDate(contact.lastTime) : '';
 
     const btn = document.createElement('button');
@@ -2784,7 +2806,7 @@ function renderContacts() {
           <span class="contact-name${unread > 0 ? ' has-unread' : ''}">${escapeHtml(getContactLabel(contact))}</span>
           <span class="contact-time">${time}</span>
         </div>
-        <span class="contact-preview${unread > 0 ? ' has-unread' : ''}">${escapeHtml(preview)}</span>
+        ${preview ? `<span class="contact-preview${unread > 0 ? ' has-unread' : ''}">${escapeHtml(preview)}</span>` : ''}
       </div>
       ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
     `;
@@ -2944,6 +2966,7 @@ async function hangupCallAudio(peerId) {
   state.remoteAudioNeedsUnlock = false;
   const ra = $('remoteAudio');
   if (ra) ra.srcObject = null;
+  _remoteAudioStream = null;
   if (state.transport && peerId) {
     await state.transport.stopLocalAudio(peerId);
   }
@@ -3125,6 +3148,14 @@ async function handleCallControl(packet, fromPeerId) {
     startRingTone('incoming');
     updateCallBar();
     updateMobileLayout();
+
+    // Show system notification if app is in background
+    const resolvedName = existingContact?.displayName || packet.senderName || peerUserId;
+    notifyNewMessage({
+      chatId: peerUserId,
+      title: 'Входящий звонок',
+      body: `${resolvedName} звонит вам`
+    });
     return;
   }
 
@@ -3378,7 +3409,8 @@ window.answerVoiceCall = async () => {
     ac.status = 'active';
     updateCallBar();
 
-    // Start audio (callee sends renegotiation offer with sendrecv)
+    // Ensure peer connection exists with data channel and audio transceiver
+    // (callee does NOT renegotiate here — only the caller sends audio offer)
     await state.transport.startAudioCallWithLocalMedia(peerId, { asOfferer: false });
 
     // Notify caller that we accepted
@@ -3393,6 +3425,17 @@ window.answerVoiceCall = async () => {
     );
 
     await playRemoteAudioIfReady(peerId);
+
+    // Add callee's microphone after a delay to avoid SDP glare with caller's audio offer
+    setTimeout(async () => {
+      try {
+        if (state.activeCall?.status === 'active') {
+          await state.transport.addLocalMic(peerId);
+        }
+      } catch (e) {
+        console.warn('Add mic failed:', e);
+      }
+    }, 1500);
   } catch (e) {
     console.warn('Answer failed:', e);
     stopRingTone();

@@ -324,7 +324,41 @@ export class WebRTCTransport {
       }
     }
 
-    await this.prepareAndSendAudioOffer(peerId);
+    // Only the offerer starts renegotiation for audio
+    // The answerer adds their mic later via addLocalMic() after the remote audio is established
+    if (asOfferer) {
+      await this.prepareAndSendAudioOffer(peerId);
+    }
+  }
+
+  async addLocalMic(peerId) {
+    const peerState = this.peers.get(peerId);
+    if (!peerState?.pc) throw new Error('No peer connection');
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: false
+    }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true, video: false }));
+
+    peerState.localAudioStream = stream;
+    const track = stream.getAudioTracks()[0];
+
+    if (!peerState.audioTransceiver) {
+      peerState.audioTransceiver = peerState.pc.addTransceiver(track);
+    }
+
+    await peerState.audioTransceiver.sender.replaceTrack(track);
+    try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
+    peerState.audioTransceiver.direction = 'sendrecv';
+
+    if (peerState.pc.remoteDescription) {
+      const stable = await this.waitForStableSignaling(peerId, 8000);
+      if (!stable) throw new Error('Signaling state not stable for renegotiation');
+    }
+
+    const offer = await peerState.pc.createOffer();
+    await peerState.pc.setLocalDescription(offer);
+    await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
   }
 
   async stopLocalAudio(peerId) {
@@ -409,6 +443,15 @@ export class WebRTCTransport {
     }
 
     this.ensureAudioReceive(peerState);
+
+    // SDP glare handling: if we have a pending local offer, roll it back
+    if (peerState.pc.signalingState === 'have-local-offer') {
+      try {
+        await peerState.pc.setLocalDescription({ type: 'rollback' });
+      } catch (e) {
+        console.warn('Glare rollback failed:', e);
+      }
+    }
 
     if (peerState.pc.remoteDescription) {
       // Renegotiation offer (e.g. callee adding audio track)
