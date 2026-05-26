@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
@@ -169,13 +171,13 @@ func (s *Storage) GetIdentity(userId string) (string, int64, bool) {
 // ==================== INBOX ====================
 
 func (s *Storage) GetInbox(userId string) ([]*InboxEntry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	entries := s.inboxes[userId]
 	if entries == nil {
 		return []*InboxEntry{}, nil
 	}
-	// Filter out expired call entries
+	// Filter out expired call entries and persist the cleanup
 	now := time.Now().UnixMilli()
 	fresh := make([]*InboxEntry, 0, len(entries))
 	for _, e := range entries {
@@ -187,6 +189,10 @@ func (s *Storage) GetInbox(userId string) ([]*InboxEntry, error) {
 			}
 		}
 		fresh = append(fresh, e)
+	}
+	if len(fresh) != len(entries) {
+		s.inboxes[userId] = fresh
+		s.saveJSON("message-inbox.json", s.inboxes)
 	}
 	return fresh, nil
 }
@@ -244,11 +250,15 @@ func (s *Storage) EnqueueAppPacket(toUserId, from, fromUserId string, payload ma
 		s.inboxes[toUserId] = make([]*InboxEntry, 0)
 	}
 
+	entryType := "app_packet"
+	if pt, ok := payload["type"].(string); ok {
+		entryType = pt
+	}
 	entry := &InboxEntry{
 		Id:         generateID(),
 		From:       from,
 		FromUserId: fromUserId,
-		Type:       "app_packet",
+		Type:       entryType,
 		Payload:    payload,
 		Timestamp:  time.Now().UnixMilli(),
 	}
@@ -528,13 +538,13 @@ func (s *Storage) DeleteGroup(groupId string, userId string) error {
 
 // SendGroupMessage enqueues a message to all group members except the sender.
 // Returns the number of successfully delivered messages.
-func (s *Storage) SendGroupMessage(groupId string, fromUserId string, packet map[string]interface{}) (int, error) {
+func (s *Storage) SendGroupMessage(groupId string, fromUserId string, packet map[string]interface{}) (int, string, error) {
 	s.mu.RLock()
 	group, ok := s.groups[groupId]
 	s.mu.RUnlock()
 
 	if !ok {
-		return 0, os.ErrNotExist
+		return 0, "", os.ErrNotExist
 	}
 
 	perRecipient, _ := packet["perRecipient"].(map[string]interface{})
@@ -590,7 +600,7 @@ func (s *Storage) SendGroupMessage(groupId string, fromUserId string, packet map
 	}
 
 	s.saveJSON("message-inbox.json", s.inboxes)
-	return deliveredCount, nil
+	return deliveredCount, messageId, nil
 }
 
 func (s *Storage) DeleteGroupMessages(groupId string, userId string, packetIds []string) (int, error) {
@@ -761,7 +771,8 @@ func generateID() string {
 	const chars = "0123456789abcdef"
 	b := make([]byte, 32)
 	for i := range b {
-		b[i] = chars[time.Now().UnixNano()%16]
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		b[i] = chars[n.Int64()]
 	}
 	return string(b)
 }

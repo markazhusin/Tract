@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -69,7 +71,6 @@ func main() {
 
 	config := cors.DefaultConfig()
 	config.AllowAllOrigins = true
-	config.AllowCredentials = true
 	config.AllowHeaders = []string{"*"}
 	router.Use(cors.New(config))
 
@@ -91,6 +92,8 @@ func main() {
 	if _, err := os.Stat(distDir); err == nil {
 		router.Static("/assets", filepath.Join(distDir, "assets"))
 		router.StaticFile("/manifest.webmanifest", filepath.Join(distDir, "manifest.webmanifest"))
+		router.StaticFile("/sw.js", filepath.Join(distDir, "sw.js"))
+		router.StaticFile("/favicon.ico", filepath.Join(distDir, "favicon.ico"))
 		router.NoRoute(func(c *gin.Context) {
 			if c.Request.Method == "GET" {
 				c.File(filepath.Join(distDir, "index.html"))
@@ -175,15 +178,18 @@ func generateShortID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 8)
 	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
 	}
 	return string(b)
 }
 
 func normalizeUserId(value string) string {
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
 	}
+	value = strings.ToLower(value)
 	if value[0] == '@' {
 		return value
 	}
@@ -325,6 +331,10 @@ func handlePeerRegister(c *gin.Context) {
 		return
 	}
 
+	if req.DisplayName == "" {
+		req.DisplayName = req.UserId
+	}
+
 	normalized := normalizeUserId(req.UserId)
 	if store.IsBanned(normalized) {
 		c.JSON(403, gin.H{"error": "user is banned"})
@@ -422,6 +432,8 @@ func handleSignal(c *gin.Context) {
 		return
 	}
 
+	persisted := false
+
 	// Handle inbox operations for message_control
 	if req.Payload != nil {
 		var payloadMap map[string]interface{}
@@ -470,8 +482,8 @@ func handleSignal(c *gin.Context) {
 			}
 		}
 
-		// Persist app_packet to inbox
-		if payloadMap != nil {
+		// Persist app_packet to inbox (must match JS: outer type === 'app_packet')
+		if payloadMap != nil && req.Type == "app_packet" {
 			if ptype, ok := payloadMap["type"].(string); ok && (ptype == "text" || ptype == "message_control" || ptype == "call") && req.ToUserId != "" {
 				recipientUserId := normalizeUserId(req.ToUserId)
 				if recipientUserId != "" {
@@ -480,6 +492,7 @@ func handleSignal(c *gin.Context) {
 						fromUserId = s
 					}
 					store.EnqueueAppPacket(recipientUserId, req.From, fromUserId, payloadMap)
+					persisted = true
 				}
 			}
 		}
@@ -504,7 +517,7 @@ func handleSignal(c *gin.Context) {
 		server.SendSignal(req.RoomId, targetPeerId, signal)
 	}
 
-	c.JSON(200, gin.H{"status": "queued"})
+	c.JSON(200, gin.H{"status": "queued", "persisted": persisted})
 }
 
 func handleSignalPoll(c *gin.Context) {
@@ -736,6 +749,10 @@ func handleGroupCreate(c *gin.Context) {
 		return
 	}
 
+	if req.Name == "" {
+		req.Name = "Unnamed Group"
+	}
+
 	memberList := req.Members
 	if memberList == nil {
 		memberList = make([]map[string]interface{}, 0)
@@ -770,9 +787,9 @@ func handleGroupCreate(c *gin.Context) {
 		return
 	}
 
-	// Notify members
+	// Notify all members (including creator, matching JS behavior)
 	for _, member := range memberList {
-		if uid, ok := member["userId"].(string); ok && uid != req.CreatedBy {
+		if uid, ok := member["userId"].(string); ok {
 			store.EnqueueInboxMessage(uid, map[string]interface{}{
 				"type":    "group_event",
 				"action":  "created",
@@ -809,10 +826,18 @@ func handleGroupAddMembers(c *gin.Context) {
 		return
 	}
 
+	// Only include members that were actually added (not already present)
 	added := make([]string, 0)
-	for _, m := range req.Members {
+	existing := make(map[string]bool)
+	for _, m := range group.Members {
 		if uid, ok := m["userId"].(string); ok {
+			existing[uid] = true
+		}
+	}
+	for _, m := range req.Members {
+		if uid, ok := m["userId"].(string); ok && !existing[uid] {
 			added = append(added, uid)
+			existing[uid] = true
 		}
 	}
 
@@ -902,16 +927,18 @@ func handleGroupDelete(c *gin.Context) {
 		return
 	}
 
-	// Clean up inbox messages for all members
-	store.DeleteInboxMessagesByGroupId(req.GroupId)
-
-	// Notify all members
+	// Clean up inbox messages for group members only (matching JS behavior)
 	memberIds := make([]string, 0)
 	for _, m := range group.Members {
 		if uid, ok := m["userId"].(string); ok {
 			memberIds = append(memberIds, uid)
+			store.RemoveInboxEntries(uid, func(entry *storage.InboxEntry) bool {
+				return entry.GroupId == req.GroupId || (entry.Payload != nil && entry.Payload["groupId"] == req.GroupId)
+			})
 		}
 	}
+
+	// Notify all members (including requester, matching JS behavior)
 	for _, memberId := range memberIds {
 		store.EnqueueInboxMessage(memberId, map[string]interface{}{
 			"type":      "group_event",
@@ -954,7 +981,7 @@ func handleGroupMessage(c *gin.Context) {
 		return
 	}
 
-	deliveredCount, err := store.SendGroupMessage(req.GroupId, req.FromUserId, req.Packet)
+	deliveredCount, messageId, err := store.SendGroupMessage(req.GroupId, req.FromUserId, req.Packet)
 	if err != nil {
 		if err == os.ErrNotExist {
 			c.JSON(404, gin.H{"error": "group not found"})
@@ -969,7 +996,6 @@ func handleGroupMessage(c *gin.Context) {
 		return
 	}
 
-	messageId := generateID()
 	c.JSON(200, gin.H{"status": "ok", "messageId": messageId, "deliveredCount": deliveredCount})
 }
 
@@ -1000,19 +1026,18 @@ func handleGroupDeleteMessages(c *gin.Context) {
 		return
 	}
 
-	// Notify members with deletion signal
+	// Notify all members with deletion signal (including requester, matching JS)
 	group, _ := store.GetGroup(req.GroupId)
 	if group != nil {
-		deletionSignal := map[string]interface{}{
-			"type":      "message_control",
-			"action":    "delete_messages",
-			"packetIds": req.PacketIds,
-			"senderId":  req.UserId,
-			"recipientId": req.GroupId,
-		}
 		for _, member := range group.Members {
-			if uid, ok := member["userId"].(string); ok && uid != req.UserId {
-				store.EnqueueInboxMessage(uid, deletionSignal)
+			if uid, ok := member["userId"].(string); ok {
+				store.EnqueueInboxMessage(uid, map[string]interface{}{
+					"type":      "message_control",
+					"action":    "delete_messages",
+					"packetIds": req.PacketIds,
+					"senderId":  req.UserId,
+					"recipientId": req.GroupId,
+				})
 			}
 		}
 	}
@@ -1224,7 +1249,8 @@ func generateID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 32)
 	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
 	}
 	return string(b)
 }
