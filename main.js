@@ -748,6 +748,14 @@ async function init() {
 
   if (identity && sessionPw) {
     try {
+      const banned = await checkUserBanned(identity.userId);
+      if (banned) {
+        sessionStorage.removeItem(SESSION_PASSWORD_KEY);
+        localStorage.removeItem(REMEMBER_PASSWORD_KEY);
+        showLogin();
+        $('authError').textContent = 'Аккаунт заблокирован';
+        return;
+      }
       const auth = await unlockIdentity(sessionPw);
       await bootstrapAuthenticatedSession(auth);
       return;
@@ -756,25 +764,24 @@ async function init() {
     }
   }
 
+  if (window._pendingInviteCode) {
+    const code = window._pendingInviteCode;
+    window._pendingInviteCode = null;
+    showRegister(code);
+    return;
+  }
+
   if (identity) {
-    $('loginUserId').textContent = identity.userId;
     const loginInput = $('loginName');
-    if (loginInput) loginInput.value = identity.userId;
-    openGate('login', {
-      title: 'Вход в Tract',
-      hint: 'Введите логин и пароль.'
-    });
+    if (loginInput) loginInput.value = identity.userId.replace(/^@/, '');
+    showLogin();
   } else if (legacyIdentity) {
-    $('registerName').value = legacyIdentity.profile.displayName;
-    openGate('register', {
-      title: 'Завершение миграции аккаунта',
-      hint: `Найдена старая локальная identity ${legacyIdentity.profile.userId}. Задайте пароль, чтобы сохранить этот аккаунт в новой модели входа.`
-    });
+    $('regName').value = legacyIdentity.profile.displayName.replace(/^@/, '');
+    $('regInviteCode').value = 'legacy-migration';
+    $('regInviteCode').readOnly = true;
+    showRegister();
   } else {
-    openGate('login', {
-      title: 'Вход в Tract',
-      hint: 'Введите логин и пароль. Если у вас ещё нет аккаунта, нажмите "Новый аккаунт".'
-    });
+    showLogin();
   }
 
   setStatus('offline', 'Аккаунт не разблокирован');
@@ -788,12 +795,20 @@ function applyInviteParams() {
   const params = new URLSearchParams(window.location.search);
   const signal = params.get('signal');
   const room = params.get('room');
+  const invite = params.get('invite');
 
   if (signal) {
     localStorage.setItem(SIGNALING_URL_KEY, signal);
   }
   if (room) {
     localStorage.setItem(ROOM_ID_KEY, room);
+  }
+
+  if (invite) {
+    window._pendingInviteCode = invite;
+    const url = new URL(window.location);
+    url.searchParams.delete('invite');
+    window.history.replaceState({}, '', url);
   }
 }
 
@@ -838,7 +853,6 @@ function openGate(mode, copy = {}) {
   $('registerPanel').hidden = mode !== 'register';
   $('loginPanel').hidden = mode !== 'login';
   $('authTitle').textContent = copy.title || (mode === 'login' ? 'Вход в Tract' : 'Регистрация в Tract');
-  $('authHint').textContent = copy.hint || '';
   $('authError').textContent = '';
 }
 
@@ -847,19 +861,59 @@ function closeGate() {
   $('app').hidden = false;
 }
 
-window.showRegister = () => openGate('register', {
-  title: 'Регистрация в Tract',
-  hint: 'Создайте логин вида @login и пароль.'
-});
+window.onLoginNameInput = async () => {
+  const input = $('loginName');
+  const passwordField = $('loginPasswordField');
+  const loginBtn = $('loginBtn');
+  if (!input || !passwordField || !loginBtn) return;
+
+  const raw = input.value.replace(/^@+/, '');
+  input.value = raw;
+  const login = normalizeLogin(raw);
+
+  if (isValidLogin(login)) {
+    const exists = await checkUserExists(login);
+    const banned = await checkUserBanned(login);
+    if (exists && !banned) {
+      passwordField.hidden = false;
+      loginBtn.textContent = 'Войти';
+      $('authError').textContent = '';
+      return;
+    }
+    if (banned) {
+      passwordField.hidden = true;
+      loginBtn.textContent = 'Войти';
+      $('authError').textContent = 'Аккаунт заблокирован';
+      return;
+    }
+  }
+  passwordField.hidden = true;
+  loginBtn.textContent = 'Войти';
+};
+
+window.showRegister = (inviteCode) => {
+  $('authGate').hidden = false;
+  $('registerPanel').hidden = false;
+  $('loginPanel').hidden = true;
+  $('authTitle').textContent = 'Регистрация в Tract';
+  $('authError').textContent = '';
+  if (inviteCode) {
+    $('regInviteCode').value = inviteCode;
+    $('regInviteCode').readOnly = true;
+  }
+};
 window.showLogin = () => {
-  const identity = getStoredIdentityMetadata();
-  $('loginUserId').textContent = identity?.userId || '@login';
-  const loginInput = $('loginName');
-  if (loginInput && identity?.userId) loginInput.value = identity.userId;
-  openGate('login', {
-    title: 'Вход в Tract',
-    hint: 'Введите логин и пароль.'
-  });
+  $('authGate').hidden = false;
+  $('registerPanel').hidden = true;
+  $('loginPanel').hidden = false;
+  $('authTitle').textContent = 'Вход в Tract';
+  $('authError').textContent = '';
+  $('loginPasswordField').hidden = true;
+  $('loginPassword').value = '';
+  $('loginName').value = '';
+  $('loginName').focus();
+  // Trigger check if pre-filled
+  if (window.onLoginNameInput) setTimeout(window.onLoginNameInput, 100);
 };
 
 window.registerAccount = async () => {
@@ -869,12 +923,24 @@ window.registerAccount = async () => {
     return;
   }
 
-  const login = normalizeLogin($('registerName').value);
-  const password = $('registerPassword').value;
-  const confirm = $('registerPasswordConfirm').value;
+  const inviteCode = ($('regInviteCode')?.value || '').trim();
+  const rawLogin = ($('regName')?.value || '').replace(/^@+/, '');
+  const login = normalizeLogin(rawLogin);
+  const password = $('regPassword')?.value || '';
+  const confirm = $('regPasswordConfirm')?.value || '';
+
+  if (!inviteCode) {
+    $('authError').textContent = 'Введите код приглашения';
+    return;
+  }
+
+  if (inviteCode === 'legacy-migration') {
+    $('authError').textContent = 'Миграция больше не поддерживается. Используйте новый аккаунт.';
+    return;
+  }
 
   if (!isValidLogin(login)) {
-    $('authError').textContent = 'Логин должен быть вида @login: латиница, цифры или _, 3-32 символа';
+    $('authError').textContent = 'ID должен быть вида @login: латиница, цифры или _, 3-32 символа';
     return;
   }
 
@@ -891,10 +957,22 @@ window.registerAccount = async () => {
   $('authError').textContent = '';
 
   try {
-    const auth = await registerIdentity(password, login, { reuseLegacy: true, userId: login });
+    const serverUrl = resolveSignalingUrl();
+    const useResp = await fetch(new URL('/admin/invite/use', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: inviteCode, userId: login })
+    });
+    if (!useResp.ok) {
+      const errData = await useResp.json().catch(() => ({}));
+      $('authError').textContent = errData.error || 'Недействительный код приглашения';
+      return;
+    }
+
+    const auth = await registerIdentity(password, login, { reuseLegacy: false, userId: login });
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
-    await uploadIdentityToServer(resolveSignalingUrl());
+    await uploadIdentityToServer(serverUrl);
     await bootstrapAuthenticatedSession(auth);
   } catch (error) {
     console.error('Register failed:', error);
@@ -909,11 +987,18 @@ window.loginAccount = async () => {
     return;
   }
   const storedIdentity = getStoredIdentityMetadata();
-  const login = normalizeLogin($('loginName')?.value || $('loginUserId')?.textContent);
+  const rawLogin = ($('loginName')?.value || '').replace(/^@+/, '');
+  const login = normalizeLogin(rawLogin);
   const password = $('loginPassword').value;
 
   if (!isValidLogin(login)) {
     $('authError').textContent = 'Введите логин вида @login';
+    return;
+  }
+
+  const banned = await checkUserBanned(login);
+  if (banned) {
+    $('authError').textContent = 'Аккаунт заблокирован';
     return;
   }
 
@@ -923,14 +1008,13 @@ window.loginAccount = async () => {
   }
 
   if (storedIdentity && storedIdentity.simple && normalizeLogin(storedIdentity.userId) === login) {
-    // simple identity: no password required
     try {
       const auth = unlockSimpleIdentity();
       await uploadIdentityToServer(resolveSignalingUrl());
       await bootstrapAuthenticatedSession(auth);
     } catch (e) {
       console.error('Simple login failed:', e);
-      $('authError').textContent = 'Не удалось войти в простой аккаунт';
+      $('authError').textContent = 'Не удалось войти';
     }
     return;
   }
@@ -948,7 +1032,7 @@ window.loginAccount = async () => {
       if (fetched) {
         auth = await unlockIdentity(password);
       } else {
-        $('authError').textContent = 'Аккаунт не найден на сервере. Сначала создайте аккаунт.';
+        $('authError').textContent = 'Аккаунт не найден';
         return;
       }
     }
@@ -986,8 +1070,8 @@ async function bootstrapAuthenticatedSession(auth) {
   const selfPeerId = $('selfPeerId');
   if (selfPeerId) selfPeerId.textContent = state.myPeerId;
   $('displayNameInput').value = state.profile.displayName;
-  $('registerPassword').value = '';
-  $('registerPasswordConfirm').value = '';
+  $('regPassword').value = '';
+  $('regPasswordConfirm').value = '';
   $('loginPassword').value = '';
 
   closeGate();
@@ -998,6 +1082,14 @@ async function bootstrapAuthenticatedSession(auth) {
   setStatus('offline', 'Аккаунт разблокирован, сеть не подключена');
   await updateInviteArtifacts();
   updateMobileLayout();
+
+  if (state.profile?.userId === '@tract-admin') {
+    const panel = $('adminPanel');
+    const section = $('adminSection');
+    if (panel) panel.style.display = '';
+    if (section) section.style.display = 'flex';
+    loadAdminUsers();
+  }
 
   // Periodic contact & group sync across devices
   if (window._contactSyncTimer) clearInterval(window._contactSyncTimer);
@@ -1018,6 +1110,10 @@ async function bootstrapAuthenticatedSession(auth) {
 }
 
 window.logoutAccount = async () => {
+  const adminPanel = $('adminPanel');
+  const adminSection = $('adminSection');
+  if (adminPanel) adminPanel.style.display = 'none';
+  if (adminSection) adminSection.style.display = 'none';
   sessionStorage.removeItem(SESSION_PASSWORD_KEY);
   localStorage.removeItem(REMEMBER_PASSWORD_KEY);
   clearInterval(inboxTimer);
@@ -1059,23 +1155,16 @@ window.logoutAccount = async () => {
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
   if (identity) {
-    $('loginUserId').textContent = identity.userId;
     const loginInput = $('loginName');
-    if (loginInput) loginInput.value = identity.userId;
-    openGate('login', {
-      title: 'Вход в Tract',
-      hint: 'Введите пароль, чтобы снова войти в аккаунт.'
-    });
+    if (loginInput) loginInput.value = identity.userId.replace(/^@/, '');
+    showLogin();
   } else if (legacyIdentity) {
-    openGate('register', {
-      title: 'Завершение миграции аккаунта',
-      hint: `Найдена старая локальная identity ${legacyIdentity.profile.userId}. Задайте пароль для продолжения.`
-    });
+    $('regName').value = legacyIdentity.profile.displayName.replace(/^@/, '');
+    $('regInviteCode').value = 'legacy-migration';
+    $('regInviteCode').readOnly = true;
+    showRegister();
   } else {
-    openGate('register', {
-      title: 'Регистрация в Tract',
-      hint: 'Создайте новый локальный аккаунт.'
-    });
+    showLogin();
   }
 };
 
@@ -1272,12 +1361,12 @@ window.connectHandshake = async () => {
         await bootstrapAuthenticatedSession(auth);
       } catch (e) {
         console.warn('Auto-unlock simple identity failed:', e);
-        openGate(getStoredIdentityMetadata() ? 'login' : 'register');
+        if (getStoredIdentityMetadata()) showLogin(); else showRegister();
       }
       return;
     }
 
-    openGate(getStoredIdentityMetadata() ? 'login' : 'register');
+    if (getStoredIdentityMetadata()) showLogin(); else showRegister();
     return;
   }
 
@@ -1449,6 +1538,19 @@ async function checkUserExists(userId) {
   try {
     const response = await fetch(new URL(`/identity/${encodeURIComponent(userId)}`, serverUrl));
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function checkUserBanned(userId) {
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return false;
+  try {
+    const response = await fetch(new URL(`/admin/check-banned/${encodeURIComponent(userId)}`, serverUrl));
+    if (!response.ok) return false;
+    const data = await response.json();
+    return data.banned || false;
   } catch {
     return false;
   }
@@ -1784,7 +1886,8 @@ window.deleteGroup = async () => {
 window.addContactById = async () => {
   const primaryInput = $('addUserId');
   const sourceInput = primaryInput;
-  const userId = normalizeLogin(sourceInput?.value);
+  const raw = (sourceInput?.value || '').replace(/^@+/, '');
+  const userId = normalizeLogin(raw);
   if (!userId || !state.profile) return;
   if (!isValidLogin(userId)) {
     setStatus('warn', 'Введите логин вида @login');
@@ -1839,6 +1942,127 @@ window.copyAppShareLink = async () => {
 };
 
 window.copyInviteLink = window.copyAppShareLink;
+
+// ==================== SUPERUSER ADMIN FUNCTIONS ====================
+
+window.generateInvite = async () => {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    const resp = await fetch(new URL('/admin/invite/create', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.profile.userId })
+    });
+    if (!resp.ok) throw new Error('Failed to create invite');
+    const data = await resp.json();
+    const inviteUrl = `${window.location.origin}/?invite=${data.code}`;
+    const resultEl = $('adminInviteResult');
+    if (resultEl) {
+      resultEl.innerHTML = `<a href="${inviteUrl}" target="_blank" style="color:var(--accent);">${inviteUrl}</a>
+        <button class="btn subtle" style="font-size:11px;padding:2px 8px;margin-top:4px;" onclick="navigator.clipboard.writeText('${inviteUrl}')">Копировать</button>`;
+    }
+    loadAdminUsers();
+  } catch (e) {
+    console.warn('Generate invite failed:', e);
+  }
+};
+
+async function loadAdminUsers() {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    const resp = await fetch(new URL('/admin/users', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.profile.userId })
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const list = $('adminUserList');
+    if (!list) return;
+    list.innerHTML = '';
+    for (const user of data.users || []) {
+      if (user.userId === state.profile.userId) continue;
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);font-size:13px;';
+      const avatarDiv = document.createElement('div');
+      avatarDiv.style.cssText = 'width:28px;height:28px;border-radius:50%;overflow:hidden;background:var(--panel-input);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;';
+      if (user.hasAvatar) {
+        avatarDiv.innerHTML = `<img src="${new URL(`/profile/avatar/${encodeURIComponent(user.userId)}`, serverUrl)}" style="width:100%;height:100%;object-fit:cover;">`;
+      } else {
+        avatarDiv.textContent = (user.displayName || user.userId).charAt(1).toUpperCase() || '?';
+      }
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;';
+      const nameSpan = document.createElement('div');
+      nameSpan.textContent = user.displayName || user.userId;
+      nameSpan.style.cssText = 'font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      const idSpan = document.createElement('div');
+      idSpan.textContent = user.userId;
+      idSpan.style.cssText = 'font-size:11px;color:var(--muted);';
+      info.appendChild(nameSpan);
+      info.appendChild(idSpan);
+      const statusSpan = document.createElement('span');
+      statusSpan.style.cssText = `font-size:11px;${user.online ? 'color:var(--online);' : 'color:var(--muted);'}`;
+      statusSpan.textContent = user.online ? 'online' : 'offline';
+      const banBtn = document.createElement('button');
+      banBtn.style.cssText = 'font-size:11px;padding:2px 8px;border-radius:8px;border:1px solid;';
+      if (user.banned) {
+        banBtn.textContent = 'Разбан';
+        banBtn.style.borderColor = 'var(--online)';
+        banBtn.style.color = 'var(--online)';
+        banBtn.onclick = () => unbanUser(user.userId);
+      } else {
+        banBtn.textContent = 'Бан';
+        banBtn.style.borderColor = 'var(--danger)';
+        banBtn.style.color = 'var(--danger)';
+        banBtn.onclick = () => banUser(user.userId);
+      }
+      item.appendChild(avatarDiv);
+      item.appendChild(info);
+      item.appendChild(statusSpan);
+      item.appendChild(banBtn);
+      list.appendChild(item);
+    }
+  } catch (e) {
+    console.warn('Load admin users failed:', e);
+  }
+}
+
+async function banUser(targetUserId) {
+  if (!state.profile || !confirm(`Заблокировать ${targetUserId}?`)) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    await fetch(new URL('/admin/ban', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.profile.userId, targetUserId })
+    });
+    loadAdminUsers();
+  } catch (e) {
+    console.warn('Ban failed:', e);
+  }
+}
+
+async function unbanUser(targetUserId) {
+  if (!state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (!serverUrl) return;
+  try {
+    await fetch(new URL('/admin/unban', serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: state.profile.userId, targetUserId })
+    });
+    loadAdminUsers();
+  } catch (e) {
+    console.warn('Unban failed:', e);
+  }
+}
 
 window.renameCurrentContact = async () => {
   openChatMenu();
@@ -3087,13 +3311,12 @@ function getContactLabel(contact) {
   return contact?.alias || contact?.displayName || contact?.id || '';
 }
 
-// Returns online status text respecting the contact's hideOnline preference
 function getOnlineStatusText(contact) {
   if (!contact) return 'не в сети';
   if (contact.hideOnline) return 'был(а) недавно';
   if (contact.online) return 'в сети';
   if (contact.lastSeen) {
-    return `был(а) ${formatDate(contact.lastSeen)}`;
+    return `был(а) ${formatRelativeTime(contact.lastSeen)}`;
   }
   return 'не в сети';
 }
@@ -3259,6 +3482,29 @@ function formatTime(timestamp) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+const MONTH_NAMES = ['янв.', 'фев.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сен.', 'окт.', 'ноя.', 'дек.'];
+
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMin < 1) return 'только что';
+  if (diffMin < 60) return `${diffMin} мин. назад`;
+  if (diffHours < 24) return `${diffHours} ч. назад`;
+  if (diffDays === 1) return 'вчера';
+  if (diffDays < 7) return `${diffDays} дн. назад`;
+
+  const day = date.getDate();
+  const month = MONTH_NAMES[date.getMonth()] || '???';
+  const year = date.getFullYear() !== new Date(now).getFullYear() ? ` ${date.getFullYear()}` : '';
+  return `${day} ${month}${year}`;
 }
 
 function formatDate(timestamp) {

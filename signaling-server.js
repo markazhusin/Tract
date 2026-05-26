@@ -10,6 +10,10 @@ const IDENTITY_STORE_PATH = path.join(__dirname, 'data', 'identity-store.json');
 const INBOX_STORE_PATH = path.join(__dirname, 'data', 'message-inbox.json');
 const CONTACT_STORE_PATH = path.join(__dirname, 'data', 'contact-store.json');
 const GROUP_STORE_PATH = path.join(__dirname, 'data', 'group-store.json');
+const BAN_STORE_PATH = path.join(__dirname, 'data', 'ban-store.json');
+const INVITE_STORE_PATH = path.join(__dirname, 'data', 'invite-store.json');
+
+const SUPERUSER_ID = '@tract-admin';
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +28,10 @@ const userInbox = new Map();
 const contactStore = new Map();
 /** Persistent group store */
 const groupStore = new Map();
+/** Banned user IDs (Set of @userId) */
+const banStore = new Set();
+/** One-time invite codes: code -> { usedBy, createdBy, createdAt, usedAt } */
+const inviteStore = new Map();
 const PEER_TTL_MS = 15000;
 const MAX_INBOX_PER_USER = 5000;
 const CALL_INBOX_TTL_MS = 90_000;
@@ -135,6 +143,67 @@ function saveGroupStore() {
 
 loadGroupStore();
 
+function loadBanStore() {
+  try {
+    if (fs.existsSync(BAN_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(BAN_STORE_PATH, 'utf8'));
+      if (Array.isArray(data)) {
+        for (const userId of data) banStore.add(userId);
+      }
+      console.log(`[Ban] Loaded ${banStore.size} banned users`);
+    }
+  } catch (err) {
+    console.warn('[Ban] Failed to load from disk:', err.message);
+  }
+}
+
+function saveBanStore() {
+  try {
+    const dir = path.dirname(BAN_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(BAN_STORE_PATH, JSON.stringify(Array.from(banStore)), 'utf8');
+  } catch (err) {
+    console.warn('[Ban] Failed to save to disk:', err.message);
+  }
+}
+
+function loadInviteStore() {
+  try {
+    if (fs.existsSync(INVITE_STORE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(INVITE_STORE_PATH, 'utf8'));
+      for (const [code, info] of Object.entries(data)) {
+        inviteStore.set(code, info);
+      }
+      console.log(`[Invite] Loaded ${inviteStore.size} invite codes`);
+    }
+  } catch (err) {
+    console.warn('[Invite] Failed to load from disk:', err.message);
+  }
+}
+
+function saveInviteStore() {
+  try {
+    const dir = path.dirname(INVITE_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(INVITE_STORE_PATH, JSON.stringify(Object.fromEntries(inviteStore)), 'utf8');
+  } catch (err) {
+    console.warn('[Invite] Failed to save to disk:', err.message);
+  }
+}
+
+loadBanStore();
+loadInviteStore();
+
+if (!inviteStore.has('admin-bootstrap')) {
+  const adminCode = `inv-${crypto.randomUUID().slice(0, 8)}`;
+  inviteStore.set(adminCode, { usedBy: null, createdBy: 'system', createdAt: Date.now() });
+  saveInviteStore();
+  console.log(`\n  === ADMIN BOOTSTRAP INVITE ===`);
+  console.log(`  Register the superuser at: ${adminCode}`);
+  console.log(`  URL: ?invite=${adminCode}`);
+  console.log(`  ==============================\n`);
+}
+
 function resolvePeerUserId(roomId, peerId) {
   if (!peerId) return null;
   return peers.get(peerKey(roomId, peerId))?.userId || null;
@@ -245,6 +314,11 @@ app.post('/peer/register', (req, res) => {
   const { peerId, roomId, userId, displayName, publicKeyHex, avatarData, hideOnline, lastSeen } = req.body;
   if (!peerId || !roomId || !userId) {
     return res.status(400).json({ error: 'peerId, roomId and userId are required' });
+  }
+
+  const normalized = normalizeUserId(userId);
+  if (banStore.has(normalized)) {
+    return res.status(403).json({ error: 'user is banned' });
   }
 
   const key = peerKey(roomId, peerId);
@@ -493,20 +567,130 @@ app.post('/identity/store', (req, res) => {
   if (!userId || !identityBlob) {
     return res.status(400).json({ error: 'userId and identityBlob are required' });
   }
-  identityStore.set(userId, { blob: identityBlob, updatedAt: Date.now() });
+  const normalized = normalizeUserId(userId);
+  if (banStore.has(normalized)) {
+    return res.status(403).json({ error: 'user is banned' });
+  }
+  identityStore.set(normalized, { blob: identityBlob, updatedAt: Date.now() });
   saveIdentityStore();
-  console.log(`[Identity] Stored for ${userId}`);
+  console.log(`[Identity] Stored for ${normalized}`);
   res.json({ status: 'ok' });
 });
 
 app.get('/identity/:userId', (req, res) => {
   const { userId } = req.params;
-  const record = identityStore.get(userId);
+  const normalized = normalizeUserId(userId);
+  const record = identityStore.get(normalized);
   if (!record) {
     return res.status(404).json({ error: 'identity not found' });
   }
+  if (banStore.has(normalized)) {
+    return res.status(403).json({ error: 'user is banned' });
+  }
   res.json({ identityBlob: record.blob, updatedAt: record.updatedAt });
 });
+
+// ==================== ADMIN / SUPERUSER ENDPOINTS ====================
+
+function requireSuperuser(req, res) {
+  const { userId } = req.body;
+  if (!userId || normalizeUserId(userId) !== SUPERUSER_ID) {
+    res.status(403).json({ error: 'forbidden' });
+    return false;
+  }
+  return true;
+}
+
+app.post('/admin/users', (req, res) => {
+  if (!requireSuperuser(req, res)) return;
+
+  const userList = [];
+  for (const [userId, record] of identityStore) {
+    const avatarData = record.avatarData || null;
+    let displayName = null;
+    try {
+      const blob = record.blob ? JSON.parse(record.blob) : null;
+      displayName = blob?.displayName || null;
+    } catch {}
+    const online = peers.has(userId);
+    userList.push({
+      userId,
+      displayName,
+      hasAvatar: !!avatarData,
+      online,
+      banned: banStore.has(userId)
+    });
+  }
+
+  userList.sort((a, b) => a.userId.localeCompare(b.userId));
+  res.json({ users: userList });
+});
+
+app.post('/admin/ban', (req, res) => {
+  if (!requireSuperuser(req, res)) return;
+
+  const { targetUserId } = req.body;
+  if (!targetUserId) return res.status(400).json({ error: 'targetUserId required' });
+
+  const normalized = normalizeUserId(targetUserId);
+  if (!normalized || normalized === SUPERUSER_ID) {
+    return res.status(400).json({ error: 'cannot ban superuser' });
+  }
+
+  banStore.add(normalized);
+  saveBanStore();
+  console.log(`[Admin] Banned ${normalized}`);
+  res.json({ status: 'ok', banned: normalized });
+});
+
+app.post('/admin/unban', (req, res) => {
+  if (!requireSuperuser(req, res)) return;
+
+  const { targetUserId } = req.body;
+  if (!targetUserId) return res.status(400).json({ error: 'targetUserId required' });
+
+  const normalized = normalizeUserId(targetUserId);
+  banStore.delete(normalized);
+  saveBanStore();
+  console.log(`[Admin] Unbanned ${normalized}`);
+  res.json({ status: 'ok', unbanned: normalized });
+});
+
+app.get('/admin/check-banned/:userId', (req, res) => {
+  const normalized = normalizeUserId(req.params.userId);
+  res.json({ banned: normalized ? banStore.has(normalized) : false });
+});
+
+app.post('/admin/invite/create', (req, res) => {
+  if (!requireSuperuser(req, res)) return;
+
+  const code = `inv-${crypto.randomUUID().slice(0, 12)}`;
+  inviteStore.set(code, { usedBy: null, createdBy: SUPERUSER_ID, createdAt: Date.now() });
+  saveInviteStore();
+  console.log(`[Admin] Created invite code ${code}`);
+  res.json({ status: 'ok', code });
+});
+
+app.post('/admin/invite/use', (req, res) => {
+  const { code, userId } = req.body;
+  if (!code || !userId) return res.status(400).json({ error: 'code and userId required' });
+
+  const invite = inviteStore.get(code);
+  if (!invite) return res.status(404).json({ error: 'invite code not found' });
+  if (invite.usedBy) return res.status(400).json({ error: 'invite code already used' });
+
+  const normalized = normalizeUserId(userId);
+  if (!normalized) return res.status(400).json({ error: 'invalid userId' });
+
+  invite.usedBy = normalized;
+  invite.usedAt = Date.now();
+  inviteStore.set(code, invite);
+  saveInviteStore();
+  console.log(`[Admin] Invite code ${code} used by ${normalized}`);
+  res.json({ status: 'ok' });
+});
+
+// ==================== CONTACTS ====================
 
 app.post('/contacts/save', (req, res) => {
   const { userId, contacts } = req.body;

@@ -907,6 +907,16 @@
         justify-content: center;
       }
       #authGate[hidden] { display: none; }
+      .input-prefix {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--muted);
+        font-size: 16px;
+        pointer-events: none;
+        z-index: 1;
+      }
 
       /* App hidden before auth */
       #app[hidden] { display: none; }
@@ -1001,34 +1011,43 @@
   <div id="authGate">
     <div id="authShell">
       <img src="assets/tract.svg" alt="Tract" style="width:120px;height:auto;margin:0 auto;">
-      <div id="registerPanel" class="stack" style="gap:12px;">
+      <div id="authTitle" style="text-align:center;font-size:18px;font-weight:600;margin:8px 0 4px;"></div>
+      <div id="registerPanel" class="stack" style="gap:12px;" hidden>
         <div class="field">
-          <label>Логин</label>
-          <input id="registerName" type="text" placeholder="@login" autocomplete="username">
+          <label>Код приглашения</label>
+          <input id="regInviteCode" type="text" placeholder="Код из ссылки" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>ID</label>
+          <div style="position:relative;">
+            <span class="input-prefix">@</span>
+            <input id="regName" type="text" placeholder="login" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="padding-left:28px;">
+          </div>
         </div>
         <div class="field">
           <label>Пароль</label>
-          <input id="registerPassword" type="password" placeholder="Не короче 6 символов">
+          <input id="regPassword" type="password" placeholder="Не короче 6 символов" autocomplete="new-password">
         </div>
         <div class="field">
           <label>Повтор пароля</label>
-          <input id="registerPasswordConfirm" type="password" placeholder="Ещё раз">
+          <input id="regPasswordConfirm" type="password" placeholder="Ещё раз" autocomplete="new-password">
         </div>
         <button class="btn primary" type="button" onclick="registerAccount()">Создать аккаунт</button>
         <button class="btn subtle" type="button" onclick="showLogin()">Уже есть аккаунт</button>
       </div>
-      <div id="loginPanel" class="stack" hidden style="gap:12px;">
-        <div class="auth-hint">Аккаунт: <span id="loginUserId">...</span></div>
+      <div id="loginPanel" class="stack" style="gap:12px;">
         <div class="field">
           <label>Логин</label>
-          <input id="loginName" type="text" placeholder="@login" autocomplete="username">
+          <div style="position:relative;">
+            <span class="input-prefix">@</span>
+            <input id="loginName" type="text" placeholder="login" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="padding-left:28px;" oninput="onLoginNameInput()">
+          </div>
         </div>
-        <div class="field">
+        <div id="loginPasswordField" class="field" hidden>
           <label>Пароль</label>
-          <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="current-password">
+          <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="off">
         </div>
-        <button class="btn primary" type="button" onclick="loginAccount()">Войти</button>
-        <button class="btn subtle" type="button" onclick="showRegister()">Новый аккаунт</button>
+        <button class="btn primary" type="button" onclick="loginAccount()" id="loginBtn">Войти</button>
       </div>
       <div id="authError"></div>
     </div>
@@ -1054,8 +1073,9 @@
 
       <!-- Search -->
       <div class="search-section">
-        <div class="search-row">
-          <input id="addUserId" type="text" placeholder="Поиск по логину" autocomplete="off">
+        <div class="search-row" style="position:relative;">
+          <span class="input-prefix" style="left:14px;">@</span>
+          <input id="addUserId" type="text" placeholder="поиск по логину" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="padding-left:28px;">
           <button type="button" class="search-btn" onclick="addContactById()">Найти</button>
         </div>
       </div>
@@ -1156,6 +1176,16 @@
                   <span class="settings-label" style="color:var(--danger);">Выйти из аккаунта</span>
                   <button type="button" class="btn subtle" onclick="logoutAccount()" style="border-color:var(--danger);color:var(--danger);padding:6px 12px;font-size:13px;">Выйти</button>
                 </div>
+              </div>
+
+              <div id="adminPanel" class="settings-section-title" style="display:none;">АДМИНИСТРИРОВАНИЕ</div>
+              <div id="adminSection" class="settings-section" style="display:none;flex-direction:column;gap:8px;">
+                <button type="button" class="btn primary" onclick="generateInvite()" style="margin-bottom:4px;">
+                  <span class="material-icons" style="font-size:16px;">link</span> Создать ссылку-приглашение
+                </button>
+                <div id="adminInviteResult" style="font-size:12px;color:var(--muted);word-break:break-all;"></div>
+                <div class="settings-section-title" style="padding:8px 0 4px;font-size:11px;">ПОЛЬЗОВАТЕЛИ</div>
+                <div id="adminUserList" style="max-height:200px;overflow-y:auto;"></div>
               </div>
             </div>
           </div>
