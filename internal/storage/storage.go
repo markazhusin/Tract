@@ -47,25 +47,27 @@ type Storage struct {
 	mu       sync.RWMutex
 	dataDir  string
 
-	identities     map[string]*IdentityBlob
-	contacts       map[string][]map[string]interface{}
-	groups         map[string]*GroupRecord
-	bans           map[string]bool
-	invites        map[string]*InviteRecord
-	inboxes        map[string][]*InboxEntry
-	avatars        map[string]string // userId -> avatarData URL
+	identities      map[string]*IdentityBlob
+	contacts        map[string][]map[string]interface{}
+	groups          map[string]*GroupRecord
+	bans            map[string]bool
+	invites         map[string]*InviteRecord
+	inboxes         map[string][]*InboxEntry
+	avatars         map[string]string // userId -> avatarData URL (cropped)
+	avatarOriginals map[string]string // userId -> original uncropped data URL
 }
 
 func New(dataDir string) (*Storage, error) {
 	s := &Storage{
-		dataDir:  dataDir,
-		identities: make(map[string]*IdentityBlob),
-		contacts:   make(map[string][]map[string]interface{}),
-		groups:     make(map[string]*GroupRecord),
-		bans:       make(map[string]bool),
-		invites:    make(map[string]*InviteRecord),
-		inboxes:    make(map[string][]*InboxEntry),
-		avatars:    make(map[string]string),
+		dataDir:         dataDir,
+		identities:      make(map[string]*IdentityBlob),
+		contacts:        make(map[string][]map[string]interface{}),
+		groups:          make(map[string]*GroupRecord),
+		bans:            make(map[string]bool),
+		invites:         make(map[string]*InviteRecord),
+		inboxes:         make(map[string][]*InboxEntry),
+		avatars:         make(map[string]string),
+		avatarOriginals: make(map[string]string),
 	}
 
 	if err := s.loadAll(); err != nil {
@@ -83,6 +85,7 @@ func (s *Storage) loadAll() error {
 	s.loadJSON("ban-store.json", &s.bans)
 	s.loadJSON("invite-store.json", &s.invites)
 	s.loadJSON("avatar-store.json", &s.avatars)
+	s.loadJSON("avatar-original-store.json", &s.avatarOriginals)
 	return nil
 }
 
@@ -94,6 +97,7 @@ func (s *Storage) saveAll() {
 	s.saveJSON("ban-store.json", s.bans)
 	s.saveJSON("invite-store.json", s.invites)
 	s.saveJSON("avatar-store.json", s.avatars)
+	s.saveJSON("avatar-original-store.json", s.avatarOriginals)
 }
 
 func (s *Storage) Close() {
@@ -711,11 +715,15 @@ func (s *Storage) UseInvite(code string, userId string) error {
 
 // ==================== AVATAR ====================
 
-func (s *Storage) StoreAvatar(userId string, avatarData string) error {
+func (s *Storage) StoreAvatar(userId string, avatarData string, avatarOriginal string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.avatars[userId] = avatarData
+	if avatarOriginal != "" {
+		s.avatarOriginals[userId] = avatarOriginal
+	}
 	s.saveJSON("avatar-store.json", s.avatars)
+	s.saveJSON("avatar-original-store.json", s.avatarOriginals)
 	return nil
 }
 
@@ -723,6 +731,13 @@ func (s *Storage) GetAvatar(userId string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	data, ok := s.avatars[userId]
+	return data, ok
+}
+
+func (s *Storage) GetAvatarOriginal(userId string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, ok := s.avatarOriginals[userId]
 	return data, ok
 }
 

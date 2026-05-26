@@ -330,6 +330,15 @@ function getAvatarUrl(userId) {
   return localStorage.getItem(getAvatarStorageKey(userId));
 }
 
+function getOriginalAvatarUrl(userId) {
+  if (!userId) return null;
+  const key = 'tract.avatar.original.' + userId;
+  const stored = localStorage.getItem(key);
+  if (stored) return stored;
+  // Fall back to cropped version
+  return getAvatarUrl(userId);
+}
+
 function getAvatarHistory(userId) {
   const stored = localStorage.getItem(getAvatarHistoryStorageKey(userId));
   if (!stored) return [];
@@ -352,6 +361,11 @@ function saveAvatarHistory(userId, avatars = []) {
   if (latest?.avatarData) {
     localStorage.setItem(getAvatarStorageKey(userId), latest.avatarData);
   }
+  if (latest?.originalData) {
+    localStorage.setItem('tract.avatar.original.' + userId, latest.originalData);
+  } else {
+    localStorage.removeItem('tract.avatar.original.' + userId);
+  }
 }
 
 function setAvatarHtml(el, userId, initials) {
@@ -363,16 +377,18 @@ function setAvatarHtml(el, userId, initials) {
   }
 }
 
-async function uploadAvatarToServer(userId, avatarData) {
+async function uploadAvatarToServer(userId, avatarData, originalData = null) {
   if (!userId || !avatarData) return null;
   const serverUrl = resolveSignalingUrl();
   if (!serverUrl) return null;
 
   try {
+    const body = { userId, avatarData };
+    if (originalData) body.avatarOriginal = originalData;
     const response = await fetch(new URL('/profile/avatar', serverUrl).toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, avatarData })
+      body: JSON.stringify(body)
     });
     if (!response.ok) {
       throw new Error(`Upload failed ${response.status}`);
@@ -488,13 +504,18 @@ window.handleAvatarUpload = async (event) => {
     reader.readAsDataURL(file);
   });
 
+  const originalData = dataUrl;
+
   openAvatarCropModal(dataUrl, async (croppedDataUrl) => {
     const avatarData = croppedDataUrl;
-    saveAvatarHistory(state.profile.userId, [{ id: 'current', avatarData, uploadedAt: Date.now() }]);
+    // Save both cropped and original
+    saveAvatarHistory(state.profile.userId, [{ id: 'current', avatarData, originalData, uploadedAt: Date.now() }]);
+    localStorage.setItem(getAvatarStorageKey(state.profile.userId), avatarData);
+    if (originalData) localStorage.setItem('tract.avatar.original.' + state.profile.userId, originalData);
     if (state.transport) {
       state.transport.options.avatarData = avatarData;
     }
-    const result = await uploadAvatarToServer(state.profile.userId, avatarData);
+    const result = await uploadAvatarToServer(state.profile.userId, avatarData, originalData);
     if (result?.avatars?.length) {
       saveAvatarHistory(state.profile.userId, result.avatars);
     }
@@ -3587,6 +3608,7 @@ window.openContactProfile = (userId) => {
   }
 
   // Setup expanded hero
+  const originalUrl = getOriginalAvatarUrl(userId);
   const hero = $('profileHero');
   const heroBg = $('profileHeroBg');
   const heroName = $('profileHeroName');
@@ -3594,8 +3616,8 @@ window.openContactProfile = (userId) => {
   if (hero) {
     hero.classList.remove('expanded');
     if (heroBg) {
-      if (avatarUrl) {
-        heroBg.style.backgroundImage = `url(${escapeHtml(avatarUrl)})`;
+      if (originalUrl) {
+        heroBg.style.backgroundImage = `url(${escapeHtml(originalUrl)})`;
       } else {
         heroBg.style.background = 'var(--accent)';
       }
@@ -3603,29 +3625,62 @@ window.openContactProfile = (userId) => {
     if (heroName) heroName.textContent = getContactLabel(contact);
     if (heroId) heroId.textContent = userId;
 
+    // Collapsed base height for smooth transition
+    const collapsedH = hero.scrollHeight + 'px';
+    hero.style.height = collapsedH;
+
+    function setExpanded(expand) {
+      if (expand) {
+        hero.classList.add('expanded');
+        hero.style.height = '';
+        const scroll = hero.closest('.profile-page-scroll');
+        if (scroll) scroll.scrollTop = 0;
+      } else {
+        hero.classList.remove('expanded');
+        hero.style.height = collapsedH;
+      }
+    }
+
     // Toggle expand on click/tap
     hero.onclick = (e) => {
       if (e.target.closest('.profile-hero-info')) return;
-      hero.classList.toggle('expanded');
-      if (hero.classList.contains('expanded')) {
-        const scroll = hero.closest('.profile-page-scroll');
-        if (scroll) scroll.scrollTop = 0;
-      }
+      setExpanded(!hero.classList.contains('expanded'));
     };
 
-    // Pull-down gesture to expand (mobile)
-    let touchStartY = 0;
+    // Pull-down gesture: smooth drag → expand
+    const expandedLayer = $('profileHeroExpanded');
+    let dragStartY = 0;
+    let isDragging = false;
     hero.addEventListener('touchstart', (e) => {
-      touchStartY = e.touches[0].clientY;
+      if (hero.classList.contains('expanded')) return;
+      dragStartY = e.touches[0].clientY;
+      isDragging = false;
+      hero.style.transition = 'none';
+      if (expandedLayer) expandedLayer.setAttribute('dragging', '');
     }, { passive: true });
     hero.addEventListener('touchmove', (e) => {
       if (hero.classList.contains('expanded')) return;
-      if (e.touches[0].clientY - touchStartY > 40) {
-        hero.classList.add('expanded');
-        const scroll = hero.closest('.profile-page-scroll');
-        if (scroll) scroll.scrollTop = 0;
+      const dy = e.touches[0].clientY - dragStartY;
+      if (dy > 10) isDragging = true;
+      if (!isDragging) return;
+      e.preventDefault();
+      const progress = Math.min(dy / 120, 1);
+      const maxH = Math.max(window.innerHeight * 0.5, 220);
+      const baseH = parseFloat(collapsedH);
+      hero.style.height = (baseH + (maxH - baseH) * progress) + 'px';
+      if (expandedLayer) expandedLayer.style.opacity = progress;
+    }, { passive: false });
+    hero.addEventListener('touchend', () => {
+      if (!isDragging) return;
+      isDragging = false;
+      hero.style.transition = '';
+      if (expandedLayer) {
+        expandedLayer.removeAttribute('dragging');
+        expandedLayer.style.opacity = '';
       }
-    }, { passive: true });
+      const prog = expandedLayer ? parseFloat(expandedLayer.style.opacity || '0') : 0;
+      setExpanded(prog > 0.35);
+    });
   }
 
   callBtn.disabled = blocked;

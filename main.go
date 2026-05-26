@@ -624,8 +624,9 @@ func handleInboxAck(c *gin.Context) {
 
 func handleProfileAvatarStore(c *gin.Context) {
 	var req struct {
-		UserId     string `json:"userId"`
-		AvatarData string `json:"avatarData"`
+		UserId          string `json:"userId"`
+		AvatarData      string `json:"avatarData"`
+		AvatarOriginal  string `json:"avatarOriginal"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -643,7 +644,7 @@ func handleProfileAvatarStore(c *gin.Context) {
 	// Strip EXIF/metadata from uploaded image by re-encoding as PNG
 	cleaned := stripImageMetadata(req.AvatarData)
 
-	if err := store.StoreAvatar(normalized, cleaned); err != nil {
+	if err := store.StoreAvatar(normalized, cleaned, req.AvatarOriginal); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -671,7 +672,9 @@ func handleProfileAvatarGet(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, gin.H{"avatarData": data})
+	original, _ := store.GetAvatarOriginal(normalized)
+
+	c.JSON(200, gin.H{"avatarData": data, "avatarOriginal": original})
 }
 
 // ==================== CONTACTS ====================
