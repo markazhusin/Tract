@@ -2509,7 +2509,7 @@ function renderContacts() {
   const container1 = $('contacts');
   const container2 = $('contactsList');
 
-  const renderContactItem = ([id, contact], isActive) => {
+  const renderContactItem = ([id, contact], isActive, showPreview = true) => {
     const unread = state.unreadCounts.get(id) || 0;
     const initials = getContactInitials(contact.displayName || id);
     const preview = contact.blocked
@@ -2521,7 +2521,19 @@ function renderContacts() {
 
     const btn = document.createElement('button');
     btn.className = `contact-item ${isActive ? 'active' : ''}`;
-    btn.innerHTML = `
+
+    if (!showPreview) {
+      btn.innerHTML = `
+      <div class="contact-avatar contact-avatar-clickable">${getAvatarHtml(id, initials)}</div>
+      <div class="contact-info">
+        <div class="contact-name-row">
+          <span class="contact-name">${escapeHtml(getContactLabel(contact))}</span>
+        </div>
+        <span class="contact-preview">${contact.online ? 'в сети' : 'не в сети'}</span>
+      </div>
+    `;
+    } else {
+      btn.innerHTML = `
       <div class="contact-avatar contact-avatar-clickable">${getAvatarHtml(id, initials)}</div>
       <div class="contact-info">
         <div class="contact-name-row">
@@ -2532,6 +2544,7 @@ function renderContacts() {
       </div>
       ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
     `;
+    }
 
     const avatarEl = btn.querySelector('.contact-avatar-clickable');
     if (avatarEl) {
@@ -2626,7 +2639,7 @@ function renderContacts() {
       const groupItems = groups.get(groupKey) || [];
       groupItems.sort(([, a], [, b]) => compareContactLabels(a, b));
       for (const item of groupItems) {
-        container.appendChild(renderContactItem(item, item[0] === state.currentChatId));
+        container.appendChild(renderContactItem(item, item[0] === state.currentChatId, false));
       }
     }
   };

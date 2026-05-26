@@ -436,15 +436,11 @@ func handleSignal(c *gin.Context) {
 			if ptype, ok := payloadMap["type"].(string); ok && (ptype == "text" || ptype == "message_control" || ptype == "call") && req.ToUserId != "" {
 				recipientUserId := normalizeUserId(req.ToUserId)
 				if recipientUserId != "" {
-					inboxMsg := map[string]interface{}{
-						"id":         generateID(),
-						"from":       req.From,
-						"fromUserId": payloadMap["senderId"],
-						"type":       "app_packet",
-						"payload":    payloadMap,
-						"timestamp":  time.Now().UnixMilli(),
+					fromUserId := ""
+					if s, ok := payloadMap["senderId"].(string); ok {
+						fromUserId = s
 					}
-					store.EnqueueInboxMessage(recipientUserId, inboxMsg)
+					store.EnqueueAppPacket(recipientUserId, req.From, fromUserId, payloadMap)
 				}
 			}
 		}

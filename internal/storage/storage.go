@@ -215,26 +215,87 @@ func (s *Storage) EnqueueInboxMessage(toUserId string, message map[string]interf
 		entry.GroupId = groupId
 	}
 
-	// Dedup by packetId
-	if packetId, ok := message["packetId"].(string); ok && packetId != "" {
-		for _, existing := range s.inboxes[toUserId] {
-			if existing.Payload != nil {
-				if pid, ok := existing.Payload["packetId"].(string); ok && pid == packetId {
-					return nil
-				}
-			}
-		}
+	if s.dupInbox(entry, toUserId) {
+		return nil
 	}
 
 	s.inboxes[toUserId] = append(s.inboxes[toUserId], entry)
 
-	// Trim to max size
 	if len(s.inboxes[toUserId]) > MAX_INBOX_PER_USER {
 		s.inboxes[toUserId] = s.inboxes[toUserId][len(s.inboxes[toUserId])-MAX_INBOX_PER_USER:]
 	}
 
 	s.saveJSON("message-inbox.json", s.inboxes)
 	return nil
+}
+
+// EnqueueAppPacket stores a direct app_packet into the user's inbox.
+// Unlike EnqueueInboxMessage (which wraps message as payload), this correctly
+// builds the InboxEntry fields (From, FromUserId, Payload) separately.
+func (s *Storage) EnqueueAppPacket(toUserId, from, fromUserId string, payload map[string]interface{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.inboxes[toUserId] == nil {
+		s.inboxes[toUserId] = make([]*InboxEntry, 0)
+	}
+
+	entry := &InboxEntry{
+		Id:         generateID(),
+		From:       from,
+		FromUserId: fromUserId,
+		Type:       "app_packet",
+		Payload:    payload,
+		Timestamp:  time.Now().UnixMilli(),
+	}
+
+	if s.dupInbox(entry, toUserId) {
+		return nil
+	}
+
+	s.inboxes[toUserId] = append(s.inboxes[toUserId], entry)
+
+	if len(s.inboxes[toUserId]) > MAX_INBOX_PER_USER {
+		s.inboxes[toUserId] = s.inboxes[toUserId][len(s.inboxes[toUserId])-MAX_INBOX_PER_USER:]
+	}
+
+	s.saveJSON("message-inbox.json", s.inboxes)
+	return nil
+}
+
+func (s *Storage) dupInbox(entry *InboxEntry, toUserId string) bool {
+	if entry.Payload == nil {
+		return false
+	}
+
+	// Dedup by packetId
+	if packetId, ok := entry.Payload["packetId"].(string); ok && packetId != "" {
+		for _, existing := range s.inboxes[toUserId] {
+			if existing.Payload != nil {
+				if pid, ok := existing.Payload["packetId"].(string); ok && pid == packetId {
+					return true
+				}
+			}
+		}
+	}
+
+	// Dedup by callId+action (matching signaling-server.js:243-252)
+	if ptype, ok := entry.Payload["type"].(string); ok && ptype == "call" {
+		if callId, ok := entry.Payload["callId"].(string); ok && callId != "" {
+			action, _ := entry.Payload["action"].(string)
+			for _, existing := range s.inboxes[toUserId] {
+				if existing.Payload != nil {
+					if ecId, ok := existing.Payload["callId"].(string); ok && ecId == callId {
+						if ecAction, ok := existing.Payload["action"].(string); ok && ecAction == action {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func (s *Storage) AckInboxMessages(userId string, ids []string) error {
