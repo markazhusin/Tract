@@ -40,3 +40,6 @@ coverage/
 
 # Server data
 data/
+
+# Go build output
+tract-server
