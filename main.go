@@ -480,8 +480,8 @@ func handleSignalPoll(c *gin.Context) {
 
 func handleIdentityStore(c *gin.Context) {
 	var req struct {
-		Id   string      `json:"id"`
-		Data interface{} `json:"data"`
+		UserId       string `json:"userId"`
+		IdentityBlob string `json:"identityBlob"`
 	}
 
 	if err := c.BindJSON(&req); err != nil {
@@ -489,7 +489,7 @@ func handleIdentityStore(c *gin.Context) {
 		return
 	}
 
-	normalized := normalizeUserId(req.Id)
+	normalized := normalizeUserId(req.UserId)
 	if normalized == "" {
 		c.JSON(400, gin.H{"error": "invalid userId"})
 		return
@@ -500,7 +500,7 @@ func handleIdentityStore(c *gin.Context) {
 		return
 	}
 
-	if err := store.StoreIdentity(normalized, req.Data); err != nil {
+	if err := store.StoreIdentity(normalized, req.IdentityBlob); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -518,13 +518,13 @@ func handleIdentityGet(c *gin.Context) {
 		return
 	}
 
-	data, updatedAt, ok := store.GetIdentity(normalized)
+	blob, updatedAt, ok := store.GetIdentity(normalized)
 	if !ok {
 		c.JSON(404, gin.H{"error": "identity not found"})
 		return
 	}
 
-	c.JSON(200, gin.H{"data": data, "updatedAt": updatedAt})
+	c.JSON(200, gin.H{"identityBlob": blob, "updatedAt": updatedAt})
 }
 
 // ==================== INBOX ====================
@@ -993,9 +993,12 @@ func handleAdminUsers(c *gin.Context) {
 
 	for userId, rec := range identities {
 		displayName := ""
-		if data, ok := rec.Data.(map[string]interface{}); ok {
-			if dn, ok := data["displayName"].(string); ok {
-				displayName = dn
+		if rec.Blob != "" {
+			var blobMap map[string]interface{}
+			if err := json.Unmarshal([]byte(rec.Blob), &blobMap); err == nil {
+				if dn, ok := blobMap["displayName"].(string); ok {
+					displayName = dn
+				}
 			}
 		}
 

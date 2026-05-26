@@ -9,8 +9,8 @@ import (
 )
 
 type IdentityBlob struct {
-	Data      interface{} `json:"data"`
-	UpdatedAt int64       `json:"updatedAt"`
+	Blob      string `json:"identityBlob"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 type InviteRecord struct {
@@ -141,25 +141,25 @@ func (s *Storage) SaveIdentities(identities map[string]*IdentityBlob) error {
 	return nil
 }
 
-func (s *Storage) StoreIdentity(userId string, data interface{}) error {
+func (s *Storage) StoreIdentity(userId string, blob string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.identities[userId] = &IdentityBlob{
-		Data:      data,
+		Blob:      blob,
 		UpdatedAt: time.Now().UnixMilli(),
 	}
 	s.saveJSON("identity-store.json", s.identities)
 	return nil
 }
 
-func (s *Storage) GetIdentity(userId string) (interface{}, int64, bool) {
+func (s *Storage) GetIdentity(userId string) (string, int64, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rec, ok := s.identities[userId]
 	if !ok {
-		return nil, 0, false
+		return "", 0, false
 	}
-	return rec.Data, rec.UpdatedAt, true
+	return rec.Blob, rec.UpdatedAt, true
 }
 
 // ==================== INBOX ====================
