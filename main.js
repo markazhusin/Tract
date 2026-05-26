@@ -3586,6 +3586,48 @@ window.openContactProfile = (userId) => {
     avatarEl.textContent = getContactInitials(getContactLabel(contact));
   }
 
+  // Setup expanded hero
+  const hero = $('profileHero');
+  const heroBg = $('profileHeroBg');
+  const heroName = $('profileHeroName');
+  const heroId = $('profileHeroId');
+  if (hero) {
+    hero.classList.remove('expanded');
+    if (heroBg) {
+      if (avatarUrl) {
+        heroBg.style.backgroundImage = `url(${escapeHtml(avatarUrl)})`;
+      } else {
+        heroBg.style.background = 'var(--accent)';
+      }
+    }
+    if (heroName) heroName.textContent = getContactLabel(contact);
+    if (heroId) heroId.textContent = userId;
+
+    // Toggle expand on click/tap
+    hero.onclick = (e) => {
+      if (e.target.closest('.profile-hero-info')) return;
+      hero.classList.toggle('expanded');
+      if (hero.classList.contains('expanded')) {
+        const scroll = hero.closest('.profile-page-scroll');
+        if (scroll) scroll.scrollTop = 0;
+      }
+    };
+
+    // Pull-down gesture to expand (mobile)
+    let touchStartY = 0;
+    hero.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    hero.addEventListener('touchmove', (e) => {
+      if (hero.classList.contains('expanded')) return;
+      if (e.touches[0].clientY - touchStartY > 40) {
+        hero.classList.add('expanded');
+        const scroll = hero.closest('.profile-page-scroll');
+        if (scroll) scroll.scrollTop = 0;
+      }
+    }, { passive: true });
+  }
+
   callBtn.disabled = blocked;
   callBtn.style.opacity = blocked ? '0.4' : '';
   if (blockLabel) blockLabel.textContent = blocked ? 'Разблок' : 'Блок';
@@ -3602,6 +3644,8 @@ window.openContactProfile = (userId) => {
 };
 
 window.closeContactProfile = () => {
+  const hero = $('profileHero');
+  if (hero) hero.classList.remove('expanded');
   const page = $('contactProfilePage');
   if (page) page.classList.remove('open');
   state.profileViewUserId = null;
