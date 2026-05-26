@@ -225,23 +225,28 @@ func (s *Server) PollSignals(roomId, peerId string) []*Signal {
 }
 
 func (s *Server) SendSignal(roomId, toPeerId string, signal *Signal) error {
-	// Try SSE first
 	key := peerKey(roomId, toPeerId)
+
+	// Try SSE first (non-blocking, but if channel is full, fall back to poll queue instead of dropping)
 	s.mu.RLock()
 	clients, hasSSE := s.sseClients[key]
 	s.mu.RUnlock()
 
 	if hasSSE && len(clients) > 0 {
+		delivered := false
 		for ch := range clients {
 			select {
 			case ch <- signal:
+				delivered = true
 			default:
 			}
 		}
-		return nil
+		if delivered {
+			return nil
+		}
 	}
 
-	// Fall back to poll queue
+	// Fall back to poll queue (also used if SSE channel was full)
 	s.EnqueueSignal(key, signal)
 	return nil
 }

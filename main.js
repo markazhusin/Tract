@@ -1657,7 +1657,7 @@ window.connectHandshake = async () => {
     await updateInviteArtifacts();
     pullInbox().catch((e) => console.warn('Inbox pull after connect:', e));
     clearInterval(inboxTimer);
-    inboxTimer = setInterval(() => pullInbox().catch(() => {}), 30000);
+    inboxTimer = setInterval(() => pullInbox().catch(() => {}), 3000);
   } catch (error) {
     console.error('Handshake connect failed:', error);
   }
@@ -2311,7 +2311,7 @@ async function queuePendingMessageControl(chatId, packet) {
   await messageDB.saveSetting(key, pending);
 }
 
-const MAX_PENDING_CALL_AGE_MS = 45000;
+const MAX_PENDING_CALL_AGE_MS = 120000;
 
 async function clearPendingCallControls(chatId) {
   if (!chatId) return;
@@ -2843,37 +2843,100 @@ function startRingTone(kind) {
 
   try {
     const ctx = new AudioContextClass();
-    const gain = ctx.createGain();
-    gain.gain.value = kind === 'incoming' ? 0.08 : 0.045;
-    gain.connect(ctx.destination);
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = kind === 'incoming' ? 0.07 : 0.04;
+    masterGain.connect(ctx.destination);
 
     let stopped = false;
-    const playPulse = () => {
-      if (stopped) return;
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(kind === 'incoming' ? 880 : 520, now);
-      osc.frequency.exponentialRampToValueAtTime(kind === 'incoming' ? 660 : 620, now + 0.18);
-      osc.connect(gain);
-      osc.start(now);
-      osc.stop(now + 0.32);
-    };
 
-    ctx.resume?.().catch(() => {});
-    playPulse();
-    const intervalMs = kind === 'incoming' ? 900 : 1300;
-    const timer = window.setInterval(playPulse, intervalMs);
-    state.ringTone = {
-      stop: () => {
-        stopped = true;
-        window.clearInterval(timer);
-        ctx.close().catch(() => {});
-      }
-    };
+    if (kind === 'incoming') {
+      // Incoming ringtone: two-tone melodic pattern (like a phone)
+      // 440Hz for 0.15s, then 540Hz for 0.15s, repeat every 2s
+      const playIncomingPulse = () => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const osc1 = ctx.createOscillator();
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(440, now);
+        osc1.connect(masterGain);
+        osc1.start(now);
+        osc1.stop(now + 0.15);
+
+        const osc2 = ctx.createOscillator();
+        osc2.type = 'sine';
+        osc2.frequency.setValueAtTime(540, now + 0.2);
+        osc2.connect(masterGain);
+        osc2.start(now + 0.2);
+        osc2.stop(now + 0.35);
+      };
+
+      ctx.resume?.().catch(() => {});
+      playIncomingPulse();
+      const timer = window.setInterval(playIncomingPulse, 2000);
+      state.ringTone = {
+        stop: () => {
+          stopped = true;
+          window.clearInterval(timer);
+          ctx.close().catch(() => {});
+        }
+      };
+    } else if (kind === 'outgoing') {
+      // Outgoing ringing (гудки): classic beep-beep pattern
+      // 420Hz for 0.35s, silence 0.25s, 420Hz for 0.35s, silence 2s → repeat
+      const playOutgoingPulse = () => {
+        if (stopped) return;
+        const now = ctx.currentTime;
+        const osc1 = ctx.createOscillator();
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(420, now);
+        osc1.connect(masterGain);
+        osc1.start(now);
+        osc1.stop(now + 0.35);
+
+        const osc2 = ctx.createOscillator();
+        osc2.type = 'sine';
+        osc2.frequency.setValueAtTime(420, now + 0.6);
+        osc2.connect(masterGain);
+        osc2.start(now + 0.6);
+        osc2.stop(now + 0.95);
+      };
+
+      ctx.resume?.().catch(() => {});
+      playOutgoingPulse();
+      const timer = window.setInterval(playOutgoingPulse, 3200);
+      state.ringTone = {
+        stop: () => {
+          stopped = true;
+          window.clearInterval(timer);
+          ctx.close().catch(() => {});
+        }
+      };
+    }
   } catch (error) {
     console.warn('Ring tone failed:', error);
   }
+}
+
+function playConnectingTone() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    const ctx = new AudioContextClass();
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    gain.connect(ctx.destination);
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(380, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.25);
+    osc.connect(gain);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+    ctx.resume?.().catch(() => {});
+    setTimeout(() => ctx.close().catch(() => {}), 600);
+  } catch {}
 }
 
 function stopRingTone() {
@@ -2954,6 +3017,7 @@ async function handleCallControl(packet, fromPeerId) {
 
   if (action === 'accept' && callId && state.activeCall?.role === 'caller' && state.activeCall.callId === callId) {
     stopRingTone();
+    playConnectingTone();
     state.activeCall.status = 'active';
     const peerId = state.activeCall.remotePeerId || fromPeerId;
     if (peerId) {
@@ -3197,6 +3261,7 @@ window.answerVoiceCall = async () => {
 
   try {
     stopRingTone();
+    playConnectingTone();
     ac.status = 'active';
     updateCallBar();
 

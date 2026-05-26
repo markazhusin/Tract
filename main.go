@@ -273,7 +273,7 @@ func handleSSE(c *gin.Context) {
 	c.String(http.StatusOK, ":ok\n\n")
 	c.Writer.Flush()
 
-	clientChan := make(chan *signaling.Signal, 100)
+	clientChan := make(chan *signaling.Signal, 256)
 	server.RegisterSSEClient(roomId, peerId, clientChan)
 	defer server.UnregisterSSEClient(roomId, peerId, clientChan)
 
