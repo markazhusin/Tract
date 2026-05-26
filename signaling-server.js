@@ -599,6 +599,97 @@ app.get('/groups/:userId', (req, res) => {
   res.json({ groups: userGroups });
 });
 
+app.post('/groups/leave', (req, res) => {
+  const { groupId, userId } = req.body;
+  if (!groupId || !userId) {
+    return res.status(400).json({ error: 'groupId and userId are required' });
+  }
+
+  const group = groupStore.get(groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+
+  const idx = group.members.findIndex((m) => m.userId === userId);
+  if (idx === -1) return res.status(400).json({ error: 'not a group member' });
+
+  group.members.splice(idx, 1);
+
+  if (group.members.length === 0) {
+    groupStore.delete(groupId);
+    saveGroupStore();
+    console.log(`[Groups] Deleted empty group ${groupId} after last member left`);
+    return res.json({ status: 'ok', deleted: true });
+  }
+
+  groupStore.set(groupId, group);
+  saveGroupStore();
+  console.log(`[Groups] ${userId} left group ${groupId}`);
+
+  for (const member of group.members) {
+    enqueueUserInbox(normalizeUserId(member.userId), {
+      id: crypto.randomUUID(),
+      type: 'app_packet',
+      payload: {
+        type: 'group_event',
+        action: 'member_left',
+        groupId,
+        userId,
+        timestamp: Date.now()
+      },
+      timestamp: Date.now()
+    });
+  }
+
+  res.json({ status: 'ok', deleted: false });
+});
+
+app.post('/groups/delete', (req, res) => {
+  const { groupId, userId } = req.body;
+  if (!groupId || !userId) {
+    return res.status(400).json({ error: 'groupId and userId are required' });
+  }
+
+  const group = groupStore.get(groupId);
+  if (!group) return res.status(404).json({ error: 'group not found' });
+
+  const adminMembers = group.members.filter((m) => m.role === 'admin');
+  const isAdmin = adminMembers.some((m) => m.userId === userId);
+  if (!isAdmin) {
+    return res.status(403).json({ error: 'only admins can delete the group' });
+  }
+
+  const memberIds = group.members.map((m) => m.userId);
+
+  groupStore.delete(groupId);
+  saveGroupStore();
+  console.log(`[Groups] Deleted ${groupId} by ${userId}`);
+
+  for (const memberId of memberIds) {
+    const inbox = userInbox.get(normalizeUserId(memberId));
+    if (inbox) {
+      const filtered = inbox.filter((entry) => entry.groupId !== groupId);
+      if (filtered.length !== inbox.length) {
+        userInbox.set(normalizeUserId(memberId), filtered);
+      }
+    }
+
+    enqueueUserInbox(normalizeUserId(memberId), {
+      id: crypto.randomUUID(),
+      type: 'app_packet',
+      payload: {
+        type: 'group_event',
+        action: 'deleted',
+        groupId,
+        deletedBy: userId,
+        timestamp: Date.now()
+      },
+      timestamp: Date.now()
+    });
+  }
+  saveInboxStore();
+
+  res.json({ status: 'ok' });
+});
+
 app.get('/group/:groupId', (req, res) => {
   const group = groupStore.get(req.params.groupId);
   if (!group) return res.status(404).json({ error: 'group not found' });

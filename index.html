@@ -215,6 +215,13 @@
       font-size: 20px;
       font-weight: 600;
       color: #141515;
+      overflow: hidden;
+    }
+    .card-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
     }
     .card-profile { flex: 1; }
     .card-profile-name {
@@ -258,9 +265,9 @@
       justify-content: center;
       font-size: 20px;
       font-weight: 600;
+      overflow: hidden;
       color: #141515;
       flex-shrink: 0;
-      overflow: hidden;
       position: relative;
     }
     .contact-avatar-clickable {
@@ -271,6 +278,8 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      object-position: center;
+      display: block;
     }
     .contact-info {
       flex: 1;
@@ -382,6 +391,38 @@
     .status-indicator.error { background: rgba(229, 101, 101, 0.1); color: var(--danger); }
     .status-indicator.warn { background: rgba(231, 162, 61, 0.1); color: #e7a23d; }
 
+    /* ===== CALL BAR ===== */
+    #callBar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--call-bar);
+      border-top: 1px solid var(--line);
+      padding: 8px 12px calc(8px + var(--safe-bottom));
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 25;
+    }
+    #callBarLabel {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      padding: 0 4px;
+    }
+    #callBarActions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #callBarActions .btn {
+      flex: 1;
+      min-width: 80px;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
     /* ===== CHAT AREA ===== */
     #chat {
       flex: 1;
@@ -421,6 +462,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      object-position: center;
     }
 
     .header-actions {
@@ -762,6 +804,13 @@
         font-size: 32px;
         overflow: hidden;
       }
+      .profile-page-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center;
+        display: block;
+      }
       .profile-page-name {
         font-size: 20px;
         font-weight: 700;
@@ -795,6 +844,11 @@
       .profile-page-action-btn.danger {
         background: rgba(229,101,101,0.12);
         color: var(--danger);
+      }
+      .profile-page-action-btn.danger-outline {
+        background: transparent;
+        color: var(--danger);
+        border: 1px solid rgba(229,101,101,0.3);
       }
 
       .profile-page-section {
@@ -1279,10 +1333,14 @@
       </div>
       <div class="contact-group-header">Участники (<span id="groupInfoMembersNum">0</span>)</div>
       <div id="groupInfoMemberList"></div>
-      <div class="profile-page-actions" style="padding:16px 20px;">
+      <div class="profile-page-actions" style="padding:16px 20px;display:flex;flex-direction:column;gap:8px;">
         <button type="button" class="profile-page-action-btn danger" onclick="leaveGroup()">
           <span class="material-icons">exit_to_app</span>
           Покинуть группу
+        </button>
+        <button type="button" class="profile-page-action-btn danger-outline" id="deleteGroupBtn" onclick="deleteGroup()" style="display:none;">
+          <span class="material-icons">delete_forever</span>
+          Удалить группу
         </button>
       </div>
     </div>

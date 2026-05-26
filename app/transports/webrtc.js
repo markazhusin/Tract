@@ -236,8 +236,11 @@ export class WebRTCTransport {
     try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
     peerState.audioTransceiver.direction = 'sendrecv';
 
-    const stable = await this.waitForStableSignaling(peerId, 8000);
-    if (!stable) throw new Error('Signaling state not stable for renegotiation');
+    // If there's already a remote description, wait for stable signaling (renegotiation case)
+    if (peerState.pc.remoteDescription) {
+      const stable = await this.waitForStableSignaling(peerId, 8000);
+      if (!stable) throw new Error('Signaling state not stable for renegotiation');
+    }
 
     const offer = await peerState.pc.createOffer();
     await peerState.pc.setLocalDescription(offer);
@@ -247,8 +250,22 @@ export class WebRTCTransport {
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
     await this.ready;
 
-    if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
-      this.connectToPeer(peerId);
+    if (!this.peers.has(peerId)) {
+      if (this.onlinePeers.has(peerId)) {
+        // Create peer connection but don't send offer yet
+        const peerState = this.createPeerConnection(peerId);
+        // Still set up data channel if needed
+        if (asOfferer) {
+          const channel = peerState.pc.createDataChannel('tract', { ordered: true });
+          this.setupDataChannel(channel, peerId);
+        } else {
+          peerState.pc.ondatachannel = (event) => {
+            this.setupDataChannel(event.channel, peerId);
+          };
+        }
+      } else {
+        throw new Error('Peer not online');
+      }
     }
 
     const peerState = await this.waitForPeerState(peerId, 12000);

@@ -357,7 +357,7 @@ function saveAvatarHistory(userId, avatars = []) {
 function setAvatarHtml(el, userId, initials) {
   const url = getAvatarUrl(userId);
   if (url) {
-    el.innerHTML = `<img src="${escapeHtml(url)}" alt="">`;
+    el.innerHTML = `<img src="${escapeHtml(url)}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
   } else {
     el.textContent = initials;
   }
@@ -1169,6 +1169,11 @@ async function processIncomingPacket(packet, fromPeerId) {
     return;
   }
 
+  if (packet.type === 'group_event') {
+    await handleGroupEvent(packet);
+    return;
+  }
+
   if (packet.type !== 'text') return;
 
   // Decrypt E2E
@@ -1620,7 +1625,7 @@ window.handleGroupAvatar = (event) => {
   reader.onload = (e) => {
     groupCreationAvatar = e.target.result;
     const preview = $('groupAvatarPreview');
-    if (preview) preview.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;">`;
+    if (preview) preview.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
   };
   reader.readAsDataURL(file);
 };
@@ -1671,7 +1676,7 @@ window.openGroupInfo = () => {
   const avatarEl = $('groupInfoAvatar');
   if (avatarEl) {
     if (group.avatarData) {
-      avatarEl.innerHTML = `<img src="${group.avatarData}" style="width:100%;height:100%;object-fit:cover;">`;
+      avatarEl.innerHTML = `<img src="${group.avatarData}" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
     } else {
       avatarEl.textContent = initials;
     }
@@ -1685,6 +1690,12 @@ window.openGroupInfo = () => {
   }
   const numEl = $('groupInfoMembersNum');
   if (numEl) numEl.textContent = group.members.length;
+  const deleteBtn = $('deleteGroupBtn');
+  if (deleteBtn) {
+    const isAdmin = group.members.some((m) => m.userId === state.profile?.userId && m.role === 'admin');
+    deleteBtn.style.display = isAdmin ? '' : 'none';
+  }
+
   const listEl = $('groupInfoMemberList');
   if (listEl) {
     listEl.innerHTML = '';
@@ -1716,8 +1727,56 @@ window.closeGroupInfo = () => {
 window.leaveGroup = async () => {
   const group = state.groups.get(state.currentChatId);
   if (!group || !state.profile) return;
+  const serverUrl = resolveSignalingUrl();
+  if (serverUrl) {
+    try {
+      await fetch(new URL('/groups/leave', serverUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: state.currentChatId, userId: state.profile.userId })
+      });
+    } catch (e) {
+      console.warn('Leave group API call failed:', e);
+    }
+  }
   state.groups.delete(state.currentChatId);
   state.unreadCounts.delete(state.currentChatId);
+  await messageDB.deleteChat(state.currentChatId);
+  closeGroupInfo();
+  await goBackFromChat();
+};
+
+window.deleteGroup = async () => {
+  const group = state.groups.get(state.currentChatId);
+  if (!group || !state.profile) return;
+  if (group.members.filter((m) => m.role === 'admin').length === 0 ||
+    !group.members.some((m) => m.userId === state.profile.userId && m.role === 'admin')) {
+    setStatus('error', 'Только создатель может удалить группу');
+    return;
+  }
+  if (!confirm('Удалить группу для всех участников? Это действие необратимо.')) return;
+  const serverUrl = resolveSignalingUrl();
+  if (serverUrl) {
+    try {
+      const resp = await fetch(new URL('/groups/delete', serverUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: state.currentChatId, userId: state.profile.userId })
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        setStatus('error', err.error || 'Не удалось удалить группу');
+        return;
+      }
+    } catch (e) {
+      console.warn('Delete group failed:', e);
+      setStatus('error', 'Ошибка сети при удалении группы');
+      return;
+    }
+  }
+  state.groups.delete(state.currentChatId);
+  state.unreadCounts.delete(state.currentChatId);
+  await messageDB.deleteChat(state.currentChatId);
   closeGroupInfo();
   await goBackFromChat();
 };
@@ -2355,7 +2414,7 @@ function renderContacts() {
 function getAvatarHtml(userId, initials) {
   const url = getAvatarUrl(userId);
   if (url) {
-    return `<img src="${escapeHtml(url)}" alt="">`;
+    return `<img src="${escapeHtml(url)}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
   }
   return initials;
 }
@@ -2453,6 +2512,24 @@ function stopRingTone() {
   if (!state.ringTone) return;
   state.ringTone.stop();
   state.ringTone = null;
+}
+
+async function handleGroupEvent(packet) {
+  const { action, groupId } = packet;
+  if (!groupId) return;
+
+  if (action === 'deleted') {
+    const wasCurrent = state.currentChatId === groupId;
+    state.groups.delete(groupId);
+    state.unreadCounts.delete(groupId);
+    await messageDB.deleteChat(groupId);
+    if (wasCurrent) {
+      closeGroupInfo();
+      await goBackFromChat();
+    } else {
+      renderContacts();
+    }
+  }
 }
 
 async function handleCallControl(packet, fromPeerId) {
@@ -3072,7 +3149,7 @@ window.openContactProfile = (userId) => {
 
   const avatarUrl = getAvatarUrl(userId);
   if (avatarUrl) {
-    avatarEl.innerHTML = `<img src="${escapeHtml(avatarUrl)}" alt="">`;
+    avatarEl.innerHTML = `<img src="${escapeHtml(avatarUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;object-position:center;display:block;">`;
   } else {
     avatarEl.textContent = getContactInitials(getContactLabel(contact));
   }
