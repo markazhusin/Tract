@@ -1346,16 +1346,22 @@ async function bootstrapAuthenticatedSession(auth) {
   await loadGroups();
   await loadOwnAvatar();
 
+  // Template must be cloned BEFORE accessing post-auth DOM elements
+  closeGate();
+
   const selfId = $('selfId');
   if (selfId) selfId.textContent = state.profile.userId;
   const selfPeerId = $('selfPeerId');
   if (selfPeerId) selfPeerId.textContent = state.myPeerId;
-  $('displayNameInput').value = state.profile.displayName;
-  $('regPassword').value = '';
-  $('regPasswordConfirm').value = '';
-  $('loginPassword').value = '';
+  const nameInput = $('displayNameInput');
+  if (nameInput) nameInput.value = state.profile.displayName;
+  const regPw = $('regPassword');
+  if (regPw) regPw.value = '';
+  const regPwConfirm = $('regPasswordConfirm');
+  if (regPwConfirm) regPwConfirm.value = '';
+  const loginPw = $('loginPassword');
+  if (loginPw) loginPw.value = '';
 
-  closeGate();
   renderProfile();
   renderContacts();
   renderChatHeader();
