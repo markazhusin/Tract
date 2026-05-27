@@ -1854,24 +1854,6 @@ window.connectHandshake = async () => {
 
     const chatId = peerMeta.userId;
 
-    // Process server-pending messages (queued while user was offline)
-    try {
-      const serverUrl = resolveSignalingUrl();
-      const resp = await fetch(new URL('/messaging/flush-pending', serverUrl), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: chatId })
-      });
-      if (resp.ok) {
-        const { messages } = await resp.json();
-        for (const msg of messages) {
-          await processIncomingPacket(msg, _peerId);
-        }
-      }
-    } catch (e) {
-      console.warn('[onPeerDiscovery] server pending flush failed:', e);
-    }
-
     // Resend any pending (undelivered) messages for this user
     try {
       const pending = await messageDB.getUndeliveredMessages(chatId);
@@ -1945,27 +1927,6 @@ window.connectHandshake = async () => {
     await state.transport.ready;
     await updateInviteArtifacts();
     pullInbox().catch((e) => console.warn('Inbox pull after connect:', e));
-
-    // Process pending messages for all contacts (they may have been queued while we were offline)
-    for (const [contactId] of state.contacts) {
-      try {
-        const serverUrl = resolveSignalingUrl();
-        const resp = await fetch(new URL('/messaging/flush-pending', serverUrl), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: contactId })
-        });
-        if (resp.ok) {
-          const { messages } = await resp.json();
-          for (const msg of messages) {
-            await processIncomingPacket(msg, null);
-          }
-        }
-      } catch (e) {
-        console.warn('[connectHandshake] server pending flush failed for', contactId, e);
-      }
-    }
-
     clearInterval(inboxTimer);
     inboxTimer = setInterval(() => pullInbox().catch(() => {}), 3000);
   } catch (error) {
@@ -2513,7 +2474,6 @@ window.clearCurrentHistory = async (scope = 'me') => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
   if (scope === 'all') {
-    // Send clear_chat control - will be queued if recipient is offline
     await sendMessageControl({ action: 'clear_chat' }, chatId);
   }
   await clearPendingCallControls(chatId);
@@ -2597,40 +2557,15 @@ async function sendMessageControl(payload, chatId = state.currentChatId) {
   }
 
   if (!targetPeerId) {
-    // recipient is offline - queue for later delivery via inbox
-    await queuePendingMessageControlForOffline(chatId, packet);
+    await queuePendingMessageControl(chatId, packet);
     return true;
   }
   try {
     await state.multiplexer.send(packet, targetPeerId);
   } catch (error) {
-    await queuePendingMessageControlForOffline(chatId, packet);
+    await queuePendingMessageControl(chatId, packet);
   }
   return true;
-}
-
-async function queuePendingMessageControlForOffline(chatId, packet) {
-  if (!chatId) return;
-  const key = `tract.pendingControls:${chatId}`;
-  try {
-    const serverUrl = resolveSignalingUrl();
-    const response = await fetch(new URL('/messaging/pending', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toUserId: chatId, packet })
-    });
-    if (!response.ok) {
-      // Fallback to local storage if server fails
-      const pending = await messageDB.getSetting(key) || [];
-      pending.push({ ...packet, controlId: packet.controlId || crypto.randomUUID() });
-      await messageDB.saveSetting(key, pending);
-    }
-  } catch (e) {
-    console.warn('Queue pending control to server failed, using local fallback:', e);
-    const pending = await messageDB.getSetting(key) || [];
-    pending.push({ ...packet, controlId: packet.controlId || crypto.randomUUID() });
-    await messageDB.saveSetting(key, pending);
-  }
 }
 
 function pendingControlsKey(chatId) {
@@ -2824,19 +2759,6 @@ async function resolvePeerForUser(userId) {
   return targetPeerId || null;
 }
 
-function updateSendButtonIcon() {
-  const input = $('messageInput');
-  const btn = $('sendBtn');
-  if (!input || !btn) return;
-  const hasText = (input.value || '').trim().length > 0;
-  const icon = btn.querySelector('.material-icons');
-  if (icon) {
-    icon.textContent = hasText ? 'send' : 'mic';
-  }
-}
-
-window.updateSendButtonIcon = updateSendButtonIcon;
-
 window.sendCurrentMessage = async () => {
   const input = $('messageInput');
   const text = input.value.trim();
@@ -2981,6 +2903,8 @@ function renderProfile() {
   if (!isAuthenticated) return;
 
   $('displayNameInput').value = state.profile.displayName;
+  renderProfileCards();
+  updateSettingsPanel();
 }
 
 function renderContacts() {
@@ -4077,15 +4001,12 @@ window.deleteContactFromProfile = async () => {
   const userId = state.profileViewUserId;
   if (!userId) return;
   closeContactProfile();
-  // Remove from in-memory state FIRST (so syncContactsToServer sends correct data)
-  state.contacts.delete(userId);
-  state.unreadCounts.delete(userId);
   // Delete messages and contact from DB
   await messageDB.deleteChat(userId);
   await messageDB.deleteContact(userId);
-  // Sync contacts to server (without the deleted one)
-  await syncContactsToServer().catch(() => {});
-  // Update UI
+  // Remove from in-memory state
+  state.contacts.delete(userId);
+  state.unreadCounts.delete(userId);
   if (state.currentChatId === userId) {
     state.currentChatId = null;
     state.selectedMessageIds.clear();
