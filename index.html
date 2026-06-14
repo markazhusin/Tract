@@ -11,6 +11,30 @@
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon.svg">
   <title></title>
+  <script>
+    // Runs before render: apply disguise (Calculator) and hide content while locked,
+    // so a shoulder-surfer never glimpses the real app.
+    (function () {
+      try {
+        var mode = localStorage.getItem('tract.lock.mode');
+        if (mode === 'calculator' || mode === 'passcode') {
+          document.documentElement.setAttribute('data-locked', '1');
+        }
+        if (mode === 'calculator') {
+          document.documentElement.setAttribute('data-mask', 'calc');
+          document.title = 'Калькулятор';
+          var man = document.querySelector('link[rel="manifest"]');
+          if (man) man.setAttribute('href', '/manifest-calc.webmanifest');
+          var atitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+          if (atitle) atitle.setAttribute('content', 'Калькулятор');
+          var aicon = document.querySelector('link[rel="apple-touch-icon"]');
+          if (aicon) aicon.setAttribute('href', '/icons/calc.svg');
+          var icon = document.querySelector('link[rel="icon"]');
+          if (icon) icon.setAttribute('href', '/icons/calc.svg');
+        }
+      } catch (e) { /* no-op */ }
+    })();
+  </script>
   <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons&display=block">
   <style>
     :root {
@@ -254,6 +278,39 @@
     }
     .contact-item:hover,
     .contact-item.active { background: rgba(255,255,255,0.04); }
+
+    /* iOS-style swipe-to-delete on chat rows */
+    .swipe-row {
+      position: relative;
+      overflow: hidden;
+    }
+    .swipe-row .swipe-delete {
+      position: absolute;
+      top: 0; right: 0; bottom: 0;
+      width: 88px;
+      border: none;
+      background: #ff3b30;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .swipe-row .swipe-delete:active { background: #d8281f; }
+    .swipe-row > .contact-item {
+      position: relative;
+      z-index: 1;
+      /* Opaque so the delete action stays hidden until the row is swiped open. */
+      background: var(--bg);
+      transition: transform 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
+      will-change: transform;
+      touch-action: pan-y;
+    }
+    .swipe-row > .contact-item:hover,
+    .swipe-row > .contact-item.active { background: #1c1d1d; }
+    .swipe-row.swiping > .contact-item { transition: none; }
 
     .contact-avatar {
       width: 54px;
@@ -1112,6 +1169,137 @@
         font-weight: 600;
         cursor: pointer;
       }
+
+      /* ===== App lock / calculator disguise ===== */
+      html[data-locked] #authGate,
+      html[data-locked] #app { display: none !important; }
+
+      #lockScreen {
+        position: fixed;
+        inset: 0;
+        z-index: 4000;
+        background: #000;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-end;
+        color: #fff;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      /* Calculator (iOS-like) */
+      .calc {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        max-width: 480px;
+        margin: 0 auto;
+        width: 100%;
+        padding: 0 12px calc(12px + env(safe-area-inset-bottom));
+        box-sizing: border-box;
+      }
+      .calc-screen {
+        flex: 1;
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
+        padding: 16px 12px;
+        font-size: clamp(56px, 18vw, 88px);
+        font-weight: 300;
+        line-height: 1.05;
+        overflow: hidden;
+        word-break: break-all;
+      }
+      .calc-keys {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+      }
+      .calc-key {
+        border: none;
+        border-radius: 50%;
+        aspect-ratio: 1 / 1;
+        font-size: clamp(24px, 7vw, 34px);
+        font-weight: 500;
+        color: #fff;
+        background: #333;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-tap-highlight-color: transparent;
+        transition: filter 0.1s;
+      }
+      .calc-key:active { filter: brightness(1.4); }
+      .calc-key.fn { background: #a5a5a5; color: #000; }
+      .calc-key.op { background: #ff9f0a; }
+      .calc-key.zero { grid-column: span 2; aspect-ratio: auto; border-radius: 999px; justify-content: flex-start; padding-left: 28px; }
+
+      /* Passcode pad */
+      .passlock {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        gap: 28px;
+        padding: 24px calc(24px + env(safe-area-inset-bottom));
+      }
+      .passlock-title { font-size: 17px; color: #aaa; }
+      .passlock-dots { display: flex; gap: 18px; }
+      .passlock-dot {
+        width: 14px; height: 14px; border-radius: 50%;
+        border: 1.5px solid #fff; box-sizing: border-box;
+        transition: background 0.1s;
+      }
+      .passlock-dot.filled { background: #fff; }
+      .passlock.shake { animation: passShake 0.4s; }
+      @keyframes passShake {
+        0%,100%{transform:translateX(0)} 20%{transform:translateX(-10px)}
+        40%{transform:translateX(10px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)}
+      }
+      .passlock-pad { display: grid; grid-template-columns: repeat(3, 76px); gap: 20px; }
+      .passlock-key {
+        width: 76px; height: 76px; border-radius: 50%;
+        border: 1px solid rgba(255,255,255,0.25); background: transparent;
+        color: #fff; font-size: 30px; font-weight: 400; cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .passlock-key:active { background: rgba(255,255,255,0.15); }
+      .passlock-key.blank { border: none; background: transparent; cursor: default; }
+
+      /* Lock settings modal */
+      .lock-modal-backdrop {
+        position: fixed; inset: 0; z-index: 4100;
+        background: rgba(0,0,0,0.6);
+        display: flex; align-items: center; justify-content: center;
+        padding: 16px;
+      }
+      .lock-modal {
+        background: var(--bg-header); border: 1px solid var(--line);
+        border-radius: 16px; width: 100%; max-width: 380px;
+        padding: 20px; box-sizing: border-box; color: var(--text);
+        max-height: 90vh; overflow-y: auto;
+      }
+      .lock-modal h3 { margin: 0 0 4px; font-size: 18px; }
+      .lock-modal p.hint { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+      .lock-modal label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+      .lock-modal input[type="text"],
+      .lock-modal input[type="password"] {
+        width: 100%; box-sizing: border-box; padding: 12px;
+        border-radius: 10px; border: 1px solid var(--line);
+        background: var(--bg); color: var(--text); font-size: 16px;
+        letter-spacing: 2px;
+      }
+      .lock-mode-options { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      .lock-mode-option {
+        display: flex; align-items: center; gap: 10px; padding: 12px;
+        border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+      }
+      .lock-mode-option.active { border-color: var(--accent); }
+      .lock-modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+      .lock-modal-actions .btn { flex: 1; }
     </style>
 </head>
 <body>
@@ -1125,6 +1313,9 @@
   <img id="inviteQr" hidden>
   <span id="inviteHint" hidden></span>
   <input type="file" id="avatarUploadInput" accept="image/*" hidden onchange="handleAvatarUpload(event)">
+
+  <!-- APP LOCK / DISGUISE overlay (filled by app/core/applock.js) -->
+  <div id="lockScreen" hidden></div>
 
   <!-- AUTH GATE -->
   <div id="authGate">
@@ -1280,6 +1471,14 @@
                     <span class="toggle-value" id="hideOnlineLabel">Виден</span>
                     <input type="checkbox" id="hideOnlineToggle" onchange="toggleHideOnline()">
                   </div>
+                </div>
+              </div>
+
+              <div class="settings-section-title">БЛОКИРОВКА</div>
+              <div class="settings-section">
+                <div class="settings-row" onclick="openLockSettings()" style="cursor:pointer;">
+                  <span class="settings-label">Код-пароль и маскировка</span>
+                  <span class="settings-value" id="lockStatusValue">Выкл</span>
                 </div>
               </div>
 

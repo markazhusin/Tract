@@ -25,8 +25,8 @@ export class Multiplexer {
   }
   
   async send(p, targetPeerId) {
-    const preview =
-      p?.type === 'text' ? p.content : `[${p?.type ?? 'msg'}${p?.action ? `:${p.action}` : ''}]`;
+    // Never log message content — only the packet type/action.
+    const preview = `[${p?.type ?? 'msg'}${p?.action ? `:${p.action}` : ''}]`;
     console.log('Отправка:', preview);
     let lastError = null;
 

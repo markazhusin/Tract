@@ -4,27 +4,45 @@ const BADGE = '/icons/badge.svg';
 
 let swRegistration = null;
 let swUpdateCheckTimer = null;
-let swUpdateToastTimer = null;
+let isBusyFn = () => false;     // returns true when a reload would be disruptive (e.g. active call)
+let pendingWorker = null;       // installed-but-waiting worker, applied when safe
+let reloadingForUpdate = false; // guards against a double reload
+
 const SW_UPDATE_INTERVAL = 300000; // 5min
 
-export function initPwa({ onOpenChat } = {}) {
+export function initPwa({ onOpenChat, isBusy } = {}) {
+  if (typeof isBusy === 'function') isBusyFn = isBusy;
+
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').then((reg) => {
       swRegistration = reg;
+
+      // A worker may already be waiting from a previous visit.
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        handleSwUpdate(reg.waiting);
+      }
+
       reg.addEventListener('updatefound', () => {
         const worker = reg.installing;
         if (!worker) return;
         worker.addEventListener('statechange', () => {
           if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-            handleSwUpdate(reg);
+            handleSwUpdate(worker);
           }
         });
       });
-      // Check for updates periodically
+
       swUpdateCheckTimer = setInterval(() => {
         reg.update().catch(() => {});
       }, SW_UPDATE_INTERVAL);
     }).catch((err) => console.warn('[PWA] service worker:', err));
+
+    // Reload exactly once, when the new worker takes control.
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloadingForUpdate) return;
+      reloadingForUpdate = true;
+      window.location.reload();
+    });
 
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'OPEN_CHAT' && event.data.chatId) {
@@ -34,51 +52,59 @@ export function initPwa({ onOpenChat } = {}) {
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
+    if (document.hidden) {
+      // App backgrounded — the safest moment to apply a pending update.
+      applyPendingUpdateIfSafe();
+    } else {
       syncNotificationsToggle();
-      // Also check for SW updates when page becomes visible
       swRegistration?.update().catch(() => {});
     }
   });
 }
 
-function handleSwUpdate(reg) {
-  // Try to get the waiting worker (set after install when skipWaiting not called yet)
-  let worker = reg.waiting;
-  // Fallback: use installing worker if no waiting worker
-  if (!worker) worker = reg.installing;
+// Tell the waiting worker to activate. controllerchange then triggers the reload.
+function activateWorker(worker) {
   if (!worker) return;
+  worker.postMessage({ type: 'SKIP_WAITING' });
+}
 
-  // Show update toast
+function applyPendingUpdateIfSafe() {
+  if (!pendingWorker) return;
+  if (isBusyFn()) return; // never interrupt a call or other critical activity
+  const worker = pendingWorker;
+  pendingWorker = null;
+  hideUpdateToast();
+  activateWorker(worker);
+}
+
+function hideUpdateToast() {
+  const toast = document.getElementById('swUpdateToast');
+  if (toast) toast.classList.remove('visible');
+}
+
+function handleSwUpdate(worker) {
+  if (!worker) return;
+  pendingWorker = worker;
+
+  // Offer the update; the user can apply it immediately by tapping the toast.
   const toast = document.getElementById('swUpdateToast');
   if (toast) {
     toast.classList.add('visible');
-    clearTimeout(swUpdateToastTimer);
-    swUpdateToastTimer = setTimeout(() => {
-      toast.classList.remove('visible');
-    }, 10000);
-  }
-
-  // Reload on user tap or after timeout
-  const reloadFn = () => {
-    worker.postMessage({ type: 'SKIP_WAITING' });
-    window.location.reload();
-  };
-
-  if (toast) {
-    toast.onclick = reloadFn;
-    const btn = toast.querySelector('.sw-update-btn');
-    if (btn) btn.onclick = (e) => {
-      e.stopPropagation();
-      reloadFn();
+    const applyNow = (e) => {
+      e?.stopPropagation?.();
+      const w = pendingWorker;
+      pendingWorker = null;
+      hideUpdateToast();
+      activateWorker(w);
     };
+    toast.onclick = applyNow;
+    const btn = toast.querySelector('.sw-update-btn');
+    if (btn) btn.onclick = applyNow;
   }
 
-  // Auto-reload after 30s if user hasn't interacted
-  setTimeout(() => {
-    if (toast) toast.classList.remove('visible');
-    reloadFn();
-  }, 30000);
+  // Otherwise the update is applied the next time the app is backgrounded
+  // (see the visibilitychange handler) or on the next launch — never as a
+  // surprise reload in the active window, and never during a call.
 }
 
 export function isNotificationsEnabled() {

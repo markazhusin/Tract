@@ -26,6 +26,12 @@ import {
   syncNotificationsToggle,
   updatePwaBadge
 } from './app/pwa.js';
+import {
+  initAppLock,
+  getLockMode,
+  configureLock,
+  disableLock
+} from './app/core/applock.js';
 
 const SIGNALING_URL_KEY = 'tract.signaling.url';
 const ROOM_ID_KEY = 'tract.room.id';
@@ -1096,14 +1102,129 @@ function updateSettingsPanel() {
     updateHideOnlineLabel(hidden);
   }
   syncNotificationsToggle();
+  updateLockStatusLabel();
 }
 
+function updateLockStatusLabel() {
+  const el = $('lockStatusValue');
+  if (!el) return;
+  const mode = getLockMode();
+  el.textContent = mode === 'passcode' ? 'Код-пароль'
+    : mode === 'calculator' ? 'Калькулятор'
+    : 'Выкл';
+}
+
+window.openLockSettings = () => {
+  const currentMode = getLockMode();
+  let selectedMode = currentMode === 'off' ? 'passcode' : currentMode;
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'lock-modal-backdrop';
+
+  const modal = document.createElement('div');
+  modal.className = 'lock-modal';
+  backdrop.appendChild(modal);
+
+  const render = () => {
+    const isCalc = selectedMode === 'calculator';
+    const codeHint = isCalc
+      ? 'Секретная комбинация цифр. В калькуляторе наберите её, нажмите =, затем +.'
+      : 'Ровно 4 цифры — как в Telegram.';
+    modal.innerHTML = `
+      <h3>Блокировка приложения</h3>
+      <p class="hint">Защитите вход код-паролем или замаскируйте приложение под калькулятор.</p>
+
+      <div class="lock-mode-options">
+        <label class="lock-mode-option ${selectedMode === 'passcode' ? 'active' : ''}">
+          <input type="radio" name="lockMode" value="passcode" ${selectedMode === 'passcode' ? 'checked' : ''}>
+          <div>
+            <div class="toggle-label">Код-пароль</div>
+            <div class="toggle-sublabel">4 цифры при запуске</div>
+          </div>
+        </label>
+        <label class="lock-mode-option ${selectedMode === 'calculator' ? 'active' : ''}">
+          <input type="radio" name="lockMode" value="calculator" ${selectedMode === 'calculator' ? 'checked' : ''}>
+          <div>
+            <div class="toggle-label">Маскировка «Калькулятор»</div>
+            <div class="toggle-sublabel">Приложение выглядит как калькулятор</div>
+          </div>
+        </label>
+      </div>
+
+      <label>${isCalc ? 'Секретная комбинация' : 'Код-пароль (4 цифры)'}</label>
+      <input type="password" inputmode="numeric" id="lockCodeInput" autocomplete="off" placeholder="${isCalc ? 'напр. 1958' : '••••'}">
+      <p class="hint" style="margin:6px 0 0;">${codeHint}</p>
+
+      <label>Код самоуничтожения (необязательно)</label>
+      <input type="password" inputmode="numeric" id="lockWipeInput" autocomplete="off" placeholder="стереть всё">
+      <p class="hint" style="margin:6px 0 0;">При вводе этого кода всё содержимое удаляется без следа.</p>
+
+      <div id="lockModalError" style="color:var(--danger);font-size:13px;margin-top:12px;min-height:16px;"></div>
+
+      <div class="lock-modal-actions">
+        ${currentMode !== 'off' ? '<button type="button" class="btn subtle" id="lockDisableBtn">Выключить</button>' : ''}
+        <button type="button" class="btn subtle" id="lockCancelBtn">Отмена</button>
+        <button type="button" class="btn primary" id="lockSaveBtn">Сохранить</button>
+      </div>
+    `;
+
+    modal.querySelectorAll('input[name="lockMode"]').forEach((r) => {
+      r.addEventListener('change', (e) => { selectedMode = e.target.value; render(); });
+    });
+
+    const close = () => backdrop.remove();
+    $('lockCancelBtn').onclick = close;
+    backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
+
+    const disableBtn = $('lockDisableBtn');
+    if (disableBtn) disableBtn.onclick = async () => {
+      await disableLock();
+      updateLockStatusLabel();
+      close();
+      setStatus('ok', 'Блокировка выключена');
+    };
+
+    $('lockSaveBtn').onclick = async () => {
+      const code = $('lockCodeInput').value.trim();
+      const wipe = $('lockWipeInput').value.trim();
+      const errEl = $('lockModalError');
+      errEl.textContent = '';
+
+      if (!/^\d+$/.test(code)) { errEl.textContent = 'Код должен состоять из цифр.'; return; }
+      if (selectedMode === 'passcode' && code.length !== 4) { errEl.textContent = 'Код-пароль — ровно 4 цифры.'; return; }
+      if (wipe && !/^\d+$/.test(wipe)) { errEl.textContent = 'Код уничтожения должен состоять из цифр.'; return; }
+      if (selectedMode === 'passcode' && wipe && wipe.length !== 4) { errEl.textContent = 'Код уничтожения — ровно 4 цифры.'; return; }
+      if (wipe && wipe === code) { errEl.textContent = 'Коды должны различаться.'; return; }
+
+      try {
+        await configureLock({ mode: selectedMode, code, wipeCode: wipe || undefined });
+        updateLockStatusLabel();
+        close();
+        setStatus('ok', selectedMode === 'calculator' ? 'Маскировка включена' : 'Код-пароль установлен');
+      } catch (e) {
+        errEl.textContent = 'Не удалось сохранить.';
+      }
+    };
+  };
+
+  render();
+  document.body.appendChild(backdrop);
+};
+
 async function init() {
+  // Front door: if an app lock is set, gate everything behind it before any
+  // real content is rendered (the <head> boot script already hid #app/#authGate).
+  await initAppLock();
+
   applyInviteParams();
   syncSignalingFromEnvironment();
   window.addEventListener('resize', updateMobileLayout);
   initSwipeGestures();
-  initPwa({ onOpenChat: (chatId) => openChatFromDeepLink(chatId) });
+  initPwa({
+    onOpenChat: (chatId) => openChatFromDeepLink(chatId),
+    // Block disruptive SW-update reloads while a call is in progress.
+    isBusy: () => Boolean(state.activeCall)
+  });
   syncNotificationsToggle();
 
   // Toggle send/mic button based on input
@@ -1853,8 +1974,9 @@ window.connectHandshake = async () => {
       hideOnline: Boolean(peerMeta.hideOnline),
       lastSeen: peerMeta.lastSeen || null,
       roomId,
-      publicKeyHex: peerMeta.publicKey || state.contacts.get(peerMeta.userId)?.publicKeyHex,
-      lastMsg: state.contacts.get(peerMeta.userId)?.lastMsg || 'Онлайн'
+      publicKeyHex: peerMeta.publicKey || state.contacts.get(peerMeta.userId)?.publicKeyHex
+      // NB: never set lastMsg here — the chat preview must come only from a real
+      // delivered/sent message, not from a presence event.
     };
 
     if (peerMeta.avatar) {
@@ -1873,13 +1995,11 @@ window.connectHandshake = async () => {
     try {
       const pending = await messageDB.getUndeliveredMessages(chatId);
       for (const msg of pending) {
-        try {
-          await state.multiplexer.send(msg, peerMeta.peerId);
-          await messageDB.markMessageSent(msg.id);
-          markMessageDelivered(msg.id);
-        } catch (e) {
+        // Route through deliverOutgoingMessage so the resend is E2E-encrypted too,
+        // never plaintext. It re-resolves the peer and marks the message delivered.
+        await deliverOutgoingMessage(chatId, msg).catch((e) => {
           console.warn('[onPeerDiscovery] resend failed:', e?.message || e);
-        }
+        });
       }
       await flushPendingMessageControls(chatId, peerMeta.peerId);
       await flushPendingCallControls(chatId, peerMeta.peerId);
@@ -1973,11 +2093,24 @@ async function checkUserBanned(userId) {
   }
 }
 
+// Fields that are safe to sync to the server for multi-device support.
+// Message previews (lastMsg/lastTime), presence and runtime peer info are
+// intentionally excluded — the host must never see what was said or when.
+const SYNCED_CONTACT_FIELDS = ['id', 'displayName', 'alias', 'publicKeyHex', 'blocked', 'createdAt', 'updatedAt'];
+
+function sanitizeContactForServer(contact) {
+  const out = {};
+  for (const field of SYNCED_CONTACT_FIELDS) {
+    if (contact[field] !== undefined) out[field] = contact[field];
+  }
+  return out;
+}
+
 async function syncContactsToServer() {
   if (!state.profile) return;
   const serverUrl = resolveSignalingUrl();
   if (!serverUrl) return;
-  const contacts = Array.from(state.contacts.values());
+  const contacts = Array.from(state.contacts.values()).map(sanitizeContactForServer);
   try {
     await fetch(new URL('/contacts/save', serverUrl), {
       method: 'POST',
@@ -2322,7 +2455,7 @@ window.addContactById = async () => {
   const existing = state.contacts.get(userId);
   await upsertContact(userId, {
     displayName: existing?.displayName || userId,
-    lastMsg: existing?.lastMsg || 'Контакт добавлен',
+    lastMsg: existing?.lastMsg || '',
     activePeerId: null,
     online: false
   });
@@ -2820,26 +2953,16 @@ window.sendCurrentMessage = async () => {
     });
   }
 
-  // Send via relay/signaling or queue for offline delivery
-  const targetPeerId = await resolvePeerForUser(chatId);
-  if (targetPeerId) {
-    try {
-      await state.multiplexer.send(packet, targetPeerId);
-    } catch (e) {
-      console.warn('Failed to send via multiplexer, queuing:', e);
-      await queuePendingMessage(chatId, packet);
-    }
-  } else {
-    // User is offline - queue message for delivery when they come online
-    await queuePendingMessage(chatId, packet);
-  }
-
   if (state.currentChatId === chatId) {
     addMessageToUI(packet, true, { pending: true });
   }
 
+  // deliverOutgoingMessage performs E2E encryption before the packet ever touches
+  // a transport — we must NEVER put the plaintext packet on the wire ourselves.
+  // If the peer is offline the message simply stays saved as undelivered and is
+  // retried from onPeerDiscovery, so no separate queue is needed here.
   deliverOutgoingMessage(chatId, packet).catch((error) => {
-    console.warn('Deferred send failed:', error);
+    console.warn('Send failed, will retry when peer is online:', error);
   });
 };
 
@@ -2900,6 +3023,11 @@ async function deliverOutgoingMessage(chatId, packet) {
   const contact = state.contacts.get(chatId);
   packet.recipientId = chatId;
   const targetPeerId = await resolvePeerForUser(chatId);
+  if (!targetPeerId) {
+    // Peer offline: leave the message marked undelivered. onPeerDiscovery resends it.
+    // (Sending with a null target would broadcast to every connected peer.)
+    return;
+  }
 
   const encryptedPacket = { ...packet };
   let recipientPubKey = contact?.publicKeyHex;
@@ -2943,11 +3071,103 @@ function renderProfile() {
   updateSettingsPanel();
 }
 
+// Clear a chat's local history and reset its preview. Mirrors the "Удалить чат"
+// menu action but works for any chat id (used by the swipe-to-delete gesture).
+async function deleteChatById(id) {
+  if (!id) return;
+  await messageDB.deleteChat(id);
+  state.unreadCounts.delete(id);
+  if (!state.groups.has(id)) {
+    const contact = state.contacts.get(id);
+    if (contact) await upsertContact(id, { ...contact, lastMsg: '', lastTime: 0 });
+  }
+  if (state.currentChatId === id) {
+    state.currentChatId = null;
+    state.selectedMessageIds.clear();
+    renderChatHeader();
+    const messages = $('messages');
+    if (messages) messages.innerHTML = '<div class="empty-chat">История очищена</div>';
+    updateMobileLayout();
+  }
+  renderContacts();
+  refreshDocTitle();
+}
+
+// Wrap a chat list row so a right-to-left swipe reveals an iOS-style Delete action.
+function makeSwipeToDelete(itemEl, id) {
+  const row = document.createElement('div');
+  row.className = 'swipe-row';
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'swipe-delete';
+  del.textContent = 'Удалить';
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteChatById(id);
+  });
+
+  row.appendChild(del);
+  row.appendChild(itemEl);
+
+  const OPEN = 88;     // px the row slides to expose the action
+  const THRESHOLD = 44;
+  let startX = 0, startY = 0, dx = 0;
+  let dragging = false, decided = false, horizontal = false, open = false;
+
+  const close = () => { open = false; row.classList.remove('open'); itemEl.style.transform = ''; };
+  const openRow = () => { open = true; row.classList.add('open'); itemEl.style.transform = `translateX(${-OPEN}px)`; };
+
+  itemEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    dragging = true; decided = false; horizontal = false; dx = 0;
+    row.classList.add('swiping');
+  }, { passive: true });
+
+  itemEl.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    dx = e.touches[0].clientX - startX;
+    const dy = e.touches[0].clientY - startY;
+    if (!decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      decided = true;
+      horizontal = Math.abs(dx) > Math.abs(dy);
+    }
+    if (!horizontal) return; // vertical intent → let the list scroll
+    e.preventDefault();
+    let x = (open ? -OPEN : 0) + dx;
+    if (x > 0) x = 0;
+    if (x < -OPEN - 24) x = -OPEN - 24;
+    itemEl.style.transform = `translateX(${x}px)`;
+  }, { passive: false });
+
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    row.classList.remove('swiping');
+    if (horizontal) {
+      const finalX = (open ? -OPEN : 0) + dx;
+      if (finalX <= -THRESHOLD) openRow(); else close();
+    }
+  };
+  itemEl.addEventListener('touchend', end, { passive: true });
+  itemEl.addEventListener('touchcancel', end, { passive: true });
+
+  // While open, the first tap closes the row instead of opening the chat.
+  itemEl.addEventListener('click', (e) => {
+    if (open) { e.stopPropagation(); e.preventDefault(); close(); }
+  }, true);
+
+  return row;
+}
+
 function renderContacts() {
   const container1 = $('contacts');
   const container2 = $('contactsList');
 
-  const renderContactItem = ([id, contact], isActive, showPreview = true) => {
+  const renderContactItem = ([id, contact], isActive, showPreview = true, swipeable = false) => {
     const unread = state.unreadCounts.get(id) || 0;
     const initials = getContactInitials(contact.displayName || id);
     const preview = contact.blocked
@@ -2993,10 +3213,10 @@ function renderContacts() {
     }
 
     btn.onclick = () => openChat(id);
-    return btn;
+    return swipeable ? makeSwipeToDelete(btn, id) : btn;
   };
 
-  const renderGroupItem = ([groupId, group], isActive) => {
+  const renderGroupItem = ([groupId, group], isActive, swipeable = false) => {
     const unread = state.unreadCounts.get(groupId) || 0;
     const initials = getContactInitials(group.name);
     const preview = 'Группа';
@@ -3015,7 +3235,7 @@ function renderContacts() {
       ${unread > 0 ? `<div class="contact-right"><div class="contact-badge">${unread > 99 ? '99+' : unread}</div></div>` : ''}
     `;
     btn.onclick = () => openChat(groupId);
-    return btn;
+    return swipeable ? makeSwipeToDelete(btn, groupId) : btn;
   };
 
   const render = (container, grouped) => {
@@ -3034,7 +3254,7 @@ function renderContacts() {
 
     if (!grouped) {
       for (const gItem of groupItems) {
-        container.appendChild(renderGroupItem(gItem, gItem[0] === state.currentChatId));
+        container.appendChild(renderGroupItem(gItem, gItem[0] === state.currentChatId, true));
       }
       if (groupItems.length > 0 && items.length > 0) {
         const divider = document.createElement('div');
@@ -3048,7 +3268,7 @@ function renderContacts() {
         return (right.updatedAt || 0) - (left.updatedAt || 0);
       });
       for (const item of items) {
-        container.appendChild(renderContactItem(item, item[0] === state.currentChatId));
+        container.appendChild(renderContactItem(item, item[0] === state.currentChatId, true, true));
       }
       return;
     }
@@ -3297,8 +3517,8 @@ async function handleCallControl(packet, fromPeerId) {
       displayName: resolvedDisplayName,
       activePeerId: fromPeerId,
       online: true,
-      roomId: state.transport?.options?.roomId,
-      lastMsg: existingContact?.lastMsg || 'Звонок'
+      roomId: state.transport?.options?.roomId
+      // No lastMsg here — an incoming call must not become the chat preview.
     });
 
     if (wasNew) {
