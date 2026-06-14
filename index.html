@@ -627,6 +627,15 @@
       align-items:center;
       justify-content:center;
     }
+    #composerRow .btn.primary .material-icons {
+      font-size: 22px;
+      line-height: 1;
+    }
+    @supports (padding-bottom: env(safe-area-inset-bottom)) {
+      #composer {
+        padding-bottom: calc(10px + var(--safe-bottom));
+      }
+    }
       /* Checkbox contact item for group member selection */
       .contact-checkbox-item {
         padding: 10px 12px;

@@ -142,12 +142,33 @@ export class WebRTCTransport {
       channel: null,
       connected: false,
       iceCandidates: [],
-      audioTransceiver: null,
+      audioSender: null,
       localAudioStream: null,
-      expectVoiceAnswer: false
+      // Perfect Negotiation state.
+      // The peer with the lexicographically smaller id is "polite": on a glare
+      // collision it yields (rolls back its own offer); the impolite peer ignores
+      // the incoming offer and keeps its own. This deterministic split removes the
+      // intermittent-connect and one-way-silence bugs caused by both sides rolling back.
+      polite: this.myPeerId < peerId,
+      makingOffer: false,
+      ignoreOffer: false
     };
 
-    peerState.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+    this.peers.set(peerId, peerState);
+
+    // Single source of truth for (re)negotiation. Adding the data channel or an
+    // audio track fires this automatically; we never craft offers by hand anymore.
+    pc.onnegotiationneeded = async () => {
+      try {
+        peerState.makingOffer = true;
+        await pc.setLocalDescription();
+        await this.signaling.sendSignal(peerId, 'offer', pc.localDescription.sdp);
+      } catch (err) {
+        console.error('Negotiation offer failed:', err);
+      } finally {
+        peerState.makingOffer = false;
+      }
+    };
 
     pc.ontrack = (event) => {
       const track = event.track;
@@ -165,8 +186,6 @@ export class WebRTCTransport {
         queueMicrotask(() => this.emitRemoteAudioStream(peerId));
       }, { once: true });
     };
-
-    this.peers.set(peerId, peerState);
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -189,17 +208,13 @@ export class WebRTCTransport {
     return peerState;
   }
 
+  // Kept for API compatibility: ensure a peer connection exists so an incoming
+  // audio offer has somewhere to land. Actual receive direction is negotiated
+  // automatically once a remote audio track arrives.
   expectVoiceAnswer(peerId) {
-    const peerState = this.peers.get(peerId);
-    if (peerState) {
-      peerState.expectVoiceAnswer = true;
-      this.ensureAudioReceive(peerState);
+    if (!this.peers.has(peerId) && this.onlinePeers.has(peerId)) {
+      this.createPeerConnection(peerId);
     }
-  }
-
-  ensureAudioReceive(peerState) {
-    if (!peerState?.audioTransceiver) return;
-    peerState.audioTransceiver.direction = peerState.localAudioStream ? 'sendrecv' : 'recvonly';
   }
 
   extractRemoteAudioStream(peerState) {
@@ -211,12 +226,6 @@ export class WebRTCTransport {
       if (track?.kind === 'audio' && track.readyState !== 'ended') {
         return new MediaStream([track]);
       }
-    }
-
-    const transceiver = peerState.audioTransceiver;
-    const track = transceiver?.receiver?.track;
-    if (track?.kind === 'audio' && track.readyState !== 'ended') {
-      return new MediaStream([track]);
     }
 
     return null;
@@ -235,23 +244,19 @@ export class WebRTCTransport {
     this.emitRemoteAudioStream(peerId);
   }
 
-  async waitForStableSignaling(peerId, timeoutMs = 10000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const peerState = this.peers.get(peerId);
-      if (peerState?.pc && peerState.pc.signalingState === 'stable') {
-        return peerState;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    const peerState = this.peers.get(peerId);
-    if (!peerState?.pc) return null;
-    return peerState.pc.signalingState === 'stable' ? peerState : null;
-  }
-
-  async prepareAndSendAudioOffer(peerId) {
+  // Acquire the local microphone and attach it to the peer connection.
+  // Adding the track triggers onnegotiationneeded, and Perfect Negotiation handles
+  // any glare with the other side doing the same — so BOTH caller and callee can
+  // enable audio immediately, with no timing hacks. Idempotent.
+  async enableLocalAudio(peerId) {
     const peerState = this.peers.get(peerId);
     if (!peerState?.pc) throw new Error('No peer connection');
+
+    const liveTrack = peerState.localAudioStream?.getAudioTracks?.()
+      .find((t) => t.readyState === 'live');
+    if (liveTrack && peerState.audioSender) {
+      return; // already streaming mic
+    }
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
@@ -261,104 +266,47 @@ export class WebRTCTransport {
     peerState.localAudioStream = stream;
     const track = stream.getAudioTracks()[0];
 
-    // Add audio transceiver if it doesn't exist (e.g. initial connection had no audio)
-    if (!peerState.audioTransceiver) {
-      peerState.audioTransceiver = peerState.pc.addTransceiver(track);
+    if (peerState.audioSender) {
+      await peerState.audioSender.replaceTrack(track);
+    } else {
+      // addTrack fires onnegotiationneeded automatically.
+      peerState.audioSender = peerState.pc.addTrack(track, stream);
     }
-
-    await peerState.audioTransceiver.sender.replaceTrack(track);
-    try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
-    peerState.audioTransceiver.direction = 'sendrecv';
-
-    // If there's already a remote description, wait for stable signaling (renegotiation case)
-    if (peerState.pc.remoteDescription) {
-      const stable = await this.waitForStableSignaling(peerId, 8000);
-      if (!stable) throw new Error('Signaling state not stable for renegotiation');
-    }
-
-    const offer = await peerState.pc.createOffer();
-    await peerState.pc.setLocalDescription(offer);
-    await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
   }
 
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
     await this.ready;
 
     if (!this.peers.has(peerId)) {
-      if (this.onlinePeers.has(peerId)) {
-        const peerState = this.createPeerConnection(peerId);
-        if (asOfferer) {
-          const channel = peerState.pc.createDataChannel('tract', { ordered: true });
-          this.setupDataChannel(channel, peerId);
-        } else {
-          peerState.pc.ondatachannel = (event) => {
-            this.setupDataChannel(event.channel, peerId);
-          };
-        }
-        // Send initial offer immediately so data channel is established
-        try {
-          const offer = await peerState.pc.createOffer();
-          await peerState.pc.setLocalDescription(offer);
-          await this.signaling.sendSignal(peerId, 'offer', offer.sdp);
-        } catch (err) {
-          console.error('WebRTC initiate error:', err);
-          throw err;
-        }
-      } else {
+      if (!this.onlinePeers.has(peerId)) {
         throw new Error('Peer not online');
+      }
+      const peerState = this.createPeerConnection(peerId);
+      if (asOfferer) {
+        // Creating the data channel triggers onnegotiationneeded → initial offer.
+        const channel = peerState.pc.createDataChannel('tract', { ordered: true });
+        this.setupDataChannel(channel, peerId);
+      } else {
+        peerState.pc.ondatachannel = (event) => {
+          this.setupDataChannel(event.channel, peerId);
+        };
       }
     }
 
-    // Wait for data channel to open before audio renegotiation
-    // This prevents SDP race conditions between initial data channel and audio offers
     const peerState = await this.waitForPeerState(peerId, 12000);
     if (!peerState?.pc) {
       throw new Error('Peer connection not ready');
     }
-    const dcOpen = peerState.channel && peerState.channel.readyState === 'open';
-    if (!dcOpen) {
-      const opened = await this.waitForOpenPeer(peerId, 10000);
-      if (!opened) {
-        // Proceed anyway — audio renegotiation may still work
-        console.warn('Data channel not open, attempting audio renegotiation');
-      }
-    }
 
-    // Only the offerer starts renegotiation for audio
-    // The answerer adds their mic later via addLocalMic() after the remote audio is established
-    if (asOfferer) {
-      await this.prepareAndSendAudioOffer(peerId);
-    }
+    // Both sides enable their mic up front. Perfect Negotiation resolves the
+    // simultaneous renegotiation cleanly, so audio flows in both directions.
+    await this.enableLocalAudio(peerId);
   }
 
+  // Retained for API compatibility (main.js calls it after a delay). Now idempotent:
+  // enableLocalAudio already ran for both roles, so this is a safety net.
   async addLocalMic(peerId) {
-    const peerState = this.peers.get(peerId);
-    if (!peerState?.pc) throw new Error('No peer connection');
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: false
-    }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true, video: false }));
-
-    peerState.localAudioStream = stream;
-    const track = stream.getAudioTracks()[0];
-
-    if (!peerState.audioTransceiver) {
-      peerState.audioTransceiver = peerState.pc.addTransceiver(track);
-    }
-
-    await peerState.audioTransceiver.sender.replaceTrack(track);
-    try { peerState.audioTransceiver.sender.setStreams([stream]); } catch {}
-    peerState.audioTransceiver.direction = 'sendrecv';
-
-    if (peerState.pc.remoteDescription) {
-      const stable = await this.waitForStableSignaling(peerId, 8000);
-      if (!stable) throw new Error('Signaling state not stable for renegotiation');
-    }
-
-    const offer = await peerState.pc.createOffer();
-    await peerState.pc.setLocalDescription(offer);
-    await this.signaling.sendSignal(peerId, 'offer', peerState.pc.localDescription.sdp);
+    await this.enableLocalAudio(peerId);
   }
 
   async stopLocalAudio(peerId) {
@@ -373,19 +321,13 @@ export class WebRTCTransport {
       peerState.localAudioStream = null;
     }
 
-    if (peerState.audioTransceiver) {
+    if (peerState.audioSender) {
       try {
-        await peerState.audioTransceiver.sender.replaceTrack(null);
-        try { peerState.audioTransceiver.sender.setStreams([]); } catch {}
-        peerState.audioTransceiver.direction = 'inactive';
-        peerState.audioTransceiver.stop();
+        await peerState.audioSender.replaceTrack(null);
       } catch (e) {
-        console.warn('stopLocalAudio transceiver:', e);
+        console.warn('stopLocalAudio sender:', e);
       }
-      peerState.audioTransceiver = null;
     }
-
-    peerState.expectVoiceAnswer = false;
   }
 
   setLocalMicMuted(peerId, muted) {
@@ -408,21 +350,13 @@ export class WebRTCTransport {
     return this.peers.get(peerId);
   }
 
-  async connectToPeer(peerId) {
+  connectToPeer(peerId) {
     if (this.peers.has(peerId)) return;
 
     const peerState = this.createPeerConnection(peerId);
+    // Creating the data channel fires onnegotiationneeded, which sends the offer.
     const channel = peerState.pc.createDataChannel('tract', { ordered: true });
     this.setupDataChannel(channel, peerId);
-
-    try {
-      const offer = await peerState.pc.createOffer();
-      await peerState.pc.setLocalDescription(offer);
-      await this.signaling.sendSignal(peerId, 'offer', offer.sdp);
-    } catch (err) {
-      console.error('WebRTC initiate error:', err);
-      this.closePeer(peerId);
-    }
   }
 
   async flushIceCandidates(peerState) {
@@ -437,9 +371,12 @@ export class WebRTCTransport {
     }
   }
 
+  // Perfect Negotiation: a single offer/answer handler for both the initial
+  // handshake and every later renegotiation (adding audio, etc.).
   async handleRemoteOffer(peerId, sdp) {
     const existingPeer = this.peers.get(peerId);
     const peerState = existingPeer || this.createPeerConnection(peerId);
+    const pc = peerState.pc;
 
     if (!existingPeer) {
       peerState.pc.ondatachannel = (event) => {
@@ -447,42 +384,25 @@ export class WebRTCTransport {
       };
     }
 
-    this.ensureAudioReceive(peerState);
-
-    // SDP glare handling: if we have a pending local offer, roll it back
-    if (peerState.pc.signalingState === 'have-local-offer') {
-      try {
-        await peerState.pc.setLocalDescription({ type: 'rollback' });
-      } catch (e) {
-        console.warn('Glare rollback failed:', e);
-      }
-    }
-
-    if (peerState.pc.remoteDescription) {
-      // Renegotiation offer (e.g. callee adding audio track)
-      try {
-        await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
-        await this.flushIceCandidates(peerState);
-        const answer = await peerState.pc.createAnswer();
-        await peerState.pc.setLocalDescription(answer);
-        await this.signaling.sendSignal(peerId, 'answer', peerState.pc.localDescription.sdp);
-        queueMicrotask(() => this.emitRemoteAudioStream(peerId));
-      } catch (err) {
-        console.error('WebRTC renegotiation error:', err);
-      }
+    // A collision is an incoming offer while we are mid-offer or not stable.
+    const offerCollision = peerState.makingOffer || pc.signalingState !== 'stable';
+    peerState.ignoreOffer = !peerState.polite && offerCollision;
+    if (peerState.ignoreOffer) {
+      // Impolite peer keeps its own offer; the polite side will roll back instead.
       return;
     }
 
     try {
-      await peerState.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+      // setRemoteDescription performs an implicit rollback for the polite peer
+      // when there is a pending local offer, so glare resolves automatically.
+      await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
       await this.flushIceCandidates(peerState);
-      const answer = await peerState.pc.createAnswer();
-      await peerState.pc.setLocalDescription(answer);
-      await this.signaling.sendSignal(peerId, 'answer', answer.sdp);
+      await pc.setLocalDescription(); // creates the answer
+      await this.signaling.sendSignal(peerId, 'answer', pc.localDescription.sdp);
       queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
       console.error('WebRTC answer error:', err);
-      this.closePeer(peerId);
+      if (!existingPeer) this.closePeer(peerId);
     }
   }
 
@@ -490,9 +410,11 @@ export class WebRTCTransport {
     const peer = this.peers.get(peerId);
     if (!peer) return;
 
+    // Ignore stray answers that don't match a pending local offer.
+    if (peer.pc.signalingState !== 'have-local-offer') return;
+
     try {
       await peer.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-
       await this.flushIceCandidates(peer);
       queueMicrotask(() => this.emitRemoteAudioStream(peerId));
     } catch (err) {
@@ -513,7 +435,10 @@ export class WebRTCTransport {
     try {
       await peer.pc.addIceCandidate(iceCandidate);
     } catch (err) {
-      console.warn('ICE add error:', err);
+      // Suppress the expected error for a candidate from an offer we intentionally ignored.
+      if (!peer.ignoreOffer) {
+        console.warn('ICE add error:', err);
+      }
     }
   }
 

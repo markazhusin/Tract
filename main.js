@@ -600,10 +600,12 @@ async function loadOwnAvatar() {
   try {
     const avatars = await fetchAvatarGalleryFromServer(state.profile.userId);
     if (avatars.length) {
+      const latestAvatar = avatars[avatars.length - 1].avatarData;
       saveAvatarHistory(state.profile.userId, avatars);
+      localStorage.setItem(getAvatarStorageKey(state.profile.userId), latestAvatar);
       renderProfileCards();
       renderContacts();
-      return avatars[avatars.length - 1].avatarData;
+      return latestAvatar;
     }
   } catch (e) {
     console.warn('loadOwnAvatar server fetch failed, using cache:', e);
@@ -1103,6 +1105,19 @@ async function init() {
   initSwipeGestures();
   initPwa({ onOpenChat: (chatId) => openChatFromDeepLink(chatId) });
   syncNotificationsToggle();
+
+  // Toggle send/mic button based on input
+  const input = $('messageInput');
+  if (input) {
+    input.addEventListener('input', () => {
+      const btn = $('sendBtn');
+      if (!btn) return;
+      const icon = btn.querySelector('.material-icons');
+      if (!icon) return;
+      const hasText = input.value.trim().length > 0;
+      icon.textContent = hasText ? 'send' : 'mic';
+    });
+  }
 
   const identity = getStoredIdentityMetadata();
   const legacyIdentity = getLegacyIdentityMetadata();
@@ -2786,6 +2801,13 @@ window.sendCurrentMessage = async () => {
   };
 
   input.value = '';
+  // Update send button back to mic
+  const btn = $('sendBtn');
+  if (btn) {
+    const icon = btn.querySelector('.material-icons');
+    if (icon) icon.textContent = 'mic';
+  }
+
   const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
   packet._dbId = dbKey;
 
@@ -2796,6 +2818,20 @@ window.sendCurrentMessage = async () => {
       lastMsg: text,
       lastTime: packet.timestamp
     });
+  }
+
+  // Send via relay/signaling or queue for offline delivery
+  const targetPeerId = await resolvePeerForUser(chatId);
+  if (targetPeerId) {
+    try {
+      await state.multiplexer.send(packet, targetPeerId);
+    } catch (e) {
+      console.warn('Failed to send via multiplexer, queuing:', e);
+      await queuePendingMessage(chatId, packet);
+    }
+  } else {
+    // User is offline - queue message for delivery when they come online
+    await queuePendingMessage(chatId, packet);
   }
 
   if (state.currentChatId === chatId) {
