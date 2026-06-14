@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#050508">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -23,6 +23,8 @@
         if (mode === 'calculator') {
           document.documentElement.setAttribute('data-mask', 'calc');
           document.title = 'Калькулятор';
+          var theme = document.querySelector('meta[name="theme-color"]');
+          if (theme) theme.setAttribute('content', '#000000');
           var man = document.querySelector('link[rel="manifest"]');
           if (man) man.setAttribute('href', '/manifest-calc.webmanifest');
           var atitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
@@ -55,13 +57,19 @@
       --safe-bottom: env(safe-area-inset-bottom, constant(safe-area-inset-bottom, 0px));
       --safe-top: env(safe-area-inset-top, constant(safe-area-inset-top, 0px));
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
     html, body {
       height: 100%;
       overflow: hidden;
       overscroll-behavior: none;
+      /* Disable double-tap-to-zoom (and the 300ms tap delay) app-wide. */
+      touch-action: manipulation;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
+    /* 16px minimum prevents iOS from zooming the page when an input is focused. */
+    input, textarea, select { font-size: 16px; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       background: var(--bg);
@@ -1173,6 +1181,8 @@
       /* ===== App lock / calculator disguise ===== */
       html[data-locked] #authGate,
       html[data-locked] #app { display: none !important; }
+      /* Pure-black document behind the lock so no grey body/safe-area shows. */
+      html[data-locked], html[data-locked] body { background: #000 !important; }
 
       #lockScreen {
         position: fixed;
@@ -1435,7 +1445,7 @@
                   <label>Отображаемое имя</label>
                   <div style="position:relative;">
                     <input id="displayNameInput" type="text" placeholder="Введите имя"
-                      style="background:var(--panel-input);border:1.5px solid var(--accent);color:var(--text);padding:10px 40px 10px 12px;border-radius:8px;width:100%;font-size:15px;">
+                      style="background:var(--panel-input);border:1.5px solid var(--accent);color:var(--text);padding:10px 40px 10px 12px;border-radius:8px;width:100%;font-size:16px;">
                     <span class="material-icons" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--accent);font-size:18px;pointer-events:none;">edit</span>
                   </div>
                 </div>

@@ -1711,6 +1711,11 @@ $('displayNameInput')?.addEventListener('input', () => {
   clearTimeout(_displayNameTimer);
   _displayNameTimer = setTimeout(saveOwnProfile, 400);
 });
+// Save immediately when the field loses focus (covers fast edits + view switches).
+$('displayNameInput')?.addEventListener('blur', () => {
+  clearTimeout(_displayNameTimer);
+  saveOwnProfile();
+});
 
 async function saveOwnProfile() {
   if (!state.profile) return;
@@ -3018,12 +3023,9 @@ async function deliverOutgoingMessage(chatId, packet) {
   const contact = state.contacts.get(chatId);
   packet.recipientId = chatId;
   const targetPeerId = await resolvePeerForUser(chatId);
-  if (!targetPeerId) {
-    // Peer offline: leave the message marked undelivered. onPeerDiscovery resends it.
-    // (Sending with a null target would broadcast to every connected peer.)
-    return;
-  }
 
+  // Encrypt first (E2E) — this happens regardless of how we deliver, so the relay
+  // never carries plaintext.
   const encryptedPacket = { ...packet };
   let recipientPubKey = contact?.publicKeyHex;
   if (!recipientPubKey) {
@@ -3042,18 +3044,29 @@ async function deliverOutgoingMessage(chatId, packet) {
   }
 
   try {
-    await state.multiplexer.send(encryptedPacket, targetPeerId);
+    if (targetPeerId) {
+      // Known peer: multiplexer (Signaling relay first, WebRTC fallback).
+      await state.multiplexer.send(encryptedPacket, targetPeerId);
+    } else if (state.signalingRelay) {
+      // Peer not currently resolvable. Still deliver via the relay addressed by
+      // userId — the server forwards to the peer's poll queue and persists to its
+      // inbox, so the message arrives without us having to wait for a fresh
+      // peer-discovery event. (A null multiplexer target would broadcast to all.)
+      await state.signalingRelay.ready;
+      await state.signalingRelay.send(encryptedPacket, null, chatId);
+    } else {
+      return; // no transport available — stays undelivered, retried on discovery
+    }
     await messageDB.markMessageSent(packet._dbId || packet.id);
     await upsertContact(chatId, {
       ...contact,
-      activePeerId: targetPeerId,
-      online: true,
       lastMsg: packet.content,
-      lastTime: packet.timestamp
+      lastTime: packet.timestamp,
+      ...(targetPeerId ? { activePeerId: targetPeerId, online: true } : {})
     });
     markMessageDelivered(packet._dbId || packet.id);
   } catch (error) {
-    console.warn('Send failed:', error);
+    console.warn('Send failed, will retry when peer is online:', error);
   }
 }
 
@@ -3061,7 +3074,12 @@ function renderProfile() {
   const isAuthenticated = Boolean(state.profile);
   if (!isAuthenticated) return;
 
-  $('displayNameInput').value = state.profile.displayName;
+  // Don't clobber the field while the user is editing it — otherwise a re-render
+  // triggered mid-typing would wipe the unsaved name (felt like "name won't save").
+  const nameInput = $('displayNameInput');
+  if (nameInput && document.activeElement !== nameInput) {
+    nameInput.value = state.profile.displayName;
+  }
   renderProfileCards();
   updateSettingsPanel();
 }
