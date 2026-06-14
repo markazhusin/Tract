@@ -1200,15 +1200,18 @@ window.openLockSettings = () => {
         await configureLock({ mode: selectedMode, code, wipeCode: wipe || undefined });
         updateLockStatusLabel();
         close();
-        setStatus('ok', selectedMode === 'calculator' ? 'Маскировка включена' : 'Код-пароль установлен');
+        // Reload so the disguise (title/icon/manifest) and the lock screen actually
+        // engage — they are applied by the <head> boot script and initAppLock().
+        location.reload();
       } catch (e) {
         errEl.textContent = 'Не удалось сохранить.';
       }
     };
   };
 
-  render();
+  // Must be in the DOM before render() runs, since render() wires handlers by id.
   document.body.appendChild(backdrop);
+  render();
 };
 
 async function init() {
@@ -2694,26 +2697,18 @@ async function sendMessageControl(payload, chatId = state.currentChatId) {
   };
   const targetPeerId = await resolvePeerForUser(chatId);
 
+  // Route through the multiplexer: it tries the Signaling relay first (delivers to
+  // online peers via their poll queue and persists to the inbox for offline ones)
+  // and falls back to the WebRTC data channel. The packet carries recipientId, so
+  // the relay can address the recipient even when targetPeerId is unknown.
   try {
-    if (state.signalingRelay) {
-      await state.signalingRelay.ready;
-      await state.signalingRelay.send(packet, targetPeerId, chatId);
-      return true;
-    }
+    await state.multiplexer.send(packet, targetPeerId);
+    return true;
   } catch (error) {
-    console.warn('Message control relay failed:', error);
-  }
-
-  if (!targetPeerId) {
+    console.warn('Message control send failed, queuing:', error);
     await queuePendingMessageControl(chatId, packet);
     return true;
   }
-  try {
-    await state.multiplexer.send(packet, targetPeerId);
-  } catch (error) {
-    await queuePendingMessageControl(chatId, packet);
-  }
-  return true;
 }
 
 function pendingControlsKey(chatId) {
@@ -3740,9 +3735,29 @@ function updateMobileLayout() {
   }
 }
 
+// Microphone access requires a secure context. Over plain HTTP on a LAN IP
+// (e.g. http://192.168.x.x) browsers hide navigator.mediaDevices entirely, which
+// silently breaks call audio in BOTH directions. Detect and report it clearly.
+function callMediaUnavailableReason() {
+  if (!window.isSecureContext) {
+    return 'Звонкам нужен HTTPS. Откройте приложение по https:// или через localhost (не по IP по http).';
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return 'Браузер не даёт доступ к микрофону в этом контексте.';
+  }
+  return null;
+}
+
 window.startVoiceCall = async () => {
   if (!state.currentChatId || !state.transport || !state.multiplexer || !state.profile) return;
   if (state.activeCall) return;
+
+  const mediaError = callMediaUnavailableReason();
+  if (mediaError) {
+    setStatus('error', mediaError);
+    alert(mediaError);
+    return;
+  }
 
   const chatId = state.currentChatId;
   await clearPendingCallControls(chatId);
@@ -3790,6 +3805,13 @@ window.startVoiceCall = async () => {
 window.answerVoiceCall = async () => {
   const ac = state.activeCall;
   if (!ac || ac.status !== 'incoming' || !state.transport || !state.multiplexer || !state.profile) return;
+
+  const mediaError = callMediaUnavailableReason();
+  if (mediaError) {
+    setStatus('error', mediaError);
+    alert(mediaError);
+    return;
+  }
 
   const contact = state.contacts.get(ac.peerUserId);
   const peerId = contact?.activePeerId || ac.remotePeerId;

@@ -142,7 +142,7 @@ export class WebRTCTransport {
       channel: null,
       connected: false,
       iceCandidates: [],
-      audioSender: null,
+      audioTransceiver: null,
       localAudioStream: null,
       // Perfect Negotiation state.
       // The peer with the lexicographically smaller id is "polite": on a glare
@@ -174,6 +174,7 @@ export class WebRTCTransport {
       const track = event.track;
       if (!track || track.kind !== 'audio') return;
 
+      console.log('[call] remote audio track received from', peerId);
       let stream = event.streams[0];
       if (!stream) {
         stream = new MediaStream([track]);
@@ -196,6 +197,7 @@ export class WebRTCTransport {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log('[call] connection state', peerId, '→', pc.connectionState);
       if (pc.connectionState === 'connected') {
         peerState.connected = true;
       }
@@ -245,16 +247,20 @@ export class WebRTCTransport {
   }
 
   // Acquire the local microphone and attach it to the peer connection.
-  // Adding the track triggers onnegotiationneeded, and Perfect Negotiation handles
-  // any glare with the other side doing the same — so BOTH caller and callee can
-  // enable audio immediately, with no timing hacks. Idempotent.
+  //
+  // We deliberately reuse a SINGLE audio transceiver per peer (one m-line) and
+  // only flip it to sendrecv via replaceTrack. Using addTrack on both sides would
+  // create two competing audio m-lines and was the cause of one-way / no audio.
+  // Reusing the transceiver guarantees one shared bidirectional audio stream.
+  // onnegotiationneeded then renegotiates; Perfect Negotiation handles any glare.
+  // Idempotent.
   async enableLocalAudio(peerId) {
     const peerState = this.peers.get(peerId);
     if (!peerState?.pc) throw new Error('No peer connection');
 
     const liveTrack = peerState.localAudioStream?.getAudioTracks?.()
       .find((t) => t.readyState === 'live');
-    if (liveTrack && peerState.audioSender) {
+    if (liveTrack && peerState.audioTransceiver?.sender?.track) {
       return; // already streaming mic
     }
 
@@ -265,13 +271,27 @@ export class WebRTCTransport {
 
     peerState.localAudioStream = stream;
     const track = stream.getAudioTracks()[0];
+    console.log('[call] local mic acquired for', peerId, '— track:', track?.label || 'audio');
 
-    if (peerState.audioSender) {
-      await peerState.audioSender.replaceTrack(track);
-    } else {
-      // addTrack fires onnegotiationneeded automatically.
-      peerState.audioSender = peerState.pc.addTrack(track, stream);
+    // Find an existing audio transceiver: our own, or one auto-created when the
+    // remote peer's audio offer arrived first.
+    let tr = peerState.audioTransceiver;
+    if (!tr) {
+      tr = peerState.pc.getTransceivers().find((t) => {
+        if (t.currentDirection === 'stopped') return false;
+        const kind = t.receiver?.track?.kind || t.sender?.track?.kind;
+        return kind === 'audio' || (t.mid != null && t.receiver?.track?.kind === 'audio');
+      });
     }
+
+    if (tr) {
+      await tr.sender.replaceTrack(track);
+      try { tr.sender.setStreams(stream); } catch {}
+      tr.direction = 'sendrecv';
+    } else {
+      tr = peerState.pc.addTransceiver(track, { direction: 'sendrecv', streams: [stream] });
+    }
+    peerState.audioTransceiver = tr;
   }
 
   async startAudioCallWithLocalMedia(peerId, { asOfferer }) {
@@ -321,9 +341,9 @@ export class WebRTCTransport {
       peerState.localAudioStream = null;
     }
 
-    if (peerState.audioSender) {
+    if (peerState.audioTransceiver?.sender) {
       try {
-        await peerState.audioSender.replaceTrack(null);
+        await peerState.audioTransceiver.sender.replaceTrack(null);
       } catch (e) {
         console.warn('stopLocalAudio sender:', e);
       }
