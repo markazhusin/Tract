@@ -166,23 +166,26 @@
     /* Sidebar Tabs */
     .sidebar-tabs {
       display: flex;
-      padding: 0 8px 6px;
+      padding: 6px 8px 8px;
       gap: 4px;
       background: var(--bg-header);
     }
     .tab-btn {
-      padding: 7px 14px;
-      border-radius: 16px;
+      flex: 1;
+      padding: 8px 14px;
+      border-radius: 20px;
       font-size: 13px;
       font-weight: 500;
       color: var(--muted);
-      transition: all 0.2s;
+      transition: all 0.18s ease;
+      text-align: center;
     }
     .tab-btn.active {
       background: var(--accent);
       color: #141515;
+      font-weight: 600;
     }
-    .tab-btn:active { opacity: 0.7; }
+    .tab-btn:active { transform: scale(0.96); }
 
     /* Sidebar Views */
     .sidebar-views {
@@ -274,18 +277,21 @@
       margin: 0;
       background: transparent;
       border: none;
-      border-radius: 0;
+      border-radius: 12px;
       display: flex;
       align-items: center;
       gap: 12px;
       color: var(--text);
       text-align: left;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.12s ease;
       width: 100%;
     }
-    .contact-item:hover,
-    .contact-item.active { background: rgba(255,255,255,0.04); }
+    .contact-item:active { background: rgba(255,255,255,0.05); }
+    .contact-item.active {
+      background: rgba(183,255,249,0.07);
+    }
+    .sidebar-view-scroll { padding: 4px 6px; }
 
     /* iOS-style swipe-to-delete on chat rows */
     .swipe-row {
@@ -310,13 +316,13 @@
     .swipe-row > .contact-item {
       position: relative;
       z-index: 1;
-      /* Opaque so the delete action stays hidden until the row is swiped open. */
       background: var(--bg);
+      border-radius: 0;
       transition: transform 0.22s cubic-bezier(0.25, 0.1, 0.25, 1);
       will-change: transform;
       touch-action: pan-y;
     }
-    .swipe-row > .contact-item:hover,
+    .swipe-row > .contact-item:active,
     .swipe-row > .contact-item.active { background: #1c1d1d; }
     .swipe-row.swiping > .contact-item { transition: none; }
 
@@ -391,18 +397,19 @@
       min-width: 0;
     }
     .contact-time {
-      font-size: 11px;
+      font-size: 11.5px;
       color: var(--muted);
       white-space: nowrap;
+      letter-spacing: -0.01em;
     }
     .contact-badge {
       min-width: 20px;
       height: 20px;
       border-radius: 10px;
-      background: var(--online);
+      background: var(--accent);
       font-size: 11px;
-      font-weight: 600;
-      color: #fff;
+      font-weight: 700;
+      color: #141515;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -576,41 +583,46 @@
       min-height: 0;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
-      padding: 10px 12px 6px;
+      padding: 12px 12px 8px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 3px;
     }
     .msg {
-      max-width: min(480px, 80%);
-      padding: 6px 10px 5px;
-      border-radius: 12px;
+      max-width: min(480px, 82%);
+      padding: 7px 11px 5px;
+      border-radius: 18px;
       font-size: 15px;
-      line-height: 1.35;
+      line-height: 1.4;
       word-wrap: break-word;
-      animation: msgAppear 0.2s ease;
+      animation: msgAppear 0.18s cubic-bezier(0.2, 0.8, 0.4, 1);
     }
-    @keyframes msgAppear { from { opacity: 0; transform: translateY(6px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes msgAppear { from { opacity: 0; transform: translateY(8px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     .msg.sent {
       align-self: flex-end;
       background: var(--bubble-out);
-      border-radius: 12px 4px 12px 12px;
+      border-radius: 18px 4px 18px 18px;
     }
     .msg.received {
       align-self: flex-start;
       background: var(--bubble-in);
-      border-radius: 4px 12px 12px 12px;
+      border-radius: 4px 18px 18px 18px;
     }
-    .msg.pending { opacity: 1; }
-    .msg.selected { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+    /* Group consecutive messages — reduce gap */
+    .msg + .msg.sent { margin-top: 1px; }
+    .msg + .msg.received { margin-top: 1px; }
+    .msg.sent + .msg.received,
+    .msg.received + .msg.sent { margin-top: 8px; }
+    .msg.pending { opacity: 0.75; }
+    .msg.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
     .msg time {
       float: right;
       font-size: 11px;
-      color: rgba(255,255,255,0.45);
-      margin: 2px 0 0 8px;
+      color: rgba(255,255,255,0.4);
+      margin: 3px 0 0 10px;
     }
-    .msg.sent time { color: rgba(255,255,255,0.55); }
+    .msg.sent time { color: rgba(255,255,255,0.5); }
 
     .empty-chat {
       display: flex;
@@ -675,22 +687,31 @@
     #messageInput {
       flex: 1;
       background: var(--panel-input);
-      border: 1px solid transparent;
+      border: 1px solid rgba(255,255,255,0.07);
       color: var(--text);
       padding: 10px 16px;
       border-radius: 22px;
       min-width: 0;
+      transition: border-color 0.15s ease;
     }
-    #messageInput:focus { outline: none; }
+    #messageInput:focus {
+      outline: none;
+      border-color: rgba(183,255,249,0.25);
+    }
     #composerRow .btn.primary {
       flex: 0 0 auto;
       padding: 0;
-      width:44px;
-      height:44px;
+      width: 44px;
+      height: 44px;
       border-radius: 22px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s ease, opacity 0.1s ease;
+    }
+    #composerRow .btn.primary:active {
+      transform: scale(0.9);
+      opacity: 0.85;
     }
     #composerRow .btn.primary .material-icons {
       font-size: 22px;
@@ -1397,7 +1418,7 @@
       <div class="search-section">
         <div class="search-row" style="position:relative;">
           <span class="input-prefix" style="left:14px;">@</span>
-          <input id="addUserId" type="text" placeholder="поиск по логину" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="padding-left:28px;">
+          <input id="addUserId" type="text" placeholder="поиск по имени или логину" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="padding-left:28px;" oninput="onContactSearch(this.value)">
           <button type="button" class="search-btn" onclick="addContactById()">Найти</button>
         </div>
       </div>
@@ -1444,7 +1465,7 @@
                 <div class="field" style="margin-top:12px;">
                   <label>Отображаемое имя</label>
                   <div style="position:relative;">
-                    <input id="displayNameInput" type="text" placeholder="Введите имя"
+                    <input id="displayNameInput" type="text" placeholder="Введите имя" autocomplete="off" autocorrect="off" spellcheck="false"
                       style="background:var(--panel-input);border:1.5px solid var(--accent);color:var(--text);padding:10px 40px 10px 12px;border-radius:8px;width:100%;font-size:16px;">
                     <span class="material-icons" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--accent);font-size:18px;pointer-events:none;">edit</span>
                   </div>
@@ -1667,7 +1688,7 @@
         <input type="file" id="groupAvatarInput" accept="image/*" hidden onchange="handleGroupAvatar(event)">
         <div class="field" style="width:100%;max-width:300px;margin-top:8px;">
           <label>Название группы</label>
-          <input id="groupNameInput" type="text" placeholder="Введите название группы" style="text-align:center;font-size:16px;" oninput="updateCreateGroupBtn()">
+          <input id="groupNameInput" type="text" placeholder="Введите название группы" style="text-align:center;font-size:16px;" autocomplete="off" autocorrect="off" spellcheck="false" oninput="updateCreateGroupBtn()">
         </div>
         <div style="font-size:13px;color:var(--muted);margin-top:8px;" id="groupSelectedCount"></div>
       </div>

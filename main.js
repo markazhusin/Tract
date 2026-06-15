@@ -58,7 +58,8 @@ const state = {
   selectedMessageIds: new Set(),
   ringTone: null,
   remoteAudioNeedsUnlock: false,
-  remoteAudioRetryTimer: null
+  remoteAudioRetryTimer: null,
+  contactFilter: ''
 };
 
 function defaultSignalingUrl() {
@@ -2442,6 +2443,11 @@ window.deleteGroup = async () => {
   await goBackFromChat();
 };
 
+window.onContactSearch = (value) => {
+  state.contactFilter = value || '';
+  renderContacts();
+};
+
 window.addContactById = async () => {
   const primaryInput = $('addUserId');
   const sourceInput = primaryInput;
@@ -3257,10 +3263,22 @@ function renderContacts() {
     if (!container) return;
     container.innerHTML = '';
 
-    const items = Array.from(state.contacts.entries())
-      .filter(([id]) => !isSelfContactId(id));
+    const q = state.contactFilter.toLowerCase().replace(/^@+/, '').trim();
+    const matchesFilter = ([id, contact]) => {
+      if (!q) return true;
+      const label = getContactLabel(contact).toLowerCase();
+      const userId = id.toLowerCase().replace(/^@+/, '');
+      return label.includes(q) || userId.includes(q);
+    };
 
-    const groupItems = Array.from(state.groups.entries());
+    const items = Array.from(state.contacts.entries())
+      .filter(([id]) => !isSelfContactId(id))
+      .filter(matchesFilter);
+
+    const allGroups = Array.from(state.groups.entries());
+    const groupItems = q
+      ? allGroups.filter(([, g]) => g.name?.toLowerCase().includes(q))
+      : allGroups;
 
     if (items.length === 0 && groupItems.length === 0) {
       container.innerHTML = '<div class="empty" style="padding: 16px; text-align: center; color: var(--muted); font-size: 13px;">Нет контактов</div>';

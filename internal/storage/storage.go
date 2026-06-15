@@ -147,6 +147,13 @@ func (s *Storage) SaveIdentities(identities map[string]*IdentityBlob) error {
 	return nil
 }
 
+func (s *Storage) DeleteIdentity(userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.identities, userId)
+	s.saveJSON("identity-store.json", s.identities)
+}
+
 func (s *Storage) StoreIdentity(userId string, blob string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -369,6 +376,20 @@ func (s *Storage) DeleteInboxMessagesByGroupId(groupId string) {
 }
 
 // ==================== CONTACTS ====================
+
+func (s *Storage) DeleteInbox(userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.inboxes, userId)
+	s.saveJSON("message-inbox.json", s.inboxes)
+}
+
+func (s *Storage) DeleteContacts(userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.contacts, userId)
+	s.saveJSON("contact-store.json", s.contacts)
+}
 
 func (s *Storage) GetContacts(userId string) ([]map[string]interface{}, error) {
 	s.mu.RLock()

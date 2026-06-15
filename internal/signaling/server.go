@@ -345,6 +345,19 @@ func (s *Server) IsUserOnline(userId string) bool {
 	return false
 }
 
+// DisconnectUser removes all peers for a given userId from all rooms.
+func (s *Server) DisconnectUser(userId string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key, peer := range s.peers {
+		if peer.UserId == userId {
+			delete(s.peers, key)
+			delete(s.signals, key)
+		}
+	}
+}
+
 func (s *Server) GetPeerCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

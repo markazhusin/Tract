@@ -31,19 +31,29 @@ import (
 )
 
 const (
-	SUPERUSER_ID = "@creator"
-	PEER_TTL_MS  = 15000
+	PEER_TTL_MS = 15000
 )
 
 var (
-	server *signaling.Server
-	store  *storage.Storage
+	server       *signaling.Server
+	store        *storage.Storage
+	superuserId  string // loaded from TRACT_ADMIN env, never in source
 )
 
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8877"
+	}
+
+	// Superuser ID from environment — never hardcoded in source.
+	// Set TRACT_ADMIN=@yourlogin on Railway. Falls back to a random value
+	// that nobody can guess, so admin routes are effectively disabled
+	// on misconfigured deploys.
+	if raw := strings.TrimSpace(os.Getenv("TRACT_ADMIN")); raw != "" {
+		superuserId = normalizeUserId(raw)
+	} else {
+		superuserId = "@" + generateShortID() // random, unknown to anyone
 	}
 
 	dataDir := "./data"
@@ -67,7 +77,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(gin.Logger())
+	// No gin.Logger() — it would log IPs, paths, and user-agents.
 
 	config := cors.DefaultConfig()
 	config.AllowAllOrigins = true
@@ -243,6 +253,7 @@ func setupRoutes(router *gin.Engine) {
 
 	// Admin
 	router.POST("/admin/users", handleAdminUsers)
+	router.POST("/admin/delete-user", handleAdminDeleteUser)
 	router.POST("/admin/ban", handleAdminBan)
 	router.POST("/admin/unban", handleAdminUnban)
 	router.GET("/admin/check-banned/:userId", handleAdminCheckBanned)
@@ -407,6 +418,12 @@ func handlePeersByUser(c *gin.Context) {
 	userId := c.Param("userId")
 	roomId := c.Query("roomId")
 
+	// Superuser is not publicly discoverable as a peer.
+	if normalizeUserId(userId) == superuserId {
+		c.JSON(200, gin.H{"peer": nil})
+		return
+	}
+
 	peer := server.FindPeerByUserId(roomId, userId)
 	c.JSON(200, gin.H{"peer": peer})
 }
@@ -548,6 +565,12 @@ func handleIdentityStore(c *gin.Context) {
 		return
 	}
 
+	// Nobody can claim the superuser ID via the public API.
+	if normalized == superuserId {
+		c.JSON(400, gin.H{"error": "invalid userId"})
+		return
+	}
+
 	if store.IsBanned(normalized) {
 		c.JSON(403, gin.H{"error": "user is banned"})
 		return
@@ -558,13 +581,18 @@ func handleIdentityStore(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[Identity] Stored for %s", normalized)
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
 func handleIdentityGet(c *gin.Context) {
 	userId := c.Param("userId")
 	normalized := normalizeUserId(userId)
+
+	// Superuser identity is not publicly discoverable.
+	if normalized == superuserId {
+		c.JSON(404, gin.H{"error": "identity not found"})
+		return
+	}
 
 	if store.IsBanned(normalized) {
 		c.JSON(403, gin.H{"error": "user is banned"})
@@ -706,7 +734,6 @@ func handleProfileAvatarDelete(c *gin.Context) {
 		Type: "avatar-changed",
 	})
 
-	log.Printf("[Avatar] Deleted for %s", normalized)
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
@@ -820,7 +847,6 @@ func handleGroupCreate(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[Groups] Created %s by %s", req.GroupId, req.CreatedBy)
 	c.JSON(200, gin.H{"status": "ok", "group": group})
 }
 
@@ -914,7 +940,6 @@ func handleGroupLeave(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[Groups] %s left group %s (deleted=%v)", req.UserId, req.GroupId, deleted)
 	c.JSON(200, gin.H{"status": "ok", "deleted": deleted})
 }
 
@@ -968,7 +993,6 @@ func handleGroupDelete(c *gin.Context) {
 		})
 	}
 
-	log.Printf("[Groups] Deleted %s by %s", req.GroupId, req.UserId)
 	c.JSON(200, gin.H{"status": "ok"})
 }
 
@@ -1075,7 +1099,7 @@ func requireSuperuser(c *gin.Context) bool {
 		c.JSON(400, gin.H{"error": "invalid request"})
 		return false
 	}
-	if normalizeUserId(req.UserId) != SUPERUSER_ID {
+	if normalizeUserId(req.UserId) != superuserId {
 		c.JSON(403, gin.H{"error": "forbidden"})
 		return false
 	}
@@ -1136,13 +1160,13 @@ func handleAdminBan(c *gin.Context) {
 		return
 	}
 
-	if normalizeUserId(req.UserId) != SUPERUSER_ID {
+	if normalizeUserId(req.UserId) != superuserId {
 		c.JSON(403, gin.H{"error": "admin only"})
 		return
 	}
 
 	normalized := normalizeUserId(req.TargetUserId)
-	if normalized == "" || normalized == SUPERUSER_ID {
+	if normalized == "" || normalized == superuserId {
 		c.JSON(400, gin.H{"error": "cannot ban superuser"})
 		return
 	}
@@ -1155,7 +1179,6 @@ func handleAdminBan(c *gin.Context) {
 	// Also disconnect the user's peers if they're online
 	// (the ban check on peer/register prevents reconnection)
 
-	log.Printf("[Admin] Banned %s", normalized)
 	c.JSON(200, gin.H{"status": "ok", "banned": normalized})
 }
 
@@ -1170,7 +1193,7 @@ func handleAdminUnban(c *gin.Context) {
 		return
 	}
 
-	if normalizeUserId(req.UserId) != SUPERUSER_ID {
+	if normalizeUserId(req.UserId) != superuserId {
 		c.JSON(403, gin.H{"error": "admin only"})
 		return
 	}
@@ -1181,7 +1204,6 @@ func handleAdminUnban(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[Admin] Unbanned %s", normalized)
 	c.JSON(200, gin.H{"status": "ok", "unbanned": normalized})
 }
 
@@ -1207,7 +1229,7 @@ func handleAdminInviteCreate(c *gin.Context) {
 		return
 	}
 
-	if normalizeUserId(req.UserId) != SUPERUSER_ID {
+	if normalizeUserId(req.UserId) != superuserId {
 		c.JSON(403, gin.H{"error": "admin only"})
 		return
 	}
@@ -1224,7 +1246,6 @@ func handleAdminInviteCreate(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[Admin] Created invite code %s", code)
 	c.JSON(200, gin.H{"status": "ok", "code": code})
 }
 
@@ -1261,8 +1282,41 @@ func handleAdminInviteUse(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[Admin] Invite code %s used by %s", req.Code, normalized)
 	c.JSON(200, gin.H{"status": "ok"})
+}
+
+// handleAdminDeleteUser purges a user completely: identity, inbox, contacts, avatar, group memberships.
+// Only callable by the superuser.
+func handleAdminDeleteUser(c *gin.Context) {
+	var req struct {
+		UserId       string `json:"userId"`
+		TargetUserId string `json:"targetUserId"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "invalid request"})
+		return
+	}
+	if normalizeUserId(req.UserId) != superuserId {
+		c.JSON(403, gin.H{"error": "forbidden"})
+		return
+	}
+	target := normalizeUserId(req.TargetUserId)
+	if target == "" || target == superuserId {
+		c.JSON(400, gin.H{"error": "invalid target"})
+		return
+	}
+
+	// Disconnect live peers
+	server.DisconnectUser(target)
+
+	// Wipe all stored data for this user
+	store.DeleteIdentity(target)
+	store.DeleteInbox(target)
+	store.DeleteContacts(target)
+	store.DeleteAvatar(target)
+	store.BanUser(target) // prevent re-registration with same ID
+
+	c.JSON(200, gin.H{"status": "ok", "deleted": target})
 }
 
 func generateID() string {
