@@ -713,6 +713,24 @@
       transform: scale(0.9);
       opacity: 0.85;
     }
+    #sendBtn.recording {
+      background: #e56565 !important;
+      animation: pulse-rec 0.8s ease-in-out infinite;
+    }
+    @keyframes pulse-rec {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(229,101,101,0.5); }
+      50% { box-shadow: 0 0 0 8px rgba(229,101,101,0); }
+    }
+    .voice-msg audio {
+      display: block;
+      width: 220px;
+      height: 36px;
+      border-radius: 18px;
+      accent-color: var(--accent);
+    }
+    .voice-msg audio::-webkit-media-controls-panel {
+      background: transparent;
+    }
     #composerRow .btn.primary .material-icons {
       font-size: 22px;
       line-height: 1;

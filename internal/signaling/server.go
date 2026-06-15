@@ -322,6 +322,26 @@ func (s *Server) SendToUserPeers(userId string, signal *Signal) {
 	}
 }
 
+// KickOtherPeers sends a force_logout signal to all other peers of the same userId.
+func (s *Server) KickOtherPeers(userId, exceptPeerId string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	kick := &Signal{Type: "force_logout"}
+	for _, peer := range s.peers {
+		if peer.UserId == userId && peer.PeerId != exceptPeerId {
+			key := peerKey(peer.RoomId, peer.PeerId)
+			if clients, ok := s.sseClients[key]; ok {
+				for ch := range clients {
+					select {
+					case ch <- kick:
+					default:
+					}
+				}
+			}
+		}
+	}
+}
+
 // GetPeerUserId returns the userId for a given peer connection.
 func (s *Server) GetPeerUserId(roomId, peerId string) string {
 	s.mu.RLock()

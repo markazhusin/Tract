@@ -354,6 +354,8 @@ func handlePeerRegister(c *gin.Context) {
 	}
 
 	peer := server.AnnouncePeer(req.RoomId, req.PeerId, req.UserId, req.DisplayName, req.AvatarData, req.HideOnline)
+	// Kick any other active sessions for this user (single-device enforcement).
+	server.KickOtherPeers(req.UserId, req.PeerId)
 	c.JSON(200, gin.H{"status": "ok"})
 	_ = peer
 }

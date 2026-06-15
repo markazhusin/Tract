@@ -1245,8 +1245,9 @@ async function init() {
       if (input.value.trim().length > 0) {
         sendCurrentMessage();
       }
-      // mic tap: no-op for now (voice messages coming later)
     });
+    // Voice recording — hold mic button
+    initVoiceRecording(sendBtn, input);
   }
 
   const identity = getStoredIdentityMetadata();
@@ -1814,7 +1815,7 @@ async function processIncomingPacket(packet, fromPeerId) {
     return;
   }
 
-  if (packet.type !== 'text') return;
+  if (packet.type !== 'text' && packet.type !== 'voice') return;
 
   // Decrypt E2E
   let content = packet.content;
@@ -1891,7 +1892,7 @@ async function processIncomingPacket(packet, fromPeerId) {
     activePeerId: fromPeerId,
     online: true,
     roomId,
-    lastMsg: content,
+    lastMsg: displayPacket.type === 'voice' ? '🎙 Голосовое' : content,
     lastTime: packet.timestamp
   };
   if (packet.senderPublicKey) {
@@ -2067,6 +2068,16 @@ window.connectHandshake = async () => {
   state.multiplexer.onMessage(async (packet, fromPeerId) => {
     await processIncomingPacket(packet, fromPeerId);
   });
+
+  // Single-device enforcement: if another session logs in with same userId,
+  // server sends us force_logout via SSE.
+  const signalingForKick = getSignaling();
+  if (signalingForKick) {
+    signalingForKick.onSignal('force_logout', () => {
+      setStatus('warning', 'Выполнен вход с другого устройства. Сессия завершена.');
+      setTimeout(() => window.logoutAccount(), 1500);
+    });
+  }
 
   try {
     await state.transport.ready;
@@ -3065,9 +3076,10 @@ async function deliverOutgoingMessage(chatId, packet) {
       return; // no transport available — stays undelivered, retried on discovery
     }
     await messageDB.markMessageSent(packet._dbId || packet.id);
+    const previewText = packet.type === 'voice' ? '🎙 Голосовое' : packet.content;
     await upsertContact(chatId, {
       ...contact,
-      lastMsg: packet.content,
+      lastMsg: previewText,
       lastTime: packet.timestamp,
       ...(targetPeerId ? { activePeerId: targetPeerId, online: true } : {})
     });
@@ -4080,11 +4092,22 @@ function addMessageToUI(packet, isSent, options = {}) {
     ? escapeHtml(packet.senderName)
     : '';
 
-  message.innerHTML = `
-    ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
-    <span>${escapeHtml(packet.content)}</span>
-    <time>${formatTime(packet.timestamp)}</time>
-  `;
+  if (packet.type === 'voice' && packet.content && packet.mimeType) {
+    const src = `data:${packet.mimeType};base64,${packet.content}`;
+    message.innerHTML = `
+      ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
+      <div class="voice-msg">
+        <audio controls preload="metadata" src="${src}" style="max-width:220px;height:36px;"></audio>
+      </div>
+      <time>${formatTime(packet.timestamp)}</time>
+    `;
+  } else {
+    message.innerHTML = `
+      ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
+      <span>${escapeHtml(String(packet.content ?? ''))}</span>
+      <time>${formatTime(packet.timestamp)}</time>
+    `;
+  }
 
   message.onclick = () => {
     if (messageId === undefined) return;
@@ -4420,6 +4443,103 @@ function formatDate(timestamp) {
 }
 
 // ==================== SWIPE GESTURES ====================
+// ==================== VOICE MESSAGES ====================
+
+let _voiceRecorder = null;
+let _voiceChunks = [];
+let _voiceHolding = false;
+let _voiceHoldTimer = null;
+
+function initVoiceRecording(sendBtn, input) {
+  const HOLD_THRESHOLD_MS = 250;
+
+  const startRecording = async () => {
+    if (!state.currentChatId || input.value.trim().length > 0) return;
+    const reason = callMediaUnavailableReason();
+    if (reason) { setStatus('error', reason); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+      _voiceRecorder = new MediaRecorder(stream, { mimeType });
+      _voiceChunks = [];
+      _voiceRecorder.ondataavailable = (e) => { if (e.data.size > 0) _voiceChunks.push(e.data); };
+      _voiceRecorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (_voiceHolding === false) finishVoiceMessage(mimeType);
+      };
+      _voiceRecorder.start(100);
+      _voiceHolding = true;
+      sendBtn.classList.add('recording');
+      setStatus('warning', '🎙 Запись...');
+    } catch (e) {
+      setStatus('error', 'Нет доступа к микрофону');
+    }
+  };
+
+  const stopRecording = () => {
+    clearTimeout(_voiceHoldTimer);
+    if (!_voiceHolding) return;
+    _voiceHolding = false;
+    sendBtn.classList.remove('recording');
+    if (_voiceRecorder && _voiceRecorder.state !== 'inactive') {
+      _voiceRecorder.stop();
+    } else {
+      setStatus('offline', '');
+    }
+  };
+
+  // Touch
+  sendBtn.addEventListener('touchstart', (e) => {
+    if (input.value.trim().length > 0) return;
+    e.preventDefault();
+    _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
+  }, { passive: false });
+  sendBtn.addEventListener('touchend', stopRecording, { passive: true });
+  sendBtn.addEventListener('touchcancel', stopRecording, { passive: true });
+
+  // Mouse (desktop)
+  sendBtn.addEventListener('mousedown', () => {
+    if (input.value.trim().length > 0) return;
+    _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
+  });
+  sendBtn.addEventListener('mouseup', stopRecording);
+  sendBtn.addEventListener('mouseleave', stopRecording);
+}
+
+async function finishVoiceMessage(mimeType) {
+  if (!_voiceChunks.length || !state.currentChatId) {
+    setStatus('offline', '');
+    return;
+  }
+  const blob = new Blob(_voiceChunks, { type: mimeType });
+  if (blob.size < 1000) { setStatus('offline', ''); return; } // too short, ignore
+  const reader = new FileReader();
+  reader.onloadend = async () => {
+    const base64 = reader.result.split(',')[1];
+    const chatId = state.currentChatId;
+    const packet = {
+      packetId: crypto.randomUUID(),
+      type: 'voice',
+      content: base64,
+      mimeType,
+      senderId: state.profile.userId,
+      senderName: state.profile.displayName,
+      senderPublicKey: getPublicKeyHex(state.keyPair),
+      timestamp: Date.now()
+    };
+    const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
+    packet._dbId = dbKey;
+    addMessageToUI(packet, true);
+    await upsertContact(chatId, { ...state.contacts.get(chatId), lastMsg: '🎙 Голосовое', lastTime: packet.timestamp });
+    renderContacts();
+    await deliverOutgoingMessage(chatId, packet);
+    setStatus('offline', '');
+  };
+  reader.readAsDataURL(blob);
+}
+
 function initSwipeGestures() {
   // Swipe right on chat area → go back to contact list (mobile)
   const chatEl = $('chat');
@@ -4444,6 +4564,28 @@ function initSwipeGestures() {
           goBackFromChat();
         }
       }
+    }, { passive: true });
+  }
+
+  // Swipe on sidebar views area → switch tabs (Chats ↔ Contacts)
+  const viewsEl = document.querySelector('.sidebar-views');
+  if (viewsEl) {
+    const TAB_ORDER = ['chats', 'contacts'];
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    viewsEl.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    viewsEl.addEventListener('touchend', (e) => {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+      if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      const idx = TAB_ORDER.indexOf(currentView);
+      if (dx < 0 && idx < TAB_ORDER.length - 1) switchView(TAB_ORDER[idx + 1]);
+      else if (dx > 0 && idx > 0) switchView(TAB_ORDER[idx - 1]);
     }, { passive: true });
   }
 
