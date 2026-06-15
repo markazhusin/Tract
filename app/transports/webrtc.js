@@ -2,8 +2,24 @@ import { initSignaling } from '../core/local-signaling.js';
 
 const DISCOVERY_INTERVAL = 1000;
 
-function getIceServers() {
-  const config = [];
+// Default ICE config. Multiple STUN for candidate discovery + public TURN relays
+// (OpenRelay/Metered) so calls still connect through VPNs, symmetric NAT and
+// restrictive firewalls. TURN over TCP/TLS on 443 punches through almost anything.
+// For production privacy, run your own coturn and supply it via the server /ice
+// endpoint (env) or the ?ice= URL param.
+const DEFAULT_ICE_SERVERS = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+];
+
+// Mutable cache — replaced by server-provided TURN (self-hosted coturn) when available.
+let cachedIceServers = DEFAULT_ICE_SERVERS;
+
+function parseIceParam() {
+  const out = [];
   try {
     const params = new URLSearchParams(window.location.search);
     const iceParam = params.get('ice');
@@ -16,18 +32,35 @@ function getIceServers() {
           if (parts.length === 2) {
             const [credentials, host] = parts;
             const [username, credential] = credentials.split(':');
-            config.push({ urls: `turn:${host}`, username, credential });
+            out.push({ urls: `turn:${host}`, username, credential });
           }
         } else {
-          config.push({ urls: trimmed });
+          out.push({ urls: trimmed });
         }
       }
     }
   } catch {}
-  if (!config.length) {
-    config.push({ urls: ['stun:stun.l.google.com:19302'] });
-  }
-  return config;
+  return out;
+}
+
+function getIceServers() {
+  const override = parseIceParam();
+  if (override.length) return override;
+  return cachedIceServers;
+}
+
+// Fetch self-hosted TURN from the signaling server (set via env). Merged on top of
+// the public defaults so calls prefer the operator's relay but keep fallbacks.
+async function loadIceServersFromServer(serverUrl) {
+  if (!serverUrl) return;
+  try {
+    const resp = await fetch(new URL('/ice', serverUrl), { signal: AbortSignal.timeout?.(4000) });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (Array.isArray(data.iceServers) && data.iceServers.length) {
+      cachedIceServers = [...data.iceServers, ...DEFAULT_ICE_SERVERS];
+    }
+  } catch {}
 }
 
 export class WebRTCTransport {
@@ -51,6 +84,8 @@ export class WebRTCTransport {
   }
 
   async initialize() {
+    // Load operator-provided TURN (self-hosted coturn) before any call setup.
+    await loadIceServersFromServer(this.options?.serverUrl);
     this.signaling = await initSignaling(this.myPeerId, this.options);
     this.registerSignalingListeners();
     await this.refreshPeers();
@@ -134,7 +169,10 @@ export class WebRTCTransport {
 
   createPeerConnection(peerId) {
     const pc = new RTCPeerConnection({
-      iceServers: getIceServers()
+      iceServers: getIceServers(),
+      iceCandidatePoolSize: 4,
+      // Gather both UDP and relayed candidates so VPN/symmetric-NAT peers connect.
+      bundlePolicy: 'max-bundle'
     });
 
     const peerState = {
