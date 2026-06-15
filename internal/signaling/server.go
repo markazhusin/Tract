@@ -11,6 +11,7 @@ type Peer struct {
 	RoomId      string `json:"roomId"`
 	UserId      string `json:"userId"`
 	DisplayName string `json:"displayName"`
+	DeviceId    string `json:"-"`
 	PublicKey   string `json:"publicKey,omitempty"`
 	Avatar      string `json:"avatar,omitempty"`
 	HideOnline  bool   `json:"hideOnline"`
@@ -86,7 +87,7 @@ func (s *Server) cleanupExpired() {
 
 // ==================== PEER MANAGEMENT ====================
 
-func (s *Server) AnnouncePeer(roomId, peerId, userId, displayName, avatar string, hideOnline bool) *Peer {
+func (s *Server) AnnouncePeer(roomId, peerId, userId, displayName, avatar string, hideOnline bool, deviceId string) *Peer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -102,6 +103,7 @@ func (s *Server) AnnouncePeer(roomId, peerId, userId, displayName, avatar string
 		RoomId:      roomId,
 		UserId:      userId,
 		DisplayName: displayName,
+		DeviceId:    deviceId,
 		Avatar:      avatar,
 		HideOnline:  hideOnline,
 		LastSeen:    lastSeen,
@@ -322,20 +324,31 @@ func (s *Server) SendToUserPeers(userId string, signal *Signal) {
 	}
 }
 
-// KickOtherPeers sends a force_logout signal to all other peers of the same userId.
-func (s *Server) KickOtherPeers(userId, exceptPeerId string) {
+// KickOtherPeers sends force_logout to peers of the same userId that live on a
+// DIFFERENT device. Same-device reconnects (new peerId, same deviceId) never kick
+// themselves, which prevents the ping-pong logout loop. If deviceId is empty we
+// skip kicking entirely (old clients that don't report a device id).
+func (s *Server) KickOtherPeers(userId, exceptPeerId, deviceId string) {
+	if deviceId == "" {
+		return
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	kick := &Signal{Type: "force_logout"}
 	for _, peer := range s.peers {
-		if peer.UserId == userId && peer.PeerId != exceptPeerId {
-			key := peerKey(peer.RoomId, peer.PeerId)
-			if clients, ok := s.sseClients[key]; ok {
-				for ch := range clients {
-					select {
-					case ch <- kick:
-					default:
-					}
+		if peer.UserId != userId || peer.PeerId == exceptPeerId {
+			continue
+		}
+		// Only kick a genuinely different device.
+		if peer.DeviceId == "" || peer.DeviceId == deviceId {
+			continue
+		}
+		key := peerKey(peer.RoomId, peer.PeerId)
+		if clients, ok := s.sseClients[key]; ok {
+			for ch := range clients {
+				select {
+				case ch <- kick:
+				default:
 				}
 			}
 		}

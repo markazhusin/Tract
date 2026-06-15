@@ -237,6 +237,19 @@ export function clearSessionPeerId() {
   localStorage.removeItem(SESSION_PEER_KEY);
 }
 
+const DEVICE_ID_KEY = 'tract.device.id';
+
+// Stable per-device identifier (survives logout/login on this device). Used for
+// single-device enforcement so the SAME device never force-logs-out itself.
+export function getOrCreateDeviceId() {
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = 'dev-' + crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
 export function getOrCreateSessionPeerId(baseId) {
   // Persist peerId across browser sessions for simpler login experience
   const saved = localStorage.getItem(SESSION_PEER_KEY);

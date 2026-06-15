@@ -327,6 +327,7 @@ func handlePeerRegister(c *gin.Context) {
 		RoomId      string `json:"roomId"`
 		UserId      string `json:"userId"`
 		DisplayName string `json:"displayName"`
+		DeviceId    string `json:"deviceId"`
 		PublicKeyHex string `json:"publicKeyHex"`
 		AvatarData  string `json:"avatarData"`
 		HideOnline  bool   `json:"hideOnline"`
@@ -353,9 +354,9 @@ func handlePeerRegister(c *gin.Context) {
 		return
 	}
 
-	peer := server.AnnouncePeer(req.RoomId, req.PeerId, req.UserId, req.DisplayName, req.AvatarData, req.HideOnline)
-	// Kick any other active sessions for this user (single-device enforcement).
-	server.KickOtherPeers(req.UserId, req.PeerId)
+	peer := server.AnnouncePeer(req.RoomId, req.PeerId, req.UserId, req.DisplayName, req.AvatarData, req.HideOnline, req.DeviceId)
+	// Single-device enforcement: kick only sessions on a DIFFERENT device.
+	server.KickOtherPeers(req.UserId, req.PeerId, req.DeviceId)
 	c.JSON(200, gin.H{"status": "ok"})
 	_ = peer
 }

@@ -7,6 +7,7 @@ import {
   fetchPeerPublicKey,
   getLegacyIdentityMetadata,
   getOrCreateSessionPeerId,
+  getOrCreateDeviceId,
   getPublicKeyHex,
   getStoredIdentityMetadata,
   registerIdentity,
@@ -1302,12 +1303,8 @@ async function init() {
       icon.textContent = input.value.trim().length > 0 ? 'send' : 'mic';
     };
     input.addEventListener('input', updateSendBtn);
-    sendBtn.addEventListener('click', () => {
-      if (input.value.trim().length > 0) {
-        sendCurrentMessage();
-      }
-    });
-    // Voice recording — hold mic button
+    // Send + hold-to-record voice are both owned by initVoiceRecording so the
+    // touch/click paths can't double-fire or swallow each other in a PWA.
     initVoiceRecording(sendBtn, input);
   }
 
@@ -2008,11 +2005,13 @@ window.connectHandshake = async () => {
   state.multiplexer = new Multiplexer(state.keyPair);
   const hideOnline = Boolean(localStorage.getItem('tract.hideOnline'));
   const myPublicKeyHex = getPublicKeyHex(state.keyPair);
+  const deviceId = getOrCreateDeviceId();
   state.transport = new WebRTCTransport(state.myPeerId, {
     serverUrl,
     roomId,
     userId: state.profile.userId,
     displayName: state.profile.displayName,
+    deviceId,
     publicKeyHex: myPublicKeyHex,
     hideOnline,
     allowedUserIds: new Set(state.contacts.keys())
@@ -2028,6 +2027,7 @@ window.connectHandshake = async () => {
       roomId,
       userId: state.profile.userId,
       displayName: state.profile.displayName,
+      deviceId,
       publicKeyHex: myPublicKeyHex
     });
     state.multiplexer.register(state.signalingRelay);
@@ -4650,30 +4650,64 @@ let _voiceChunks = [];
 let _voiceHolding = false;
 let _voiceHoldTimer = null;
 
+// Pick a MediaRecorder mime type the current browser actually supports.
+// Safari/iOS only support audio/mp4 — webm/ogg throw. Empty string = browser default.
+function pickAudioMime() {
+  if (typeof MediaRecorder === 'undefined') return null;
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/aac',
+    'audio/ogg'
+  ];
+  for (const c of candidates) {
+    try { if (MediaRecorder.isTypeSupported(c)) return c; } catch {}
+  }
+  return ''; // let the browser choose its own default
+}
+
 function initVoiceRecording(sendBtn, input) {
   const HOLD_THRESHOLD_MS = 250;
+  let lastSendTs = 0;
+
+  const hasText = () => input.value.trim().length > 0;
+
+  // Dedup so a touch + its synthetic click don't double-send.
+  const trySend = () => {
+    const now = Date.now();
+    if (now - lastSendTs < 500) return;
+    lastSendTs = now;
+    if (hasText()) sendCurrentMessage();
+  };
 
   const startRecording = async () => {
-    if (!state.currentChatId || input.value.trim().length > 0) return;
+    if (!state.currentChatId || hasText()) return;
+    if (typeof MediaRecorder === 'undefined') {
+      setStatus('error', 'Запись не поддерживается этим браузером');
+      return;
+    }
     const reason = callMediaUnavailableReason();
     if (reason) { setStatus('error', reason); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
-      _voiceRecorder = new MediaRecorder(stream, { mimeType });
+      const mimeType = pickAudioMime();
+      _voiceRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      const actualMime = _voiceRecorder.mimeType || mimeType || 'audio/mp4';
       _voiceChunks = [];
       _voiceRecorder.ondataavailable = (e) => { if (e.data.size > 0) _voiceChunks.push(e.data); };
       _voiceRecorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
-        if (_voiceHolding === false) finishVoiceMessage(mimeType);
+        if (_voiceHolding === false) finishVoiceMessage(actualMime);
       };
       _voiceRecorder.start(100);
       _voiceHolding = true;
       sendBtn.classList.add('recording');
       setStatus('warning', '🎙 Запись...');
     } catch (e) {
+      console.warn('Voice record failed:', e);
       setStatus('error', 'Нет доступа к микрофону');
     }
   };
@@ -4690,22 +4724,32 @@ function initVoiceRecording(sendBtn, input) {
     }
   };
 
-  // Touch
+  // ----- Touch -----
   sendBtn.addEventListener('touchstart', (e) => {
-    if (input.value.trim().length > 0) return;
-    e.preventDefault();
+    if (hasText()) return;               // send mode → let native tap proceed
+    e.preventDefault();                  // mic mode → suppress click, begin hold
     _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
   }, { passive: false });
-  sendBtn.addEventListener('touchend', stopRecording, { passive: true });
+
+  sendBtn.addEventListener('touchend', (e) => {
+    clearTimeout(_voiceHoldTimer);
+    if (_voiceHolding) { e.preventDefault(); stopRecording(); return; }
+    // Short tap with text → send directly (don't rely on synthetic click in PWA).
+    if (hasText()) { e.preventDefault(); trySend(); }
+  }, { passive: false });
+
   sendBtn.addEventListener('touchcancel', stopRecording, { passive: true });
 
-  // Mouse (desktop)
+  // ----- Mouse (desktop) -----
   sendBtn.addEventListener('mousedown', () => {
-    if (input.value.trim().length > 0) return;
+    if (hasText()) return;
     _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
   });
   sendBtn.addEventListener('mouseup', stopRecording);
   sendBtn.addEventListener('mouseleave', stopRecording);
+
+  // Click: desktop send + fallback. Voice/empty taps are no-ops here.
+  sendBtn.addEventListener('click', trySend);
 }
 
 async function finishVoiceMessage(mimeType) {

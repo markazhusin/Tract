@@ -28,6 +28,7 @@ export class HostedSignaling {
       roomId: this.roomId,
       userId: this.options.userId,
       displayName: this.options.displayName,
+      deviceId: this.options.deviceId || null,
       publicKeyHex: this.options.publicKeyHex || null,
       avatarData: this.options.avatarData || null,
       hideOnline: this.options.hideOnline || false,
