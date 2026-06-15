@@ -1627,6 +1627,7 @@
             <span class="material-icons">attach_file</span>
           </button>
           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
+            oninput="refreshSendButton()"
             onkeydown="if(event.key==='Enter') sendCurrentMessage()">
           <button type="button" class="btn primary" id="sendBtn" title="Отправить">
             <span class="material-icons">mic</span>

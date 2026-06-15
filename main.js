@@ -1297,12 +1297,9 @@ async function init() {
   const input = $('messageInput');
   const sendBtn = $('sendBtn');
   if (input && sendBtn) {
-    const updateSendBtn = () => {
-      const icon = sendBtn.querySelector('.material-icons');
-      if (!icon) return;
-      icon.textContent = input.value.trim().length > 0 ? 'send' : 'mic';
-    };
-    input.addEventListener('input', updateSendBtn);
+    input.addEventListener('input', refreshSendButton);
+    input.addEventListener('keyup', refreshSendButton);
+    refreshSendButton();
     // Send + hold-to-record voice are both owned by initVoiceRecording so the
     // touch/click paths can't double-fire or swallow each other in a PWA.
     initVoiceRecording(sendBtn, input);
@@ -3133,12 +3130,7 @@ window.sendCurrentMessage = async () => {
   };
 
   input.value = '';
-  // Update send button back to mic
-  const btn = $('sendBtn');
-  if (btn) {
-    const icon = btn.querySelector('.material-icons');
-    if (icon) icon.textContent = 'mic';
-  }
+  refreshSendButton();
 
   const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
   packet._dbId = dbKey;
@@ -3563,6 +3555,7 @@ async function openChat(id) {
   renderChatHeader();
   await renderChatHistory(id);
   updateMobileLayout();
+  refreshSendButton();
   if (state.groups.has(id)) {
     $('btnCall').hidden = true;
   }
@@ -4719,89 +4712,114 @@ function pickAudioMime() {
 }
 
 function initVoiceRecording(sendBtn, input) {
-  const HOLD_THRESHOLD_MS = 250;
+  const MIN_RECORD_MS = 400; // shorter press = accidental tap, discard
   let lastSendTs = 0;
+  let pressStart = 0;
+  let activeStream = null;
+  let actualMime = 'audio/mp4';
+  // 'idle' | 'acquiring' | 'recording'
+  let voiceState = 'idle';
 
   const hasText = () => input.value.trim().length > 0;
 
-  // Dedup so a touch + its synthetic click don't double-send.
   const trySend = () => {
     const now = Date.now();
-    if (now - lastSendTs < 500) return;
+    if (now - lastSendTs < 500) return; // dedup touch+click
     lastSendTs = now;
     if (hasText()) sendCurrentMessage();
   };
 
-  const startRecording = async () => {
-    if (!state.currentChatId || hasText()) return;
+  // Called synchronously inside the pointer-down gesture so iOS allows the mic.
+  const beginPress = (e) => {
+    if (hasText()) return;                    // send mode → leave for click/up
+    if (e.cancelable) e.preventDefault();     // mic mode → suppress synthetic click
+    if (voiceState !== 'idle') return;
+    if (!state.currentChatId) return;
     if (typeof MediaRecorder === 'undefined') {
       setStatus('error', 'Запись не поддерживается этим браузером');
       return;
     }
     const reason = callMediaUnavailableReason();
     if (reason) { setStatus('error', reason); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      const mimeType = pickAudioMime();
-      _voiceRecorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
-      const actualMime = _voiceRecorder.mimeType || mimeType || 'audio/mp4';
-      _voiceChunks = [];
-      _voiceRecorder.ondataavailable = (e) => { if (e.data.size > 0) _voiceChunks.push(e.data); };
-      _voiceRecorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (_voiceHolding === false) finishVoiceMessage(actualMime);
-      };
-      _voiceRecorder.start(100);
-      _voiceHolding = true;
-      sendBtn.classList.add('recording');
-      setStatus('warning', '🎙 Запись...');
-    } catch (e) {
-      console.warn('Voice record failed:', e);
-      setStatus('error', 'Нет доступа к микрофону');
-    }
+
+    pressStart = Date.now();
+    voiceState = 'acquiring';
+    sendBtn.classList.add('recording');
+    setStatus('warning', '🎙 Запись…');
+
+    // getUserMedia call is INITIATED inside the gesture — required by iOS.
+    navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      .then((stream) => {
+        // Released before the mic was ready → discard.
+        if (voiceState !== 'acquiring') {
+          stream.getTracks().forEach((t) => t.stop());
+          voiceState = 'idle';
+          return;
+        }
+        activeStream = stream;
+        const mimeType = pickAudioMime();
+        _voiceRecorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
+        actualMime = _voiceRecorder.mimeType || mimeType || 'audio/mp4';
+        _voiceChunks = [];
+        _voiceRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) _voiceChunks.push(ev.data); };
+        _voiceRecorder.onstop = () => {
+          activeStream?.getTracks().forEach((t) => t.stop());
+          activeStream = null;
+          const held = Date.now() - pressStart;
+          voiceState = 'idle';
+          if (held >= MIN_RECORD_MS) finishVoiceMessage(actualMime);
+          else setStatus('offline', '');
+        };
+        _voiceRecorder.start(100);
+        voiceState = 'recording';
+      })
+      .catch((err) => {
+        console.warn('Voice record failed:', err);
+        voiceState = 'idle';
+        sendBtn.classList.remove('recording');
+        setStatus('error', 'Нет доступа к микрофону');
+      });
   };
 
-  const stopRecording = () => {
-    clearTimeout(_voiceHoldTimer);
-    if (!_voiceHolding) return;
-    _voiceHolding = false;
+  const endPress = () => {
     sendBtn.classList.remove('recording');
-    if (_voiceRecorder && _voiceRecorder.state !== 'inactive') {
-      _voiceRecorder.stop();
-    } else {
+    if (voiceState === 'recording' && _voiceRecorder && _voiceRecorder.state !== 'inactive') {
+      _voiceRecorder.stop(); // onstop decides send-vs-discard
+    } else if (voiceState === 'acquiring') {
+      // Mic not ready yet → mark idle; the resolve handler will tear down.
+      voiceState = 'idle';
       setStatus('offline', '');
     }
   };
 
   // ----- Touch -----
-  sendBtn.addEventListener('touchstart', (e) => {
-    if (hasText()) return;               // send mode → let native tap proceed
-    e.preventDefault();                  // mic mode → suppress click, begin hold
-    _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
-  }, { passive: false });
-
+  sendBtn.addEventListener('touchstart', beginPress, { passive: false });
   sendBtn.addEventListener('touchend', (e) => {
-    clearTimeout(_voiceHoldTimer);
-    if (_voiceHolding) { e.preventDefault(); stopRecording(); return; }
-    // Short tap with text → send directly (don't rely on synthetic click in PWA).
-    if (hasText()) { e.preventDefault(); trySend(); }
+    if (voiceState !== 'idle') { if (e.cancelable) e.preventDefault(); endPress(); return; }
+    if (hasText()) { if (e.cancelable) e.preventDefault(); trySend(); }
   }, { passive: false });
-
-  sendBtn.addEventListener('touchcancel', stopRecording, { passive: true });
+  sendBtn.addEventListener('touchcancel', endPress, { passive: true });
 
   // ----- Mouse (desktop) -----
-  sendBtn.addEventListener('mousedown', () => {
-    if (hasText()) return;
-    _voiceHoldTimer = setTimeout(startRecording, HOLD_THRESHOLD_MS);
-  });
-  sendBtn.addEventListener('mouseup', stopRecording);
-  sendBtn.addEventListener('mouseleave', stopRecording);
+  sendBtn.addEventListener('mousedown', (e) => { if (!hasText()) beginPress(e); });
+  sendBtn.addEventListener('mouseup', () => { if (voiceState !== 'idle') endPress(); });
+  sendBtn.addEventListener('mouseleave', () => { if (voiceState !== 'idle') endPress(); });
 
-  // Click: desktop send + fallback. Voice/empty taps are no-ops here.
+  // Click: desktop send (voice taps already handled, dedup guards double-send).
   sendBtn.addEventListener('click', trySend);
 }
+
+// Switch the composer button between mic (empty) and send (has text).
+window.refreshSendButton = () => {
+  const input = $('messageInput');
+  const sendBtn = $('sendBtn');
+  if (!input || !sendBtn) return;
+  const icon = sendBtn.querySelector('.material-icons');
+  if (!icon) return;
+  icon.textContent = input.value.trim().length > 0 ? 'send' : 'mic';
+};
 
 async function finishVoiceMessage(mimeType) {
   if (!_voiceChunks.length || !state.currentChatId) {

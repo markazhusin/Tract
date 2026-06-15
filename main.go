@@ -210,6 +210,9 @@ func setupRoutes(router *gin.Engine) {
 	// Health
 	router.GET("/health", handleHealth)
 
+	// ICE / TURN config (self-hosted coturn via env)
+	router.GET("/ice", handleIceConfig)
+
 	// SSE - matches JS /events/:peerId?roomId=...
 	router.GET("/events/:peerId", handleSSE)
 
@@ -259,6 +262,39 @@ func setupRoutes(router *gin.Engine) {
 	router.GET("/admin/check-banned/:userId", handleAdminCheckBanned)
 	router.POST("/admin/invite/create", handleAdminInviteCreate)
 	router.POST("/admin/invite/use", handleAdminInviteUse)
+}
+
+// ==================== ICE / TURN ====================
+
+// handleIceConfig returns operator-provided TURN servers from env so the client
+// can prefer a self-hosted coturn over the public fallback relays. Configure with:
+//   TURN_URLS="turn:turn.example.com:3478,turns:turn.example.com:5349?transport=tcp"
+//   TURN_USERNAME=... TURN_CREDENTIAL=...
+// Returns an empty list if unset (client then uses its own defaults).
+func handleIceConfig(c *gin.Context) {
+	urlsRaw := strings.TrimSpace(os.Getenv("TURN_URLS"))
+	user := strings.TrimSpace(os.Getenv("TURN_USERNAME"))
+	cred := strings.TrimSpace(os.Getenv("TURN_CREDENTIAL"))
+
+	iceServers := []gin.H{}
+	if urlsRaw != "" {
+		urls := []string{}
+		for _, u := range strings.Split(urlsRaw, ",") {
+			if t := strings.TrimSpace(u); t != "" {
+				urls = append(urls, t)
+			}
+		}
+		if len(urls) > 0 {
+			entry := gin.H{"urls": urls}
+			if user != "" {
+				entry["username"] = user
+				entry["credential"] = cred
+			}
+			iceServers = append(iceServers, entry)
+		}
+	}
+
+	c.JSON(200, gin.H{"iceServers": iceServers})
 }
 
 // ==================== HEALTH ====================
