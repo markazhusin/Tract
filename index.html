@@ -731,6 +731,27 @@
     .voice-msg audio::-webkit-media-controls-panel {
       background: transparent;
     }
+    /* File / media messages */
+    .file-msg { margin: 2px 0; }
+    .file-image {
+      max-width: 240px; max-height: 280px; border-radius: 12px;
+      display: block; cursor: pointer; object-fit: cover;
+    }
+    .file-video {
+      max-width: 260px; max-height: 300px; border-radius: 12px; display: block;
+    }
+    .file-attachment {
+      display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+      background: rgba(255,255,255,0.06); border-radius: 12px;
+      color: var(--text); text-decoration: none; min-width: 160px; max-width: 260px;
+    }
+    .file-attachment:active { background: rgba(255,255,255,0.1); }
+    .file-attachment .material-icons { font-size: 28px; color: var(--accent); flex-shrink: 0; }
+    .file-meta { display: flex; flex-direction: column; min-width: 0; }
+    .file-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 12px; color: var(--muted); }
+    #attachBtn { color: var(--muted); }
+    #attachBtn:active { color: var(--accent); }
     #composerRow .btn.primary .material-icons {
       font-size: 22px;
       line-height: 1;
@@ -1600,7 +1621,11 @@
       </div>
 
       <footer id="composer">
+        <input type="file" id="fileInput" hidden multiple onchange="handleFileAttach(event)">
         <div id="composerRow">
+          <button type="button" class="icon-btn" id="attachBtn" title="Прикрепить" onclick="document.getElementById('fileInput').click()">
+            <span class="material-icons">attach_file</span>
+          </button>
           <input id="messageInput" type="text" placeholder="Сообщение" enterkeyhint="send" autocomplete="off"
             onkeydown="if(event.key==='Enter') sendCurrentMessage()">
           <button type="button" class="btn primary" id="sendBtn" title="Отправить">

@@ -467,6 +467,7 @@ export class WebRTCTransport {
     if (peer) {
       peer.channel = channel;
     }
+    channel.binaryType = 'arraybuffer';
 
     channel.onopen = () => {
       if (peer) {
@@ -482,8 +483,21 @@ export class WebRTCTransport {
     };
 
     channel.onmessage = (event) => {
+      // Binary frame → a chunk for the active incoming file transfer.
+      if (event.data instanceof ArrayBuffer) {
+        this.handleFileChunk(peerId, event.data);
+        return;
+      }
       try {
         const packet = JSON.parse(event.data);
+        if (packet && packet.type === 'file_start') {
+          this.beginIncomingFile(peerId, packet);
+          return;
+        }
+        if (packet && packet.type === 'file_end') {
+          this.finishIncomingFile(peerId, packet);
+          return;
+        }
         this.onMessageCallback?.(packet, peerId);
       } catch (err) {
         console.error('Failed to parse message:', err);
@@ -494,6 +508,92 @@ export class WebRTCTransport {
       console.error('DataChannel error:', err);
     };
   }
+
+  // ----- File transfer (P2P, chunked, DTLS-encrypted) -----
+
+  beginIncomingFile(peerId, meta) {
+    if (!this._incomingFiles) this._incomingFiles = new Map();
+    this._incomingFiles.set(peerId, {
+      meta,
+      chunks: [],
+      received: 0
+    });
+    this.onFileProgressCallback?.({ peerId, fileId: meta.fileId, name: meta.name, received: 0, total: meta.size, dir: 'in' });
+  }
+
+  handleFileChunk(peerId, buffer) {
+    const entry = this._incomingFiles?.get(peerId);
+    if (!entry) return;
+    entry.chunks.push(buffer);
+    entry.received += buffer.byteLength;
+    this.onFileProgressCallback?.({
+      peerId, fileId: entry.meta.fileId, name: entry.meta.name,
+      received: entry.received, total: entry.meta.size, dir: 'in'
+    });
+  }
+
+  finishIncomingFile(peerId, end) {
+    const entry = this._incomingFiles?.get(peerId);
+    if (!entry) return;
+    this._incomingFiles.delete(peerId);
+    const blob = new Blob(entry.chunks, { type: entry.meta.mimeType || 'application/octet-stream' });
+    this.onFileReceivedCallback?.({
+      peerId,
+      meta: entry.meta,
+      blob
+    });
+  }
+
+  // Send a File/Blob to a peer in ordered chunks with backpressure.
+  async sendFile(peerId, file, meta, onProgress) {
+    await this.ready;
+    let peer = this.peers.get(peerId);
+    if (!peer || !peer.channel || peer.channel.readyState !== 'open') {
+      this.connectToPeer(peerId);
+      peer = await this.waitForOpenPeer(peerId, 4000);
+    }
+    if (!peer || !peer.channel || peer.channel.readyState !== 'open') {
+      throw new Error('peer-unavailable');
+    }
+    const channel = peer.channel;
+    const CHUNK = 16 * 1024; // 16 KB — safe for SCTP
+    const HIGH_WATER = 4 * 1024 * 1024; // pause when buffer exceeds 4 MB
+    channel.bufferedAmountLowThreshold = 1024 * 1024;
+
+    const fileId = meta.fileId;
+    channel.send(JSON.stringify({
+      type: 'file_start',
+      fileId,
+      name: meta.name,
+      size: file.size,
+      mimeType: meta.mimeType,
+      kind: meta.kind,
+      senderId: meta.senderId,
+      senderName: meta.senderName,
+      timestamp: meta.timestamp
+    }));
+
+    let offset = 0;
+    while (offset < file.size) {
+      const slice = file.slice(offset, offset + CHUNK);
+      const buf = await slice.arrayBuffer();
+      // Backpressure: wait if the send buffer is too full.
+      if (channel.bufferedAmount > HIGH_WATER) {
+        await new Promise((resolve) => {
+          const handler = () => { channel.removeEventListener('bufferedamountlow', handler); resolve(); };
+          channel.addEventListener('bufferedamountlow', handler);
+        });
+      }
+      channel.send(buf);
+      offset += buf.byteLength;
+      onProgress?.(offset, file.size);
+    }
+
+    channel.send(JSON.stringify({ type: 'file_end', fileId }));
+  }
+
+  onFileReceived(cb) { this.onFileReceivedCallback = cb; }
+  onFileProgress(cb) { this.onFileProgressCallback = cb; }
 
   async send(packet, targetPeerId) {
     await this.ready;

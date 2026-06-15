@@ -1873,7 +1873,7 @@ async function processIncomingPacket(packet, fromPeerId) {
     return;
   }
 
-  if (packet.type !== 'text' && packet.type !== 'voice') return;
+  if (packet.type !== 'text' && packet.type !== 'voice' && packet.type !== 'file') return;
 
   // Decrypt E2E
   let content = packet.content;
@@ -1927,6 +1927,14 @@ async function processIncomingPacket(packet, fromPeerId) {
     ? packet.senderName
     : (existingContact?.displayName || chatId);
 
+  // Human-readable preview that never leaks binary blobs.
+  const previewFor = (p) => {
+    if (p.type === 'voice') return '🎙 Голосовое';
+    if (p.type === 'file') return p.kind === 'image' ? '🖼 Фото' : p.kind === 'video' ? '🎬 Видео' : '📎 Файл';
+    return String(content || '');
+  };
+  const previewText = previewFor(displayPacket);
+
   const appHidden = document.hidden || document.visibilityState !== 'visible';
   if (state.currentChatId !== chatId || appHidden) {
     state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
@@ -1934,7 +1942,7 @@ async function processIncomingPacket(packet, fromPeerId) {
     notifyNewMessage({
       chatId,
       title: getContactLabel(existingContact) || resolvedDisplayName || chatId,
-      body: truncate(String(content || ''), 120)
+      body: truncate(previewText, 120)
     });
   }
 
@@ -1950,7 +1958,7 @@ async function processIncomingPacket(packet, fromPeerId) {
     activePeerId: fromPeerId,
     online: true,
     roomId,
-    lastMsg: displayPacket.type === 'voice' ? '🎙 Голосовое' : content,
+    lastMsg: previewText,
     lastTime: packet.timestamp
   };
   if (packet.senderPublicKey) {
@@ -2124,6 +2132,18 @@ window.connectHandshake = async () => {
 
   state.transport.onRemoteAudioStream((peerId, stream) => {
     bindRemoteAudioStream(stream, peerId);
+  });
+
+  // Large P2P file transfers (chunked over DataChannel).
+  state.transport.onFileReceived?.((info) => {
+    onIncomingP2PFile(info).catch((e) => console.warn('Incoming file failed:', e));
+  });
+  state.transport.onFileProgress?.((p) => {
+    if (p.dir === 'in') {
+      const pct = Math.round((p.received / p.total) * 100);
+      setStatus('warning', `Приём ${p.name}… ${pct}%`);
+      if (p.received >= p.total) setStatus('offline', '');
+    }
   });
 
   state.multiplexer.onMessage(async (packet, fromPeerId) => {
@@ -4295,6 +4315,29 @@ function addMessageToUI(packet, isSent, options = {}) {
       </div>
       <time>${formatTime(packet.timestamp)}</time>
     `;
+  } else if (packet.type === 'file') {
+    // Resolve a usable source URL: inline (base64) or p2p (objectURL).
+    const src = packet.localUrl
+      ? packet.localUrl
+      : (packet.content ? `data:${packet.mimeType};base64,${packet.content}` : '');
+    const name = escapeHtml(packet.fileName || 'файл');
+    let body;
+    if (packet.kind === 'image' && src) {
+      body = `<img src="${src}" alt="${name}" class="file-image" onclick="window.open('${src}','_blank')">`;
+    } else if (packet.kind === 'video' && src) {
+      body = `<video src="${src}" controls preload="metadata" class="file-video"></video>`;
+    } else {
+      const sizeLabel = packet.fileSize ? formatFileSize(packet.fileSize) : '';
+      body = `<a class="file-attachment" href="${src || '#'}" download="${name}">
+        <span class="material-icons">insert_drive_file</span>
+        <span class="file-meta"><span class="file-name">${name}</span>${sizeLabel ? `<span class="file-size">${sizeLabel}</span>` : ''}</span>
+      </a>`;
+    }
+    message.innerHTML = `
+      ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
+      <div class="file-msg">${body}</div>
+      <time>${formatTime(packet.timestamp)}</time>
+    `;
   } else {
     message.innerHTML = `
       ${senderName ? `<span class="msg-sender">${senderName}</span>` : ''}
@@ -4603,6 +4646,14 @@ function formatTime(timestamp) {
   });
 }
 
+function formatFileSize(bytes) {
+  if (!bytes) return '';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+  let v = bytes, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
 const MONTH_NAMES = ['янв.', 'фев.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сен.', 'окт.', 'ноя.', 'дек.'];
 
 function formatRelativeTime(timestamp) {
@@ -4782,6 +4833,192 @@ async function finishVoiceMessage(mimeType) {
     setStatus('offline', '');
   };
   reader.readAsDataURL(blob);
+}
+
+// ==================== FILE SHARING ====================
+
+const FILE_INLINE_LIMIT = 8 * 1024 * 1024;   // ≤8 MB → E2E inline (offline-capable)
+const FILE_MAX_SIZE      = 500 * 1024 * 1024; // 500 MB hard cap
+
+function fileKind(mime) {
+  if (!mime) return 'file';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return 'file';
+}
+
+// Re-encode an image through a canvas to strip ALL metadata (EXIF/GPS/etc).
+// Returns a Blob (JPEG/PNG). Falls back to the original on failure.
+function stripImageExif(file) {
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          const outType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+          canvas.toBlob((blob) => resolve(blob || file), outType, 0.92);
+        } catch { URL.revokeObjectURL(url); resolve(file); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    } catch { resolve(file); }
+  });
+}
+
+window.handleFileAttach = async (event) => {
+  const files = Array.from(event.target.files || []);
+  event.target.value = ''; // allow re-selecting the same file
+  if (!files.length || !state.currentChatId) return;
+
+  for (const file of files) {
+    if (file.size > FILE_MAX_SIZE) {
+      setStatus('error', `Файл больше 500 МБ: ${file.name}`);
+      continue;
+    }
+    await sendFileMessage(state.currentChatId, file);
+  }
+};
+
+async function sendFileMessage(chatId, rawFile) {
+  let file = rawFile;
+  const kind = fileKind(rawFile.type);
+
+  // Strip EXIF from images before they leave the device.
+  if (kind === 'image' && rawFile.type !== 'image/gif') {
+    file = await stripImageExif(rawFile);
+    if (!file.name) file = new File([file], rawFile.name, { type: file.type });
+  }
+
+  const mimeType = file.type || rawFile.type || 'application/octet-stream';
+  const fileId = crypto.randomUUID();
+  const isGroup = state.groups.has(chatId);
+  const previewText = kind === 'image' ? '🖼 Фото' : kind === 'video' ? '🎬 Видео' : '📎 Файл';
+
+  // ---- Small files: inline base64 over the E2E path (works offline) ----
+  if (file.size <= FILE_INLINE_LIMIT) {
+    const base64 = await blobToBase64(file);
+    const packet = {
+      packetId: crypto.randomUUID(),
+      type: 'file',
+      kind,
+      fileName: rawFile.name,
+      mimeType,
+      content: base64,           // E2E-encrypted by deliverOutgoingMessage
+      transfer: 'inline',
+      senderId: state.profile.userId,
+      senderName: state.profile.displayName,
+      senderPublicKey: getPublicKeyHex(state.keyPair),
+      timestamp: Date.now()
+    };
+    const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
+    packet._dbId = dbKey;
+    addMessageToUI(packet, true);
+    await upsertContact(chatId, { ...state.contacts.get(chatId), lastMsg: previewText, lastTime: packet.timestamp });
+    renderContacts();
+    await deliverOutgoingMessage(chatId, packet);
+    return;
+  }
+
+  // ---- Large files: P2P chunked transfer (requires peer online) ----
+  if (isGroup) {
+    setStatus('error', 'Большие файлы в группах пока не поддерживаются');
+    return;
+  }
+  const targetPeerId = await resolvePeerForUser(chatId);
+  if (!targetPeerId || !state.transport) {
+    setStatus('error', 'Большой файл можно отправить только когда собеседник в сети');
+    return;
+  }
+
+  // Local objectURL so the sender sees the file immediately.
+  const localUrl = URL.createObjectURL(file);
+  const packet = {
+    packetId: crypto.randomUUID(),
+    type: 'file',
+    kind,
+    fileName: rawFile.name,
+    mimeType,
+    transfer: 'p2p',
+    fileSize: file.size,
+    localUrl,
+    senderId: state.profile.userId,
+    senderName: state.profile.displayName,
+    timestamp: Date.now()
+  };
+  const dbKey = await messageDB.saveMessage({ ...packet, localUrl: undefined }, chatId, false, { isOutgoing: true });
+  packet._dbId = dbKey;
+  addMessageToUI(packet, true);
+  await upsertContact(chatId, { ...state.contacts.get(chatId), lastMsg: previewText, lastTime: packet.timestamp });
+  renderContacts();
+
+  setStatus('warning', `Отправка ${rawFile.name}…`);
+  try {
+    await state.transport.sendFile(targetPeerId, file, {
+      fileId,
+      name: rawFile.name,
+      mimeType,
+      kind,
+      senderId: state.profile.userId,
+      senderName: state.profile.displayName,
+      timestamp: packet.timestamp
+    }, (sent, total) => {
+      const pct = Math.round((sent / total) * 100);
+      setStatus('warning', `Отправка ${rawFile.name}… ${pct}%`);
+    });
+    setStatus('offline', '');
+  } catch (e) {
+    setStatus('error', 'Не удалось отправить файл (собеседник офлайн?)');
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Called by the WebRTC transport when a P2P file finishes arriving.
+async function onIncomingP2PFile({ peerId, meta, blob }) {
+  const chatId = findUserIdByPeerId(peerId) || meta.senderId || peerId;
+  const url = URL.createObjectURL(blob);
+  const packet = {
+    packetId: meta.fileId,
+    type: 'file',
+    kind: meta.kind || fileKind(meta.mimeType),
+    fileName: meta.name,
+    mimeType: meta.mimeType,
+    transfer: 'p2p',
+    fileSize: blob.size,
+    localUrl: url,
+    senderId: meta.senderId || chatId,
+    senderName: meta.senderName,
+    timestamp: meta.timestamp || Date.now()
+  };
+  await messageDB.saveMessage({ ...packet, localUrl: undefined }, chatId, false, { isOutgoing: false });
+
+  const preview = packet.kind === 'image' ? '🖼 Фото' : packet.kind === 'video' ? '🎬 Видео' : '📎 Файл';
+  const contact = state.contacts.get(chatId);
+  await upsertContact(chatId, { ...contact, lastMsg: preview, lastTime: packet.timestamp });
+
+  if (state.currentChatId === chatId) {
+    addMessageToUI(packet, false);
+  } else {
+    state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
+    refreshDocTitle();
+    notifyNewMessage({ chatId, title: getContactLabel(contact) || chatId, body: preview });
+  }
+  renderContacts();
 }
 
 function initSwipeGestures() {
