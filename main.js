@@ -1230,16 +1230,21 @@ async function init() {
   });
   syncNotificationsToggle();
 
-  // Toggle send/mic button based on input
+  // Toggle send/mic button and wire click
   const input = $('messageInput');
-  if (input) {
-    input.addEventListener('input', () => {
-      const btn = $('sendBtn');
-      if (!btn) return;
-      const icon = btn.querySelector('.material-icons');
+  const sendBtn = $('sendBtn');
+  if (input && sendBtn) {
+    const updateSendBtn = () => {
+      const icon = sendBtn.querySelector('.material-icons');
       if (!icon) return;
-      const hasText = input.value.trim().length > 0;
-      icon.textContent = hasText ? 'send' : 'mic';
+      icon.textContent = input.value.trim().length > 0 ? 'send' : 'mic';
+    };
+    input.addEventListener('input', updateSendBtn);
+    sendBtn.addEventListener('click', () => {
+      if (input.value.trim().length > 0) {
+        sendCurrentMessage();
+      }
+      // mic tap: no-op for now (voice messages coming later)
     });
   }
 
@@ -1378,34 +1383,23 @@ function closeGate() {
   $('app').hidden = false;
 }
 
-window.onLoginNameInput = async () => {
+window.onLoginNameInput = () => {
   const input = $('loginName');
   const passwordField = $('loginPasswordField');
   const loginBtn = $('loginBtn');
-  if (!input || !passwordField || !loginBtn) return;
+  if (!input || !passwordField) return;
 
   const raw = input.value.replace(/^@+/, '');
   input.value = raw;
   const login = normalizeLogin(raw);
 
-  if (isValidLogin(login)) {
-    const exists = await checkUserExists(login);
-    const banned = await checkUserBanned(login);
-    if (exists && !banned) {
-      passwordField.hidden = false;
-      loginBtn.textContent = 'Войти';
-      $('authError').textContent = '';
-      return;
-    }
-    if (banned) {
-      passwordField.hidden = true;
-      loginBtn.textContent = 'Войти';
-      $('authError').textContent = 'Аккаунт заблокирован';
-      return;
-    }
-  }
-  passwordField.hidden = true;
-  loginBtn.textContent = 'Войти';
+  // Reveal the password field as soon as the login is syntactically valid.
+  // We deliberately do NOT ask the server whether the account exists: that
+  // blocked login on any request failure (the regression) and leaked login
+  // attempts / allowed account enumeration. Existence + ban are checked at submit.
+  passwordField.hidden = !isValidLogin(login);
+  if (loginBtn) loginBtn.textContent = 'Войти';
+  $('authError').textContent = '';
 };
 
 window.showRegister = (inviteCode) => {
@@ -1773,6 +1767,12 @@ function bindInboxSync() {
     if (document.visibilityState !== 'visible' || !state.profile) return;
     getSignaling()?.pollNow().catch(() => {});
     pullUserInbox().catch(() => {});
+    // Clear unread for currently open chat when app comes back to foreground
+    if (state.currentChatId) {
+      state.unreadCounts.delete(state.currentChatId);
+      refreshDocTitle();
+      renderContacts();
+    }
   });
 }
 
@@ -1867,7 +1867,8 @@ async function processIncomingPacket(packet, fromPeerId) {
     ? packet.senderName
     : (existingContact?.displayName || chatId);
 
-  if (state.currentChatId !== chatId) {
+  const appHidden = document.hidden || document.visibilityState !== 'visible';
+  if (state.currentChatId !== chatId || appHidden) {
     state.unreadCounts.set(chatId, (state.unreadCounts.get(chatId) || 0) + 1);
     refreshDocTitle();
     notifyNewMessage({
@@ -3117,6 +3118,7 @@ function makeSwipeToDelete(itemEl, id) {
   del.textContent = 'Удалить';
   del.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (!confirm('Удалить чат и всю переписку?')) return;
     deleteChatById(id);
   });
 
