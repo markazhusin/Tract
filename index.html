@@ -1341,14 +1341,19 @@
         background: var(--bg); color: var(--text); font-size: 16px;
         letter-spacing: 2px;
       }
+      .lock-gate-options { display: flex; gap: 8px; margin-top: 4px; }
+      .lock-gate-options .lock-mode-option { flex: 1; justify-content: center; font-size: 13px; }
       .lock-mode-options { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
       .lock-mode-option {
-        display: flex; align-items: center; gap: 10px; padding: 12px;
+        display: flex; align-items: center; gap: 10px; padding: 10px 12px;
         border: 1px solid var(--line); border-radius: 10px; cursor: pointer;
+        transition: border-color 0.15s;
       }
-      .lock-mode-option.active { border-color: var(--accent); }
-      .lock-modal-actions { display: flex; gap: 10px; margin-top: 20px; }
-      .lock-modal-actions .btn { flex: 1; }
+      .lock-mode-option.active { border-color: var(--accent); background: rgba(183,255,249,0.05); }
+      .lock-mode-option input[type="radio"] { accent-color: var(--accent); }
+      .lock-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
+      .lock-modal-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .lock-modal-actions .btn { flex: 1; min-width: 80px; }
     </style>
 </head>
 <body>
@@ -1576,6 +1581,7 @@
           <button type="button" class="icon-btn" id="btnCall" hidden onclick="startVoiceCall()" title="Звонок"><span class="material-icons">phone</span></button>
           <button type="button" class="icon-btn" id="btnChatMenu" hidden onclick="toggleChatMenu()" title="Ещё"><span class="material-icons">more_vert</span></button>
           <div class="chat-menu" id="chatMenu" hidden>
+            <button type="button" id="disappearMenuBtn" onclick="openDisappearPicker()">⏱ Исчезающие: <span id="disappearLabel">Выкл</span></button>
             <button type="button" onclick="clearCurrentHistory('me')">Очистить у меня</button>
             <button type="button" onclick="clearCurrentHistory('all')">Очистить у всех</button>
           </div>

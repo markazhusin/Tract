@@ -1,22 +1,28 @@
 // App lock & disguise.
 //
-// Three modes (persisted in localStorage as `tract.lock.mode`):
-//   off        — no lock.
-//   passcode   — Telegram-style 4-digit code on launch.
-//   calculator — the app masquerades as a Calculator (icon + name swapped in the
-//                <head> boot script). It behaves as a real calculator until the
-//                user types the secret combo, presses "=", then "+".
+// Two independent settings:
+//   tract.lock.disguise  — 'on' swaps icon/title to Calculator (handled by <head> boot script)
+//   tract.lock.gate      — 'off'|'passcode'|'calculator'  what blocks the screen on launch
 //
-// Two secrets are stored as SHA-256 hashes (never plaintext):
-//   codeHash — unlock.
-//   wipeHash — duress code: wipes ALL local data and unregisters the PWA.
+// Both can be active simultaneously ("calculator disguise + passcode gate").
 //
-// The duress path is intentionally indistinguishable to an observer: entering it
-// looks exactly like a wrong/normal entry, but it destroys everything.
+// Two secrets stored as SHA-256 hashes:
+//   tract.lock.codeHash  — unlock code
+//   tract.lock.wipeHash  — duress code (action is configurable)
+//
+// Duress action (tract.lock.wipeAction):
+//   'wipe-all'    — destroy everything, reload (default)
+//   'clear-msgs'  — delete message history only, then unlock
+//   'logout'      — log out without deleting data
 
-const LOCK_MODE_KEY = 'tract.lock.mode';
-const LOCK_CODE_KEY = 'tract.lock.codeHash';
-const LOCK_WIPE_KEY = 'tract.lock.wipeHash';
+const DISGUISE_KEY   = 'tract.lock.disguise';
+const GATE_KEY       = 'tract.lock.gate';
+const CODE_KEY       = 'tract.lock.codeHash';
+const WIPE_KEY       = 'tract.lock.wipeHash';
+const WIPE_ACTION    = 'tract.lock.wipeAction';
+
+// Legacy compat: old installs stored mode in tract.lock.mode
+const LEGACY_KEY     = 'tract.lock.mode';
 
 let onUnlocked = null;
 
@@ -26,85 +32,130 @@ async function sha256Hex(input) {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ---------- Public getters ----------
+
+export function getLockConfig() {
+  // Migrate legacy
+  const legacy = localStorage.getItem(LEGACY_KEY);
+  if (legacy && legacy !== 'off' && !localStorage.getItem(GATE_KEY)) {
+    if (legacy === 'calculator') {
+      localStorage.setItem(DISGUISE_KEY, 'on');
+      localStorage.setItem(GATE_KEY, 'calculator');
+    } else if (legacy === 'passcode') {
+      localStorage.setItem(GATE_KEY, 'passcode');
+    }
+    localStorage.removeItem(LEGACY_KEY);
+  }
+
+  return {
+    disguise:    localStorage.getItem(DISGUISE_KEY) === 'on',
+    gate:        localStorage.getItem(GATE_KEY) || 'off',      // 'off'|'passcode'|'calculator'
+    hasCode:     Boolean(localStorage.getItem(CODE_KEY)),
+    hasWipe:     Boolean(localStorage.getItem(WIPE_KEY)),
+    wipeAction:  localStorage.getItem(WIPE_ACTION) || 'wipe-all',
+  };
+}
+
+// getLockMode kept for compat with index.html boot script
 export function getLockMode() {
-  const m = localStorage.getItem(LOCK_MODE_KEY);
-  return m === 'passcode' || m === 'calculator' ? m : 'off';
+  const { disguise, gate } = getLockConfig();
+  if (gate === 'calculator' || disguise) return 'calculator';
+  if (gate === 'passcode') return 'passcode';
+  return 'off';
 }
 
 export function isLockEnabled() {
-  return getLockMode() !== 'off';
+  const { gate } = getLockConfig();
+  return gate !== 'off';
 }
 
-export function hasWipeCode() {
-  return Boolean(localStorage.getItem(LOCK_WIPE_KEY));
-}
+// ---------- Configure ----------
 
-// Persist a lock configuration. Empty/short codes throw so callers can validate.
-export async function configureLock({ mode, code, wipeCode }) {
-  if (mode === 'off') {
-    localStorage.removeItem(LOCK_MODE_KEY);
-    localStorage.removeItem(LOCK_CODE_KEY);
-    localStorage.removeItem(LOCK_WIPE_KEY);
+export async function configureLock({ disguise, gate, code, wipeCode, wipeAction, oldCode } = {}) {
+  const cfg = getLockConfig();
+
+  // Verify old code if changing an existing one
+  if (cfg.hasCode && oldCode !== undefined) {
+    const oldHash = await sha256Hex(oldCode);
+    if (oldHash !== localStorage.getItem(CODE_KEY)) {
+      throw new Error('wrong-old-code');
+    }
+  }
+
+  if (gate === 'off' && !disguise) {
+    // Full disable
+    localStorage.removeItem(DISGUISE_KEY);
+    localStorage.removeItem(GATE_KEY);
+    localStorage.removeItem(CODE_KEY);
+    localStorage.removeItem(WIPE_KEY);
+    localStorage.removeItem(WIPE_ACTION);
+    localStorage.removeItem(LEGACY_KEY);
     return;
   }
-  if (!code || String(code).length < 1) {
-    throw new Error('empty-code');
+
+  if (disguise !== undefined) {
+    if (disguise) localStorage.setItem(DISGUISE_KEY, 'on');
+    else localStorage.removeItem(DISGUISE_KEY);
   }
-  if (wipeCode && String(wipeCode) === String(code)) {
-    throw new Error('codes-equal');
+
+  if (gate !== undefined) {
+    if (gate && gate !== 'off') localStorage.setItem(GATE_KEY, gate);
+    else localStorage.removeItem(GATE_KEY);
   }
-  localStorage.setItem(LOCK_MODE_KEY, mode);
-  localStorage.setItem(LOCK_CODE_KEY, await sha256Hex(code));
-  if (wipeCode) {
-    localStorage.setItem(LOCK_WIPE_KEY, await sha256Hex(wipeCode));
-  } else {
-    localStorage.removeItem(LOCK_WIPE_KEY);
+
+  if (code !== undefined && code !== null && String(code).length >= 1) {
+    if (wipeCode && String(wipeCode) === String(code)) throw new Error('codes-equal');
+    localStorage.setItem(CODE_KEY, await sha256Hex(code));
   }
+
+  if (wipeCode !== undefined) {
+    if (wipeCode && String(wipeCode).length >= 1) {
+      localStorage.setItem(WIPE_KEY, await sha256Hex(wipeCode));
+    } else {
+      localStorage.removeItem(WIPE_KEY);
+    }
+  }
+
+  if (wipeAction) localStorage.setItem(WIPE_ACTION, wipeAction);
 }
 
 export async function disableLock() {
-  await configureLock({ mode: 'off' });
+  await configureLock({ disguise: false, gate: 'off' });
 }
 
-// 'unlock' | 'wipe' | 'invalid'
+// ---------- Code checking ----------
+
 async function classifyCode(code) {
   const hash = await sha256Hex(code);
-  const wipeHash = localStorage.getItem(LOCK_WIPE_KEY);
-  const codeHash = localStorage.getItem(LOCK_CODE_KEY);
+  const wipeHash = localStorage.getItem(WIPE_KEY);
+  const codeHash = localStorage.getItem(CODE_KEY);
   if (wipeHash && hash === wipeHash) return 'wipe';
   if (codeHash && hash === codeHash) return 'unlock';
   return 'invalid';
 }
 
-// Destroy every trace of the app on this device.
+// ---------- Actions ----------
+
 export async function wipeEverything() {
   try { localStorage.clear(); } catch {}
   try { sessionStorage.clear(); } catch {}
-
   try {
     if (typeof indexedDB.databases === 'function') {
       const dbs = await indexedDB.databases();
-      await Promise.all(
-        dbs
-          .filter((d) => d && d.name)
-          .map((d) => new Promise((res) => {
-            const req = indexedDB.deleteDatabase(d.name);
-            req.onsuccess = req.onerror = req.onblocked = () => res();
-          }))
-      );
+      await Promise.all(dbs.filter((d) => d?.name).map((d) => new Promise((res) => {
+        const req = indexedDB.deleteDatabase(d.name);
+        req.onsuccess = req.onerror = req.onblocked = () => res();
+      })));
     } else {
-      // Older browsers can't enumerate; delete the known database names.
       indexedDB.deleteDatabase('TractDB');
     }
   } catch {}
-
   try {
     if (window.caches) {
       const keys = await caches.keys();
       await Promise.all(keys.map((k) => caches.delete(k)));
     }
   } catch {}
-
   try {
     if (navigator.serviceWorker) {
       const regs = await navigator.serviceWorker.getRegistrations();
@@ -123,17 +174,44 @@ function doUnlock() {
 }
 
 async function doWipe() {
+  const action = localStorage.getItem(WIPE_ACTION) || 'wipe-all';
+
+  if (action === 'clear-msgs') {
+    // Only clear message history, keep identity
+    try {
+      if (typeof indexedDB.databases === 'function') {
+        const dbs = await indexedDB.databases();
+        await Promise.all(dbs.filter((d) => d?.name).map((d) => new Promise((res) => {
+          const req = indexedDB.deleteDatabase(d.name);
+          req.onsuccess = req.onerror = req.onblocked = () => res();
+        })));
+      } else {
+        indexedDB.deleteDatabase('TractDB');
+      }
+    } catch {}
+    doUnlock();
+    return;
+  }
+
+  if (action === 'logout') {
+    // Clear session keys but keep identity blob
+    try { sessionStorage.clear(); } catch {}
+    ['tract.session.unlockPassword', 'tract.session.rememberedPassword'].forEach((k) => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+    doUnlock();
+    return;
+  }
+
+  // Default: wipe-all
   await wipeEverything();
-  // Reload to a pristine state. localStorage is gone, so the lock config and
-  // disguise are gone too — an observer just sees an empty app, the victim's
-  // data is unrecoverable.
   location.reload();
 }
 
 async function handleCodeEntry(code, onInvalid) {
   const kind = await classifyCode(code);
   if (kind === 'unlock') return doUnlock();
-  if (kind === 'wipe') return doWipe();
+  if (kind === 'wipe')   return doWipe();
   onInvalid?.();
 }
 
@@ -154,11 +232,11 @@ function createCalculator() {
   root.appendChild(keys);
 
   let display = '0';
-  let acc = null;        // accumulated value
-  let op = null;         // pending operator: + - × ÷
-  let fresh = true;      // next digit begins a new number
-  let comboCandidate = ''; // raw number string the user last typed
-  let equalsArmed = false; // "=" was the previous action
+  let acc = null;
+  let op = null;
+  let fresh = true;
+  let comboCandidate = '';
+  let equalsArmed = false;
 
   const render = () => { screen.textContent = display; };
 
@@ -194,9 +272,9 @@ function createCalculator() {
   };
 
   const chooseOp = (nextOp) => {
-    // Unlock/duress gesture: "+" pressed immediately after "=".
     if (nextOp === '+' && equalsArmed) {
       handleCodeEntry(comboCandidate, null);
+      return;
     }
     equalsArmed = false;
     const val = parseFloat(display);
@@ -220,7 +298,6 @@ function createCalculator() {
     } else {
       acc = val;
     }
-    // comboCandidate already holds the number string the user typed.
     equalsArmed = true;
     fresh = true;
     render();
@@ -245,25 +322,25 @@ function createCalculator() {
   };
 
   const layout = [
-    { label: 'AC', cls: 'fn', act: clearAll },
+    { label: 'AC',  cls: 'fn', act: clearAll },
     { label: '+/−', cls: 'fn', act: toggleSign },
-    { label: '%', cls: 'fn', act: percent },
-    { label: '÷', cls: 'op', act: () => chooseOp('÷') },
-    { label: '7', act: () => inputDigit('7') },
-    { label: '8', act: () => inputDigit('8') },
-    { label: '9', act: () => inputDigit('9') },
-    { label: '×', cls: 'op', act: () => chooseOp('×') },
-    { label: '4', act: () => inputDigit('4') },
-    { label: '5', act: () => inputDigit('5') },
-    { label: '6', act: () => inputDigit('6') },
-    { label: '−', cls: 'op', act: () => chooseOp('−') },
-    { label: '1', act: () => inputDigit('1') },
-    { label: '2', act: () => inputDigit('2') },
-    { label: '3', act: () => inputDigit('3') },
-    { label: '+', cls: 'op', act: () => chooseOp('+') },
-    { label: '0', cls: 'zero', act: () => inputDigit('0') },
-    { label: '.', act: () => inputDigit('.') },
-    { label: '=', cls: 'op', act: equals }
+    { label: '%',   cls: 'fn', act: percent },
+    { label: '÷',   cls: 'op', act: () => chooseOp('÷') },
+    { label: '7',   act: () => inputDigit('7') },
+    { label: '8',   act: () => inputDigit('8') },
+    { label: '9',   act: () => inputDigit('9') },
+    { label: '×',   cls: 'op', act: () => chooseOp('×') },
+    { label: '4',   act: () => inputDigit('4') },
+    { label: '5',   act: () => inputDigit('5') },
+    { label: '6',   act: () => inputDigit('6') },
+    { label: '−',   cls: 'op', act: () => chooseOp('−') },
+    { label: '1',   act: () => inputDigit('1') },
+    { label: '2',   act: () => inputDigit('2') },
+    { label: '3',   act: () => inputDigit('3') },
+    { label: '+',   cls: 'op', act: () => chooseOp('+') },
+    { label: '0',   cls: 'zero', act: () => inputDigit('0') },
+    { label: '.',   act: () => inputDigit('.') },
+    { label: '=',   cls: 'op', act: equals },
   ];
 
   for (const key of layout) {
@@ -308,17 +385,11 @@ function createPasscodePad() {
 
   let entry = '';
 
-  const refreshDots = () => {
-    dotEls.forEach((d, i) => d.classList.toggle('filled', i < entry.length));
-  };
+  const refreshDots = () => dotEls.forEach((d, i) => d.classList.toggle('filled', i < entry.length));
 
   const reject = () => {
     root.classList.add('shake');
-    setTimeout(() => {
-      root.classList.remove('shake');
-      entry = '';
-      refreshDots();
-    }, 400);
+    setTimeout(() => { root.classList.remove('shake'); entry = ''; refreshDots(); }, 400);
   };
 
   const press = async (digit) => {
@@ -326,19 +397,16 @@ function createPasscodePad() {
     entry += digit;
     refreshDots();
     if (entry.length === 4) {
-      const code = entry;
-      await handleCodeEntry(code, reject);
-      if (document.documentElement.hasAttribute('data-locked')) {
-        // still locked → was invalid; reject() already handled it, but if not:
-        if (!root.classList.contains('shake')) { entry = ''; refreshDots(); }
+      await handleCodeEntry(entry, reject);
+      if (document.documentElement.hasAttribute('data-locked') && !root.classList.contains('shake')) {
+        entry = ''; refreshDots();
       }
     }
   };
 
   const backspace = () => { entry = entry.slice(0, -1); refreshDots(); };
 
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
-  for (const k of keys) {
+  for (const k of ['1','2','3','4','5','6','7','8','9','','0','⌫']) {
     const btn = document.createElement('button');
     btn.type = 'button';
     if (k === '') {
@@ -360,7 +428,7 @@ function createPasscodePad() {
   return root;
 }
 
-// ---------- Public entry points ----------
+// ---------- Public entry point ----------
 
 function renderLockScreen() {
   const host = document.getElementById('lockScreen');
@@ -368,11 +436,10 @@ function renderLockScreen() {
   host.innerHTML = '';
   host.hidden = false;
   document.documentElement.setAttribute('data-locked', '1');
-  const mode = getLockMode();
-  host.appendChild(mode === 'calculator' ? createCalculator() : createPasscodePad());
+  const { gate } = getLockConfig();
+  host.appendChild(gate === 'calculator' ? createCalculator() : createPasscodePad());
 }
 
-// Resolves once the user has unlocked (or immediately if no lock is set).
 export function initAppLock() {
   return new Promise((resolve) => {
     if (!isLockEnabled()) {

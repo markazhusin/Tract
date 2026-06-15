@@ -29,6 +29,7 @@ import {
 import {
   initAppLock,
   getLockMode,
+  getLockConfig,
   configureLock,
   disableLock
 } from './app/core/applock.js';
@@ -1116,101 +1117,161 @@ function updateLockStatusLabel() {
 }
 
 window.openLockSettings = () => {
-  const currentMode = getLockMode();
-  let selectedMode = currentMode === 'off' ? 'passcode' : currentMode;
+  const cfg = getLockConfig();
+
+  // Working state (toggled in UI before saving)
+  let st = {
+    disguise:   cfg.disguise,
+    gate:       cfg.gate,       // 'off' | 'passcode' | 'calculator'
+    wipeAction: cfg.wipeAction,
+    changingCode: false,
+  };
 
   const backdrop = document.createElement('div');
   backdrop.className = 'lock-modal-backdrop';
-
   const modal = document.createElement('div');
   modal.className = 'lock-modal';
   backdrop.appendChild(modal);
 
-  const render = () => {
-    const isCalc = selectedMode === 'calculator';
-    const codeHint = isCalc
-      ? 'Секретная комбинация цифр. В калькуляторе наберите её, нажмите =, затем +.'
-      : 'Ровно 4 цифры — как в Telegram.';
-    modal.innerHTML = `
-      <h3>Блокировка приложения</h3>
-      <p class="hint">Защитите вход код-паролем или замаскируйте приложение под калькулятор.</p>
+  const close = () => backdrop.remove();
+  backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
 
-      <div class="lock-mode-options">
-        <label class="lock-mode-option ${selectedMode === 'passcode' ? 'active' : ''}">
-          <input type="radio" name="lockMode" value="passcode" ${selectedMode === 'passcode' ? 'checked' : ''}>
-          <div>
-            <div class="toggle-label">Код-пароль</div>
-            <div class="toggle-sublabel">4 цифры при запуске</div>
-          </div>
-        </label>
-        <label class="lock-mode-option ${selectedMode === 'calculator' ? 'active' : ''}">
-          <input type="radio" name="lockMode" value="calculator" ${selectedMode === 'calculator' ? 'checked' : ''}>
-          <div>
-            <div class="toggle-label">Маскировка «Калькулятор»</div>
-            <div class="toggle-sublabel">Приложение выглядит как калькулятор</div>
-          </div>
+  const WIPE_ACTIONS = [
+    { val: 'wipe-all',   label: 'Стереть всё', sub: 'Удалить аккаунт, переписки, ключи' },
+    { val: 'clear-msgs', label: 'Только переписки', sub: 'Удалить сообщения, аккаунт остаётся' },
+    { val: 'logout',     label: 'Выйти из аккаунта', sub: 'Сессия закрывается, данные остаются' },
+  ];
+
+  const render = () => {
+    const isActive = st.gate !== 'off' || st.disguise;
+    modal.innerHTML = `
+      <h3 style="margin-bottom:16px;">Блокировка и маскировка</h3>
+
+      <!-- DISGUISE toggle -->
+      <div class="lock-row" style="margin-bottom:8px;">
+        <div>
+          <div class="toggle-label">Маскировка «Калькулятор»</div>
+          <div class="toggle-sublabel">Иконка и название — Калькулятор. iOS: только при новой установке.</div>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="lkDisguise" ${st.disguise ? 'checked' : ''}>
+          <span class="toggle-track"></span>
         </label>
       </div>
 
-      <label>${isCalc ? 'Секретная комбинация' : 'Код-пароль (4 цифры)'}</label>
-      <input type="password" inputmode="numeric" id="lockCodeInput" autocomplete="off" placeholder="${isCalc ? 'напр. 1958' : '••••'}">
-      <p class="hint" style="margin:6px 0 0;">${codeHint}</p>
+      <!-- GATE selector -->
+      <div class="lock-row" style="margin-bottom:4px;">
+        <div class="toggle-label">Блокировка экрана</div>
+      </div>
+      <div class="lock-gate-options">
+        ${['off','passcode','calculator'].map((g) => `
+          <label class="lock-mode-option ${st.gate === g ? 'active' : ''}">
+            <input type="radio" name="lkGate" value="${g}" ${st.gate === g ? 'checked' : ''}>
+            <span>${g === 'off' ? 'Выкл' : g === 'passcode' ? '4-значный пин' : 'Комбо-калькулятор'}</span>
+          </label>`).join('')}
+      </div>
 
-      <label>Код самоуничтожения (необязательно)</label>
-      <input type="password" inputmode="numeric" id="lockWipeInput" autocomplete="off" placeholder="стереть всё">
-      <p class="hint" style="margin:6px 0 0;">При вводе этого кода всё содержимое удаляется без следа.</p>
+      ${st.gate !== 'off' ? `
+        <!-- CODE inputs -->
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;">
+          ${cfg.hasCode && !st.changingCode ? `
+            <button type="button" class="btn subtle" id="lkChangeCodeBtn" style="font-size:13px;">
+              Сменить код разблокировки
+            </button>
+          ` : `
+            ${cfg.hasCode ? '<label style="font-size:12px;color:var(--muted);">Старый код</label><input type="password" inputmode="numeric" id="lkOldCode" autocomplete="off" placeholder="текущий код">' : ''}
+            <label style="font-size:12px;color:var(--muted);">${st.gate === 'calculator' ? 'Секретная комбинация (любые цифры, затем = и +)' : 'Новый код (4 цифры)'}</label>
+            <input type="password" inputmode="numeric" id="lkCode" autocomplete="off" placeholder="${st.gate === 'calculator' ? 'напр. 19580' : '••••'}" maxlength="${st.gate === 'passcode' ? '4' : '20'}">
+          `}
 
-      <div id="lockModalError" style="color:var(--danger);font-size:13px;margin-top:12px;min-height:16px;"></div>
+          <label style="font-size:12px;color:var(--muted);">Код экстренной очистки (необязательно)</label>
+          <input type="password" inputmode="numeric" id="lkWipe" autocomplete="off" placeholder="введёте — сработает действие ниже" maxlength="${st.gate === 'passcode' ? '4' : '20'}">
 
-      <div class="lock-modal-actions">
-        ${currentMode !== 'off' ? '<button type="button" class="btn subtle" id="lockDisableBtn">Выключить</button>' : ''}
-        <button type="button" class="btn subtle" id="lockCancelBtn">Отмена</button>
-        <button type="button" class="btn primary" id="lockSaveBtn">Сохранить</button>
+          <label style="font-size:12px;color:var(--muted);">Действие при экстренном коде</label>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            ${WIPE_ACTIONS.map((wa) => `
+              <label class="lock-mode-option ${st.wipeAction === wa.val ? 'active' : ''}" style="flex-direction:column;align-items:flex-start;gap:2px;">
+                <div style="display:flex;align-items:center;gap:8px;width:100%;">
+                  <input type="radio" name="lkWipeAction" value="${wa.val}" ${st.wipeAction === wa.val ? 'checked' : ''}>
+                  <span class="toggle-label">${wa.label}</span>
+                </div>
+                <span class="toggle-sublabel" style="padding-left:24px;">${wa.sub}</span>
+              </label>`).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <div id="lockModalError" style="color:var(--danger);font-size:13px;margin-top:10px;min-height:16px;"></div>
+
+      <div class="lock-modal-actions" style="margin-top:16px;">
+        ${isActive ? '<button type="button" class="btn subtle" id="lkDisableBtn">Выключить всё</button>' : ''}
+        <button type="button" class="btn subtle" id="lkCancelBtn">Отмена</button>
+        <button type="button" class="btn primary" id="lkSaveBtn">Сохранить</button>
       </div>
     `;
 
-    modal.querySelectorAll('input[name="lockMode"]').forEach((r) => {
-      r.addEventListener('change', (e) => { selectedMode = e.target.value; render(); });
+    // Wire checkboxes/radios
+    modal.querySelector('#lkDisguise').onchange = (e) => { st.disguise = e.target.checked; render(); };
+    modal.querySelectorAll('[name="lkGate"]').forEach((r) => {
+      r.onchange = (e) => { st.gate = e.target.value; render(); };
+    });
+    modal.querySelectorAll('[name="lkWipeAction"]').forEach((r) => {
+      r.onchange = (e) => { st.wipeAction = e.target.value; render(); };
     });
 
-    const close = () => backdrop.remove();
-    $('lockCancelBtn').onclick = close;
-    backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
+    const changeBtn = modal.querySelector('#lkChangeCodeBtn');
+    if (changeBtn) changeBtn.onclick = () => { st.changingCode = true; render(); };
 
-    const disableBtn = $('lockDisableBtn');
+    modal.querySelector('#lkCancelBtn').onclick = close;
+
+    const disableBtn = modal.querySelector('#lkDisableBtn');
     if (disableBtn) disableBtn.onclick = async () => {
       await disableLock();
       updateLockStatusLabel();
       close();
-      setStatus('ok', 'Блокировка выключена');
+      location.reload();
     };
 
-    $('lockSaveBtn').onclick = async () => {
-      const code = $('lockCodeInput').value.trim();
-      const wipe = $('lockWipeInput').value.trim();
-      const errEl = $('lockModalError');
+    modal.querySelector('#lkSaveBtn').onclick = async () => {
+      const errEl = modal.querySelector('#lockModalError');
       errEl.textContent = '';
 
-      if (!/^\d+$/.test(code)) { errEl.textContent = 'Код должен состоять из цифр.'; return; }
-      if (selectedMode === 'passcode' && code.length !== 4) { errEl.textContent = 'Код-пароль — ровно 4 цифры.'; return; }
-      if (wipe && !/^\d+$/.test(wipe)) { errEl.textContent = 'Код уничтожения должен состоять из цифр.'; return; }
-      if (selectedMode === 'passcode' && wipe && wipe.length !== 4) { errEl.textContent = 'Код уничтожения — ровно 4 цифры.'; return; }
-      if (wipe && wipe === code) { errEl.textContent = 'Коды должны различаться.'; return; }
+      const codeEl   = modal.querySelector('#lkCode');
+      const wipeEl   = modal.querySelector('#lkWipe');
+      const oldEl    = modal.querySelector('#lkOldCode');
+      const code     = codeEl?.value.trim() || null;
+      const wipe     = wipeEl?.value.trim() || null;
+      const oldCode  = oldEl?.value.trim() || null;
+
+      if (st.gate !== 'off') {
+        if (!cfg.hasCode || st.changingCode) {
+          if (!code) { errEl.textContent = 'Введите код разблокировки.'; return; }
+          if (!/^\d+$/.test(code)) { errEl.textContent = 'Только цифры.'; return; }
+          if (st.gate === 'passcode' && code.length !== 4) { errEl.textContent = 'Пин — ровно 4 цифры.'; return; }
+          if (wipe && wipe === code) { errEl.textContent = 'Коды должны различаться.'; return; }
+        }
+      }
 
       try {
-        await configureLock({ mode: selectedMode, code, wipeCode: wipe || undefined });
+        await configureLock({
+          disguise:   st.disguise,
+          gate:       st.gate,
+          code:       (!cfg.hasCode || st.changingCode) ? code : undefined,
+          oldCode:    st.changingCode ? oldCode : undefined,
+          wipeCode:   wipe,
+          wipeAction: st.wipeAction,
+        });
         updateLockStatusLabel();
         close();
-        // Reload so the disguise (title/icon/manifest) and the lock screen actually
-        // engage — they are applied by the <head> boot script and initAppLock().
         location.reload();
       } catch (e) {
-        errEl.textContent = 'Не удалось сохранить.';
+        if (e.message === 'wrong-old-code') errEl.textContent = 'Неверный старый код.';
+        else if (e.message === 'codes-equal') errEl.textContent = 'Коды должны различаться.';
+        else errEl.textContent = 'Не удалось сохранить.';
       }
     };
   };
 
-  // Must be in the DOM before render() runs, since render() wires handlers by id.
   document.body.appendChild(backdrop);
   render();
 };
@@ -2647,20 +2708,37 @@ window.renameCurrentContact = async () => {
 window.clearCurrentHistory = async (scope = 'me') => {
   if (!state.currentChatId) return;
   const chatId = state.currentChatId;
+  const isGroup = state.groups.has(chatId);
+
   if (scope === 'all') {
-    await sendMessageControl({ action: 'clear_chat' }, chatId);
+    if (isGroup) {
+      // Notify all group members via server
+      const serverUrl = resolveSignalingUrl();
+      if (serverUrl) {
+        const group = state.groups.get(chatId);
+        if (group) {
+          for (const member of group.members) {
+            if (member.userId === state.profile?.userId) continue;
+            await sendMessageControl({ action: 'clear_chat', recipientId: chatId }, member.userId).catch(() => {});
+          }
+        }
+      }
+    } else {
+      await sendMessageControl({ action: 'clear_chat' }, chatId);
+    }
   }
+
   await clearPendingCallControls(chatId);
   await messageDB.deleteChat(chatId);
   state.selectedMessageIds.clear();
-  const contact = state.contacts.get(chatId);
-  if (contact) {
-    await upsertContact(chatId, {
-      ...contact,
-      lastMsg: '',
-      lastTime: 0
-    });
+
+  if (!isGroup) {
+    const contact = state.contacts.get(chatId);
+    if (contact) {
+      await upsertContact(chatId, { ...contact, lastMsg: '', lastTime: 0 });
+    }
   }
+
   await renderChatHistory(chatId);
   closeChatMenu();
 };
@@ -2733,6 +2811,89 @@ async function sendMessageControl(payload, chatId = state.currentChatId) {
     return true;
   }
 }
+
+// ==================== DISAPPEARING MESSAGES ====================
+
+const DISAPPEAR_TTL_OPTIONS = [
+  { label: 'Выкл', ms: 0 },
+  { label: '10 сек', ms: 10_000 },
+  { label: '1 мин', ms: 60_000 },
+  { label: '1 час', ms: 3_600_000 },
+  { label: '1 день', ms: 86_400_000 },
+  { label: '1 нед', ms: 604_800_000 }
+];
+
+function getDisappearTTL(chatId) {
+  return Number(localStorage.getItem(`tract.disappear.${chatId}`) || 0);
+}
+
+function setDisappearTTL(chatId, ms) {
+  if (ms > 0) localStorage.setItem(`tract.disappear.${chatId}`, String(ms));
+  else localStorage.removeItem(`tract.disappear.${chatId}`);
+}
+
+function scheduleMessageDisappear(dbId, chatId, ttl) {
+  if (!ttl || !dbId) return;
+  setTimeout(async () => {
+    await messageDB.deleteMessages([dbId]);
+    if (state.currentChatId === chatId) {
+      const el = document.querySelector(`.msg[data-message-id="${dbId}"]`);
+      if (el) el.remove();
+    }
+  }, ttl);
+}
+
+// Scan all stored messages and delete those past their TTL on startup.
+async function purgeExpiredMessages() {
+  const allChats = await messageDB.getAllChatIds?.() || [];
+  for (const chatId of allChats) {
+    const ttl = getDisappearTTL(chatId);
+    if (!ttl) continue;
+    const msgs = await messageDB.getMessages(chatId);
+    const now = Date.now();
+    const expired = msgs.filter((m) => m.timestamp && now - m.timestamp > ttl).map((m) => m.id);
+    if (expired.length) await messageDB.deleteMessages(expired);
+  }
+}
+
+window.openDisappearPicker = () => {
+  const chatId = state.currentChatId;
+  if (!chatId) return;
+  closeChatMenu();
+
+  const current = getDisappearTTL(chatId);
+  const backdrop = document.createElement('div');
+  backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100;display:flex;align-items:flex-end;justify-content:center;';
+
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'background:var(--panel);border-radius:16px 16px 0 0;padding:16px;width:100%;max-width:480px;padding-bottom:calc(16px + var(--safe-bottom));';
+  sheet.innerHTML = `<div style="font-size:16px;font-weight:600;margin-bottom:12px;text-align:center;">Исчезающие сообщения</div>`;
+
+  for (const opt of DISAPPEAR_TTL_OPTIONS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.style.cssText = `width:100%;padding:14px 16px;text-align:left;font-size:15px;border-radius:10px;display:flex;align-items:center;justify-content:space-between;${opt.ms === current ? 'background:rgba(183,255,249,0.1);color:var(--accent);' : ''}`;
+    btn.innerHTML = `<span>${opt.label}</span>${opt.ms === current ? '<span class="material-icons" style="font-size:18px;">check</span>' : ''}`;
+    btn.onclick = async () => {
+      setDisappearTTL(chatId, opt.ms);
+      backdrop.remove();
+      await sendMessageControl({ action: 'set_disappear', ttl: opt.ms }, chatId);
+      renderChatHeader();
+    };
+    sheet.appendChild(btn);
+  }
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.style.cssText = 'width:100%;padding:14px;text-align:center;font-size:15px;font-weight:600;color:var(--danger);margin-top:8px;border-radius:10px;';
+  cancelBtn.textContent = 'Отмена';
+  cancelBtn.onclick = () => backdrop.remove();
+  sheet.appendChild(cancelBtn);
+
+  backdrop.appendChild(sheet);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+  document.body.appendChild(backdrop);
+};
 
 function pendingControlsKey(chatId) {
   return `pendingMessageControls:${chatId}`;
@@ -3638,6 +3799,10 @@ async function handleMessageControl(packet, fromPeerId) {
       state.selectedMessageIds.clear();
       await renderChatHistory(chatId);
     }
+  } else if (packet.action === 'set_disappear') {
+    const ttl = Number(packet.ttl) || 0;
+    setDisappearTTL(chatId, ttl);
+    if (state.currentChatId === chatId) renderChatHeader();
   } else if (packet.action === 'clear_chat') {
     await clearPendingCallControls(chatId);
     await messageDB.deleteChat(chatId);
@@ -4022,11 +4187,22 @@ function renderChatHeader() {
   }
 
   if (subtitle) {
+    const ttl = getDisappearTTL(state.currentChatId);
+    const ttlOpt = ttl ? DISAPPEAR_TTL_OPTIONS.find((o) => o.ms === ttl) : null;
+    const ttlSuffix = ttlOpt ? ` · ⏱ ${ttlOpt.label}` : '';
     if (contact?.blocked) {
-      subtitle.textContent = 'Заблокирован';
+      subtitle.textContent = 'Заблокирован' + ttlSuffix;
     } else {
-      subtitle.textContent = getOnlineStatusText(contact);
+      subtitle.textContent = getOnlineStatusText(contact) + ttlSuffix;
     }
+  }
+
+  // Sync disappear label in chat menu
+  const disappearLabel = $('disappearLabel');
+  if (disappearLabel) {
+    const ttl = getDisappearTTL(state.currentChatId);
+    const opt = DISAPPEAR_TTL_OPTIONS.find((o) => o.ms === ttl);
+    disappearLabel.textContent = opt ? opt.label : 'Выкл';
   }
 }
 
@@ -4054,7 +4230,19 @@ async function restoreContacts() {
 
 async function renderChatHistory(chatId) {
   state.selectedMessageIds.clear();
-  const messages = await messageDB.getMessages(chatId);
+  const ttl = getDisappearTTL(chatId);
+  const now = Date.now();
+
+  // Delete messages that expired while the app was closed
+  let messages = await messageDB.getMessages(chatId);
+  if (ttl) {
+    const expired = messages.filter((m) => m.timestamp && now - m.timestamp > ttl).map((m) => m.id);
+    if (expired.length) {
+      await messageDB.deleteMessages(expired);
+      messages = messages.filter((m) => !expired.includes(m.id));
+    }
+  }
+
   const container = $('messages');
   container.innerHTML = '';
 
@@ -4072,6 +4260,12 @@ async function renderChatHistory(chatId) {
     );
     const pending = isOutgoing && !message.isSent;
     addMessageToUI(message, isOutgoing, { pending });
+
+    // Re-arm disappear timer for already-rendered messages
+    if (ttl && message.id !== undefined && message.timestamp) {
+      const remaining = ttl - (now - message.timestamp);
+      if (remaining > 0) scheduleMessageDisappear(message.id, chatId, remaining);
+    }
   }
   updateSelectionUI();
 }
@@ -4122,6 +4316,12 @@ function addMessageToUI(packet, isSent, options = {}) {
   div.appendChild(message);
   updateSelectionUI();
   div.scrollTop = div.scrollHeight;
+
+  // Schedule auto-delete if disappear timer is set for this chat
+  const ttl = state.currentChatId ? getDisappearTTL(state.currentChatId) : 0;
+  if (ttl && messageId !== undefined) {
+    scheduleMessageDisappear(messageId, state.currentChatId, ttl);
+  }
 }
 
 async function upsertContact(userId, patch) {
