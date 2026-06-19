@@ -191,6 +191,11 @@ function $(id) {
   return document.getElementById(id);
 }
 
+// Subtle haptic feedback for key actions (Telegram-style). No-op where unsupported.
+function haptic(ms = 10) {
+  try { navigator.vibrate?.(ms); } catch {}
+}
+
 function normalizeLogin(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return '';
@@ -3131,6 +3136,7 @@ window.sendCurrentMessage = async () => {
 
   input.value = '';
   refreshSendButton();
+  haptic(8);
 
   const dbKey = await messageDB.saveMessage(packet, chatId, false, { isOutgoing: true });
   packet._dbId = dbKey;
@@ -3546,6 +3552,7 @@ function truncate(s, max) {
 }
 
 async function openChat(id) {
+  haptic(6);
   state.currentChatId = id;
   state.selectedMessageIds.clear();
   closeChatMenu();
@@ -3954,12 +3961,16 @@ function updateMobileLayout() {
   if (!app || !sidebar) return;
   
   const narrow = window.matchMedia('(max-width: 768px)').matches;
-  
+  const chat = $('chat');
+  const showChat = !!(state.currentChatId || state.activeCall);
+
   if (narrow) {
-    // On mobile: sidebar visible by default, hide when chat is open or call is active
-    sidebar.classList.toggle('chat-open', !!(state.currentChatId || state.activeCall));
+    // On mobile: sidebar visible by default, slide to chat when one is open / call active
+    sidebar.classList.toggle('chat-open', showChat);
+    if (chat) chat.classList.toggle('chat-visible', showChat);
   } else {
     sidebar.classList.remove('chat-open');
+    if (chat) chat.classList.remove('chat-visible');
   }
 }
 
@@ -4347,6 +4358,7 @@ function addMessageToUI(packet, isSent, options = {}) {
     } else {
       state.selectedMessageIds.add(id);
     }
+    haptic(6);
     updateSelectionUI();
   };
   div.appendChild(message);
@@ -4599,11 +4611,11 @@ function setStatus(kind, text) {
   const node = $('networkStatus');
   if (!node) return;
   if (node.hidden) return;
-  
+
   // Remove old status classes and add new one
   node.className = 'status-indicator';
   node.classList.add(kind);
-  
+
   const statusText = $('statusText');
   if (statusText) {
     statusText.textContent = text;
@@ -4611,6 +4623,20 @@ function setStatus(kind, text) {
     // Fallback if structure is different
     node.textContent = text;
   }
+}
+
+function updateConnectionHealth(status, text) {
+  const badge = $('connectionHealth');
+  if (!badge) return;
+  badge.className = 'connection-health ' + status;
+  const dot = badge.querySelector('.health-dot');
+  const txt = badge.querySelector('.health-text');
+  if (dot) dot.style.backgroundColor =
+    status === 'online' ? 'var(--online)' :
+    status === 'warn' ? '#ffb74d' :
+    status === 'error' ? 'var(--danger)' :
+    '#666';
+  if (txt) txt.textContent = text;
 }
 
 function isSelfContactId(userId) {
@@ -4774,6 +4800,7 @@ function initVoiceRecording(sendBtn, input) {
         };
         _voiceRecorder.start(100);
         voiceState = 'recording';
+        haptic(15); // confirm recording actually started
       })
       .catch((err) => {
         console.warn('Voice record failed:', err);

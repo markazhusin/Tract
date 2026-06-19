@@ -1,6 +1,3 @@
-const DEFAULT_POLL_INTERVAL = 1000;
-const DEFAULT_PRESENCE_INTERVAL = 1000;
-
 export class HostedSignaling {
   constructor(peerId, options = {}) {
     this.peerId = peerId;
@@ -9,7 +6,8 @@ export class HostedSignaling {
     this.roomId = options.roomId;
     this.listeners = new Map();
     this.pollTimer = null;
-    this.presenceTimer = null;
+    this.heartbeatTimeout = null;
+    this.heartbeatFailureCount = 0;
     this.eventSource = null;
     this.stopped = false;
   }
@@ -49,78 +47,56 @@ export class HostedSignaling {
   }
 
   startPresence() {
-    this.presenceTimer = setInterval(() => {
-      this.post('/peer/heartbeat', {
-        peerId: this.peerId,
-        roomId: this.roomId,
-        displayName: this.options.displayName,
-        publicKeyHex: this.options.publicKeyHex || null,
-        hideOnline: this.options.hideOnline || false,
-        lastSeen: this.options.hideOnline ? null : Date.now()
-      }).catch((error) => {
-        console.warn('Heartbeat failed:', error);
-      });
-    }, DEFAULT_PRESENCE_INTERVAL);
-  }
+    // Initial heartbeat schedule – runs immediately on start
+    this.scheduleHeartbeat();
+  },
 
-  startEventSource() {
-    const url = new URL(`/events/${encodeURIComponent(this.peerId)}`, this.serverUrl);
-    url.searchParams.set('roomId', this.roomId);
-    this.eventSource = new EventSource(url);
-
-    this.eventSource.onmessage = (event) => {
-      if (event.data === 'connected' || event.data.startsWith(':')) return;
-      try {
-        const message = JSON.parse(event.data);
-        if (!message || !message.type) return;
-        const callbacks = this.listeners.get(message.type);
-        if (!callbacks) return;
-        for (const cb of callbacks) cb(message);
-      } catch (e) {
-        console.warn('SSE message error:', e);
+  scheduleHeartbeat() {
+    // Clear any existing timeout
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+    this.post('/peer/heartbeat', {
+      peerId: this.peerId,
+      roomId: this.roomId,
+      displayName: this.options.displayName,
+      publicKeyHex: this.options.publicKeyHex || null,
+      hideOnline: this.options.hideOnline || false,
+      lastSeen: this.options.hideOnline ? null : Date.now()
+    })
+    .then(() => {
+      // Heartbeat succeeded – update UI to online
+      if (typeof window !== 'undefined' && window.setConnectionHealth) {
+        window.setConnectionHealth('online');
       }
-    };
-
-    this.eventSource.onerror = () => {
-      // EventSource auto-reconnects; polling is backup
-    };
+      // Schedule next heartbeat at 5‑second interval
+      this.heartbeatTimeout = setTimeout(() => this.scheduleHeartbeat(), 5000);
+    })
+    .catch((error) => {
+      console.warn('Heartbeat failed:', error);
+      this.heartbeatFailureCount++;
+      // Exponential back‑off – up to 30 s maximum
+      const delay = Math.min(5000 * Math.pow(2, this.heartbeatFailureCount), 30000);
+      this.heartbeatTimeout = setTimeout(() => this.scheduleHeartbeat(), delay);
+      if (typeof window !== 'undefined' && window.setConnectionHealth) {
+        window.setConnectionHealth('error');
+      }
+    });
   }
 
-  bindLifecycle() {
-    const unregister = () => {
-      const payload = JSON.stringify({
-        peerId: this.peerId,
-        roomId: this.roomId
-      });
-      navigator.sendBeacon?.(`${this.serverUrl}/peer/unregister`, new Blob([payload], {
-        type: 'application/json'
-      }));
-    };
+  async post(path, body) {
+    const response = await fetch(new URL(path, this.serverUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
 
-    window.addEventListener('beforeunload', unregister);
-    window.addEventListener('pagehide', unregister);
-  }
-
-  async pollSignals() {
-    if (this.stopped) return;
-
-    const url = new URL(`/signal/poll/${encodeURIComponent(this.peerId)}`, this.serverUrl);
-    url.searchParams.set('roomId', this.roomId);
-
-    const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Signal poll failed: ${response.status}`);
+      throw new Error(`Request failed: ${response.status}`);
     }
 
-    const { messages = [] } = await response.json();
-    for (const message of messages) {
-      const callbacks = this.listeners.get(message.type);
-      if (!callbacks) continue;
-
-      for (const callback of callbacks) {
-        callback(message);
-      }
-    }
+    return response;
   }
 
   async listPeers() {
@@ -195,7 +171,7 @@ export class HostedSignaling {
   async stop() {
     this.stopped = true;
     clearInterval(this.pollTimer);
-    clearInterval(this.presenceTimer);
+    clearTimeout(this.heartbeatTimeout);
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
@@ -204,20 +180,6 @@ export class HostedSignaling {
       peerId: this.peerId,
       roomId: this.roomId
     }).catch(() => {});
-  }
-
-  async post(path, body) {
-    const response = await fetch(new URL(path, this.serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-
-    return response;
   }
 }
 

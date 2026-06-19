@@ -59,6 +59,15 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
+    /* Respect the OS "reduce motion" setting — disable non-essential animation. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
     html, body {
       height: 100%;
       overflow: hidden;
@@ -83,6 +92,38 @@
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+    /* ===== CONNECTION HEALTH INDICATOR ===== */
+    .connection-health {
+      position: fixed;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      z-index: 1000;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      background: var(--accent);
+      color: #141515;
+    }
+    .connection-health.warn { background: #ffb74d; color: #141515; }
+    .connection-health.error { background: var(--danger); color: #fff; }
+    .connection-health.offline { background: #666; color: #fff; }
+    .connection-health.online { background: var(--online); color: #141515; }
+    .health-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.8;
+    }
+    .health-text {
+      font-size: 13px;
+    }
 
     /* ===== APP LAYOUT ===== */
     #app {
@@ -1184,16 +1225,24 @@
           background: var(--bg);
           z-index: 20;
           transform: translateX(0);
+          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
         }
         #sidebar.chat-open {
-          transform: translateX(-100%);
+          /* Telegram-style parallax: list slides out a bit slower than the chat in */
+          transform: translateX(-25%);
           pointer-events: none;
         }
         #chat {
-          position: relative;
+          position: fixed;
+          inset: 0;
           z-index: 10;
           width: 100%;
           min-width: 0;
+          transform: translateX(100%);
+          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+        }
+        #chat.chat-visible {
+          transform: translateX(0);
         }
         #chatHeader {
           padding-left: 12px;
@@ -1444,6 +1493,12 @@
   <div id="callBar" hidden>
     <div id="callBarLabel"></div>
     <div id="callBarActions"></div>
+  </div>
+
+  <!-- CONNECTION HEALTH INDICATOR (top-right) -->
+  <div id="connectionHealth" class="connection-health" title="Состояние соединения">
+    <div class="health-dot"></div>
+    <div class="health-text">Подключение…</div>
   </div>
 
   <!-- MAIN APP -->
