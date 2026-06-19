@@ -1468,13 +1468,15 @@ window.registerAccount = async () => {
     return;
   }
 
-  const rawLogin = ($('regName')?.value || '').replace(/^@+/, '');
-  const login = normalizeLogin(rawLogin);
+  // Свободный вход. Имя — произвольное (любые символы, дубли допустимы): это
+  // лишь подпись, а не адрес. Настоящая личность — криптоключ, и ID из него
+  // выводится автоматически (его нельзя занять или подделать).
+  const displayName = ($('regName')?.value || '').trim();
   const password = $('regPassword')?.value || '';
   const confirm = $('regPasswordConfirm')?.value || '';
 
-  if (!isValidLogin(login)) {
-    $('authError').textContent = 'ID должен быть вида @login: латиница, цифры или _, 3-32 символа';
+  if (!displayName) {
+    $('authError').textContent = 'Введите имя';
     return;
   }
 
@@ -1492,14 +1494,8 @@ window.registerAccount = async () => {
 
   try {
     const serverUrl = resolveSignalingUrl();
-    // Свободный вход без приглашений и без админов. Единственное ограничение —
-    // нельзя занять уже существующий @id (иначе это была бы кража аккаунта).
-    if (await checkUserExists(login)) {
-      $('authError').textContent = 'Этот @id уже занят, выберите другой';
-      return;
-    }
-
-    const auth = await registerIdentity(password, login, { reuseLegacy: false, userId: login });
+    // userId не передаём — registerIdentity выведет его из публичного ключа.
+    const auth = await registerIdentity(password, displayName, { reuseLegacy: false });
     sessionStorage.setItem(SESSION_PASSWORD_KEY, password);
     localStorage.setItem(REMEMBER_PASSWORD_KEY, password);
     await uploadIdentityToServer(serverUrl);
@@ -1522,7 +1518,7 @@ window.loginAccount = async () => {
   const password = $('loginPassword').value;
 
   if (!isValidLogin(login)) {
-    $('authError').textContent = 'Введите логин вида @login';
+    $('authError').textContent = 'Введите ваш ID (ключ)';
     return;
   }
 
@@ -1621,7 +1617,7 @@ async function bootstrapAuthenticatedSession(auth) {
   renderProfile();
   renderContacts();
   renderChatHeader();
-  $('messages').innerHTML = '<div class="empty-chat">Найдите контакт по логину над списком чатов</div>';
+  $('messages').innerHTML = '<div class="empty-chat">Добавьте контакт по его ID над списком чатов</div>';
   setStatus('offline', 'Аккаунт разблокирован, сеть не подключена');
   await updateInviteArtifacts();
   updateMobileLayout();
@@ -2473,14 +2469,14 @@ window.addContactById = async () => {
   const userId = normalizeLogin(raw);
   if (!userId || !state.profile) return;
   if (!isValidLogin(userId)) {
-    setStatus('warn', 'Введите логин вида @login');
+    setStatus('warn', 'Введите ID контакта (его ключ)');
     return;
   }
   if (userId === state.profile.userId) return;
 
   const exists = await checkUserExists(userId);
   if (!exists) {
-    setStatus('error', 'Пользователь с таким логином не найден');
+    setStatus('error', 'Пользователь с таким ID не найден');
     return;
   }
 

@@ -63,8 +63,11 @@ export function getPublicKeyHex(kp) {
   return bytesToHex(secp.getPublicKey(kp.privateKey));
 }
 
+// The identity IS the cryptographic key. The user never picks an id — it is
+// derived from the public key, so it can't be claimed, squatted, or duplicated.
+// The leading '@' keeps it consistent with the routing key used across the app.
 export function getUserIdFromKeyPair(kp) {
-  return getPublicKeyHex(kp).slice(0, 12);
+  return '@' + getPublicKeyHex(kp).slice(0, 12);
 }
 
 export function getStoredIdentityMetadata() {
