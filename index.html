@@ -1158,6 +1158,11 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        /* Scrollable + safe-area padding so the keyboard can't bury the inputs;
+           iOS scrolls the focused field into view inside this container. */
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: calc(var(--safe-top) + 20px) 18px calc(var(--safe-bottom) + 20px);
       }
       #authGate[hidden] { display: none; }
       .input-prefix {
@@ -1239,13 +1244,15 @@
         #chat {
           position: fixed;
           inset: 0;
-          /* Lift the chat (and its sticky composer) above the soft keyboard. */
+          /* Lift the chat (and its sticky composer) above the soft keyboard.
+             No transition on `bottom`: iOS already animates the keyboard, and a
+             second easing here makes the composer lag and jump. Track it 1:1. */
           bottom: var(--kb, 0px);
           z-index: 10;
           width: 100%;
           min-width: 0;
           transform: translateX(100%);
-          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), bottom 0.25s ease;
+          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
         }
         #chat.chat-visible {
           transform: translateX(0);

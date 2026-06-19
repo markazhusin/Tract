@@ -4957,6 +4957,9 @@ function initKeyboardInsets() {
     raf = 0;
     const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     root.style.setProperty('--kb', overlap + 'px');
+    // iOS sometimes scrolls the whole document up when an input is focused,
+    // pushing the fixed header under the notch. Pin it back to the top.
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
     // While typing, keep the latest message visible above the keyboard.
     if (overlap > 0 && document.activeElement === $('messageInput')) {
       const m = $('messages');
@@ -5000,7 +5003,7 @@ function initSwipeGestures() {
       engaged = dragging = false;
       if (!state.currentChatId || !isNarrow() || e.touches.length !== 1) return;
       const t = e.touches[0];
-      if (t.clientX > 28) return; // only the left-edge zone arms the gesture
+      if (t.clientX > 44) return; // only the left-edge zone arms the gesture
       startX = lastX = t.clientX;
       startY = t.clientY;
       lastT = e.timeStamp;

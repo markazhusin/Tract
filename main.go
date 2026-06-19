@@ -46,6 +46,18 @@ func main() {
 	}
 
 	dataDir := "./data"
+
+	// One-shot data wipe. Set TRACT_WIPE=1 to erase ALL stored data (old
+	// pre-manifest identities, inboxes, contacts, groups, avatars) on the next
+	// boot, then unset it. Nothing is deleted unless the flag is explicitly on.
+	if v := strings.TrimSpace(os.Getenv("TRACT_WIPE")); v == "1" || strings.EqualFold(v, "true") {
+		if err := os.RemoveAll(dataDir); err != nil {
+			log.Printf("[Tract] WIPE requested but failed: %v", err)
+		} else {
+			log.Printf("[Tract] TRACT_WIPE=%s — all stored data erased. Unset the env var to stop wiping.", v)
+		}
+	}
+
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
