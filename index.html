@@ -1256,6 +1256,9 @@
         }
         #chat.chat-visible {
           transform: translateX(0);
+          /* Must sit ABOVE the sidebar (z-index 20), otherwise the parallaxed
+             list stays on top and the chat only peeks through on the right. */
+          z-index: 30;
         }
         /* While an interactive swipe-back is in progress the transform tracks the
            finger 1:1, so the easing transition must be suppressed mid-drag. */
