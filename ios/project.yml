@@ -1,0 +1,31 @@
+name: Tract
+options:
+  bundleIdPrefix: com.tract
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"   # runs fine on iOS 26; bump to "26.0" if you target it explicitly
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"   # iPhone
+targets:
+  Tract:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tract
+        excludes:
+          - "web"            # added below as a folder reference (structure preserved)
+      - path: Tract/web
+        type: folder         # blue folder: copied into the bundle as-is
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tract.app
+        INFOPLIST_FILE: Tract/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        # Set your Apple Developer team here (or pick it in Xcode → Signing).
+        DEVELOPMENT_TEAM: ""

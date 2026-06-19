@@ -2058,6 +2058,34 @@ window.connectHandshake = async () => {
     console.warn('Failed to register signaling relay transport:', e);
   }
 
+  // Native offline mesh — only present inside the Tract iOS app shell. Lets two
+  // phones with the internet OFF still exchange messages over Multipeer.
+  try {
+    const { NativeMeshTransport } = await import('./app/transports/native-mesh.js');
+    if (NativeMeshTransport.isAvailable()) {
+      state.nativeMesh = new NativeMeshTransport();
+      state.nativeMesh.identify(state.profile.userId, state.profile.displayName, myPublicKeyHex);
+      // A nearby device appeared over the mesh: record its public key so we can
+      // E2E-encrypt to it offline, and surface it as a contact.
+      state.nativeMesh.onPeer(async ({ userId, publicKeyHex, displayName }) => {
+        if (!userId || userId === state.profile.userId) return;
+        const existing = state.contacts.get(userId);
+        await upsertContact(userId, {
+          displayName: existing?.displayName || displayName || userId,
+          publicKeyHex: publicKeyHex || existing?.publicKeyHex,
+          online: true,
+          lastMsg: existing?.lastMsg || '',
+          lastTime: existing?.lastTime || 0
+        });
+        renderContacts();
+      });
+      state.multiplexer.register(state.nativeMesh);
+      console.log('+ NativeMesh (offline iOS mesh active)');
+    }
+  } catch (e) {
+    console.warn('Native mesh transport unavailable:', e);
+  }
+
   state.transport.onPeerDiscovery(async (_peerId, peerMeta) => {
     if (peerMeta.userId === state.profile.userId) return;
     if (!state.contacts.has(peerMeta.userId)) return;
@@ -2554,10 +2582,14 @@ window.addContactById = async () => {
   }
   if (userId === state.profile.userId) return;
 
-  const exists = await checkUserExists(userId);
-  if (!exists) {
-    setStatus('error', 'Пользователь с таким ID не найден');
-    return;
+  // Offline mesh: there's no server to confirm existence — the mesh will deliver
+  // if the peer is nearby. Online: verify the ID exists before adding.
+  if (!state.nativeMesh) {
+    const exists = await checkUserExists(userId);
+    if (!exists) {
+      setStatus('error', 'Пользователь с таким ID не найден');
+      return;
+    }
   }
 
   // Create or update contact with temporary displayName (will be updated from peer discovery)
@@ -3122,6 +3154,10 @@ async function deliverOutgoingMessage(chatId, packet) {
     if (targetPeerId) {
       // Known peer: multiplexer (Signaling relay first, WebRTC fallback).
       await state.multiplexer.send(encryptedPacket, targetPeerId);
+    } else if (state.nativeMesh?.isConnected()) {
+      // Offline mesh (iOS shell): flood the encrypted packet to nearby devices.
+      // Only the recipient can decrypt it, so broadcasting is safe.
+      await state.nativeMesh.send(encryptedPacket, null);
     } else if (state.signalingRelay) {
       // Peer not currently resolvable. Still deliver via the relay addressed by
       // userId — the server forwards to the peer's poll queue and persists to its

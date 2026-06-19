@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Tract</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<!-- Offline mesh: MultipeerConnectivity uses the local network + Bluetooth -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Tract uses the local network to connect to nearby devices for offline messaging when there is no internet.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_tract-mesh._tcp</string>
+		<string>_tract-mesh._udp</string>
+	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Tract uses Bluetooth to reach nearby devices for offline mesh messaging.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Tract uses Bluetooth to reach nearby devices for offline mesh messaging.</string>
+
+	<!-- Voice/video calls run inside the web layer (WebRTC in WKWebView) -->
+	<key>NSCameraUsageDescription</key>
+	<string>Tract needs the camera for video calls.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tract needs the microphone for voice and video calls.</string>
+</dict>
+</plist>
