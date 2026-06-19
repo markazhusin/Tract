@@ -1291,6 +1291,7 @@ async function init() {
   syncSignalingFromEnvironment();
   window.addEventListener('resize', updateMobileLayout);
   initSwipeGestures();
+  initKeyboardInsets();
   initPwa({
     onOpenChat: (chatId) => openChatFromDeepLink(chatId),
     // Block disruptive SW-update reloads while a call is in progress.
@@ -4867,31 +4868,102 @@ async function onIncomingP2PFile({ peerId, meta, blob }) {
   renderContacts();
 }
 
+// Keep the composer pinned above the soft keyboard. iOS/Android don't resize the
+// layout viewport when the keyboard opens, so the sticky composer would be hidden
+// behind it. visualViewport reports the real visible area; we expose the overlap
+// as --kb and the mobile #chat lifts its bottom edge by that amount.
+function initKeyboardInsets() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement;
+  let raf = 0;
+  const apply = () => {
+    raf = 0;
+    const overlap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    root.style.setProperty('--kb', overlap + 'px');
+    // While typing, keep the latest message visible above the keyboard.
+    if (overlap > 0 && document.activeElement === $('messageInput')) {
+      const m = $('messages');
+      if (m) m.scrollTop = m.scrollHeight;
+    }
+  };
+  const onChange = () => { if (!raf) raf = requestAnimationFrame(apply); };
+  vv.addEventListener('resize', onChange);
+  vv.addEventListener('scroll', onChange);
+  apply();
+}
+
 function initSwipeGestures() {
-  // Swipe right on chat area → go back to contact list (mobile)
+  // Interactive iOS-style swipe-to-go-back (mobile): starting from the left
+  // edge, the chat view follows the finger 1:1 while the list parallaxes in
+  // behind it. Release past a threshold (or with a fast flick) completes the
+  // back navigation; otherwise it snaps back into place.
   const chatEl = $('chat');
   if (chatEl) {
-    let touchStartX = 0;
-    let touchStartY = 0;
+    const sidebar = $('sidebar');
+    let startX = 0, startY = 0, lastX = 0, lastT = 0, vX = 0, width = 1;
+    let engaged = false;   // touch began in the edge zone
+    let dragging = false;  // gesture locked to horizontal — we now own it
+
+    const isNarrow = () => window.matchMedia('(max-width: 768px)').matches;
+    const setDrag = (on) => {
+      chatEl.classList.toggle('dragging', on);
+      if (sidebar) sidebar.classList.toggle('dragging', on);
+    };
+    const paint = (dx) => {
+      const p = Math.max(0, Math.min(1, dx / width));
+      chatEl.style.transform = `translateX(${Math.max(0, dx)}px)`;
+      if (sidebar) sidebar.style.transform = `translateX(${-25 + 25 * p}%)`;
+    };
+    const clearInline = () => {
+      chatEl.style.transform = '';
+      if (sidebar) sidebar.style.transform = '';
+    };
 
     chatEl.addEventListener('touchstart', (e) => {
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
+      engaged = dragging = false;
+      if (!state.currentChatId || !isNarrow() || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (t.clientX > 28) return; // only the left-edge zone arms the gesture
+      startX = lastX = t.clientX;
+      startY = t.clientY;
+      lastT = e.timeStamp;
+      width = chatEl.offsetWidth || window.innerWidth || 1;
+      engaged = true;
     }, { passive: true });
 
-    chatEl.addEventListener('touchend', (e) => {
-      if (!state.currentChatId) return;
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = e.changedTouches[0].clientY - touchStartY;
-      const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
-      const isRightSwipe = dx > 60 && isHorizontal;
-      const startsFromEdge = touchStartX < 60;
-      if ((isRightSwipe && startsFromEdge) || (isRightSwipe && dx > 120)) {
-        if (window.matchMedia('(max-width: 768px)').matches) {
-          goBackFromChat();
-        }
+    chatEl.addEventListener('touchmove', (e) => {
+      if (!engaged) return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (!dragging) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) { engaged = false; return; } // vertical scroll wins
+        dragging = true;
+        setDrag(true);
       }
-    }, { passive: true });
+      const now = e.timeStamp;
+      if (now > lastT) vX = (t.clientX - lastX) / (now - lastT);
+      lastX = t.clientX; lastT = now;
+      e.preventDefault(); // own the gesture: stop the messages list from scrolling
+      paint(dx);
+    }, { passive: false });
+
+    const finish = (e) => {
+      if (!engaged) return;
+      const wasDragging = dragging;
+      engaged = dragging = false;
+      if (!wasDragging) return;
+      setDrag(false); // restore CSS easing for the snap animation
+      const endX = e.changedTouches?.[0]?.clientX ?? lastX;
+      const dx = endX - startX;
+      const complete = dx > width * 0.4 || (vX > 0.5 && dx > 40);
+      if (complete) { haptic(8); goBackFromChat(); } // updateMobileLayout drops .chat-visible
+      clearInline(); // hand back to the class-driven transform; it animates the rest
+    };
+    chatEl.addEventListener('touchend', finish, { passive: true });
+    chatEl.addEventListener('touchcancel', finish, { passive: true });
   }
 
   // Swipe on sidebar views area → switch tabs (Chats ↔ Contacts)

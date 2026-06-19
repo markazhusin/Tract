@@ -56,6 +56,8 @@
       --call-bar: #050508;
       --safe-bottom: env(safe-area-inset-bottom, constant(safe-area-inset-bottom, 0px));
       --safe-top: env(safe-area-inset-top, constant(safe-area-inset-top, 0px));
+      /* Soft-keyboard overlap height, driven by visualViewport (see initKeyboardInsets). */
+      --kb: 0px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     [hidden] { display: none !important; }
@@ -255,6 +257,7 @@
       flex: 1;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
     }
 
     /* Section */
@@ -624,6 +627,7 @@
       min-height: 0;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
       padding: 12px 12px 8px;
       display: flex;
       flex-direction: column;
@@ -1235,14 +1239,22 @@
         #chat {
           position: fixed;
           inset: 0;
+          /* Lift the chat (and its sticky composer) above the soft keyboard. */
+          bottom: var(--kb, 0px);
           z-index: 10;
           width: 100%;
           min-width: 0;
           transform: translateX(100%);
-          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+          transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), bottom 0.25s ease;
         }
         #chat.chat-visible {
           transform: translateX(0);
+        }
+        /* While an interactive swipe-back is in progress the transform tracks the
+           finger 1:1, so the easing transition must be suppressed mid-drag. */
+        #chat.dragging,
+        #sidebar.dragging {
+          transition: none !important;
         }
         #chatHeader {
           padding-left: 12px;
