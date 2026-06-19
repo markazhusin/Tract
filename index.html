@@ -1448,10 +1448,6 @@
       <div id="authTitle" style="text-align:center;font-size:18px;font-weight:600;margin:8px 0 4px;"></div>
       <div id="registerPanel" class="stack" style="gap:12px;" hidden>
         <div class="field">
-          <label>Код приглашения</label>
-          <input id="regInviteCode" type="text" placeholder="Код из ссылки" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-        </div>
-        <div class="field">
           <label>ID</label>
           <div style="position:relative;">
             <span class="input-prefix">@</span>
@@ -1482,6 +1478,7 @@
           <input id="loginPassword" type="password" placeholder="Пароль" autocomplete="off">
         </div>
         <button class="btn primary" type="button" onclick="loginAccount()" id="loginBtn">Войти</button>
+        <button class="btn subtle" type="button" onclick="showRegister()">Создать аккаунт</button>
       </div>
       <div id="authError"></div>
     </div>
@@ -1625,16 +1622,6 @@
                   <span class="settings-label" style="color:var(--danger);">Выйти из аккаунта</span>
                   <button type="button" class="btn subtle" onclick="logoutAccount()" style="border-color:var(--danger);color:var(--danger);padding:6px 12px;font-size:13px;">Выйти</button>
                 </div>
-              </div>
-
-              <div id="adminPanel" class="settings-section-title" style="display:none;">АДМИНИСТРИРОВАНИЕ</div>
-              <div id="adminSection" class="settings-section" style="display:none;flex-direction:column;gap:8px;">
-                <button type="button" class="btn primary" onclick="generateInvite()" style="margin-bottom:4px;">
-                  <span class="material-icons" style="font-size:16px;">link</span> Создать ссылку-приглашение
-                </button>
-                <div id="adminInviteResult" style="font-size:12px;color:var(--muted);word-break:break-all;"></div>
-                <div class="settings-section-title" style="padding:8px 0 4px;font-size:11px;">ПОЛЬЗОВАТЕЛИ</div>
-                <div id="adminUserList" style="max-height:200px;overflow-y:auto;"></div>
               </div>
             </div>
           </div>

@@ -1316,14 +1316,6 @@ async function init() {
 
   if (identity && sessionPw) {
     try {
-      const banned = await checkUserBanned(identity.userId);
-      if (banned) {
-        sessionStorage.removeItem(SESSION_PASSWORD_KEY);
-        localStorage.removeItem(REMEMBER_PASSWORD_KEY);
-        showLogin();
-        $('authError').textContent = 'Аккаунт заблокирован';
-        return;
-      }
       const auth = await unlockIdentity(sessionPw);
       await bootstrapAuthenticatedSession(auth);
       return;
@@ -1339,21 +1331,12 @@ async function init() {
     }
   }
 
-  if (window._pendingInviteCode) {
-    const code = window._pendingInviteCode;
-    window._pendingInviteCode = null;
-    showRegister(code);
-    return;
-  }
-
   if (identity) {
     const loginInput = $('loginName');
     if (loginInput) loginInput.value = identity.userId.replace(/^@/, '');
     showLogin();
   } else if (legacyIdentity) {
     $('regName').value = legacyIdentity.profile.displayName.replace(/^@/, '');
-    $('regInviteCode').value = 'legacy-migration';
-    $('regInviteCode').readOnly = true;
     showRegister();
   } else {
     showLogin();
@@ -1370,20 +1353,12 @@ function applyInviteParams() {
   const params = new URLSearchParams(window.location.search);
   const signal = params.get('signal');
   const room = params.get('room');
-  const invite = params.get('invite');
 
   if (signal) {
     localStorage.setItem(SIGNALING_URL_KEY, signal);
   }
   if (room) {
     localStorage.setItem(ROOM_ID_KEY, room);
-  }
-
-  if (invite) {
-    window._pendingInviteCode = invite;
-    const url = new URL(window.location);
-    url.searchParams.delete('invite');
-    window.history.replaceState({}, '', url);
   }
 }
 
@@ -1464,16 +1439,12 @@ window.onLoginNameInput = () => {
   $('authError').textContent = '';
 };
 
-window.showRegister = (inviteCode) => {
+window.showRegister = () => {
   $('authGate').hidden = false;
   $('registerPanel').hidden = false;
   $('loginPanel').hidden = true;
   $('authTitle').textContent = 'Регистрация в Tract';
   $('authError').textContent = '';
-  if (inviteCode) {
-    $('regInviteCode').value = inviteCode;
-    $('regInviteCode').readOnly = true;
-  }
 };
 window.showLogin = () => {
   $('authGate').hidden = false;
@@ -1496,21 +1467,10 @@ window.registerAccount = async () => {
     return;
   }
 
-  const inviteCode = ($('regInviteCode')?.value || '').trim();
   const rawLogin = ($('regName')?.value || '').replace(/^@+/, '');
   const login = normalizeLogin(rawLogin);
   const password = $('regPassword')?.value || '';
   const confirm = $('regPasswordConfirm')?.value || '';
-
-  if (!inviteCode) {
-    $('authError').textContent = 'Введите код приглашения';
-    return;
-  }
-
-  if (inviteCode === 'legacy-migration') {
-    $('authError').textContent = 'Миграция больше не поддерживается. Используйте новый аккаунт.';
-    return;
-  }
 
   if (!isValidLogin(login)) {
     $('authError').textContent = 'ID должен быть вида @login: латиница, цифры или _, 3-32 символа';
@@ -1531,14 +1491,10 @@ window.registerAccount = async () => {
 
   try {
     const serverUrl = resolveSignalingUrl();
-    const useResp = await fetch(new URL('/admin/invite/use', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: inviteCode, userId: login })
-    });
-    if (!useResp.ok) {
-      const errData = await useResp.json().catch(() => ({}));
-      $('authError').textContent = errData.error || 'Недействительный код приглашения';
+    // Свободный вход без приглашений и без админов. Единственное ограничение —
+    // нельзя занять уже существующий @id (иначе это была бы кража аккаунта).
+    if (await checkUserExists(login)) {
+      $('authError').textContent = 'Этот @id уже занят, выберите другой';
       return;
     }
 
@@ -1566,12 +1522,6 @@ window.loginAccount = async () => {
 
   if (!isValidLogin(login)) {
     $('authError').textContent = 'Введите логин вида @login';
-    return;
-  }
-
-  const banned = await checkUserBanned(login);
-  if (banned) {
-    $('authError').textContent = 'Аккаунт заблокирован';
     return;
   }
 
@@ -1675,14 +1625,6 @@ async function bootstrapAuthenticatedSession(auth) {
   await updateInviteArtifacts();
   updateMobileLayout();
 
-  if (state.profile?.userId === '@creator') {
-    const panel = $('adminPanel');
-    const section = $('adminSection');
-    if (panel) panel.style.display = '';
-    if (section) section.style.display = 'flex';
-    loadAdminUsers();
-  }
-
   // Periodic contact & group sync across devices
   if (window._contactSyncTimer) clearInterval(window._contactSyncTimer);
   window._contactSyncTimer = setInterval(async () => {
@@ -1702,10 +1644,6 @@ async function bootstrapAuthenticatedSession(auth) {
 }
 
 window.logoutAccount = async () => {
-  const adminPanel = $('adminPanel');
-  const adminSection = $('adminSection');
-  if (adminPanel) adminPanel.style.display = 'none';
-  if (adminSection) adminSection.style.display = 'none';
   sessionStorage.removeItem(SESSION_PASSWORD_KEY);
   localStorage.removeItem(REMEMBER_PASSWORD_KEY);
   clearInterval(inboxTimer);
@@ -1753,8 +1691,6 @@ window.logoutAccount = async () => {
     showLogin();
   } else if (legacyIdentity) {
     $('regName').value = legacyIdentity.profile.displayName.replace(/^@/, '');
-    $('regInviteCode').value = 'legacy-migration';
-    $('regInviteCode').readOnly = true;
     showRegister();
   } else {
     showLogin();
@@ -2184,19 +2120,6 @@ async function checkUserExists(userId) {
   }
 }
 
-async function checkUserBanned(userId) {
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return false;
-  try {
-    const response = await fetch(new URL(`/admin/check-banned/${encodeURIComponent(userId)}`, serverUrl));
-    if (!response.ok) return false;
-    const data = await response.json();
-    return data.banned || false;
-  } catch {
-    return false;
-  }
-}
-
 // Fields that are safe to sync to the server for multi-device support.
 // Message previews (lastMsg/lastTime), presence and runtime peer info are
 // intentionally excluded — the host must never see what was said or when.
@@ -2601,128 +2524,6 @@ window.copyAppShareLink = async () => {
 };
 
 window.copyInviteLink = window.copyAppShareLink;
-
-// ==================== SUPERUSER ADMIN FUNCTIONS ====================
-
-window.generateInvite = async () => {
-  if (!state.profile) return;
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return;
-  try {
-    const resp = await fetch(new URL('/admin/invite/create', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.profile.userId })
-    });
-    if (!resp.ok) throw new Error('Failed to create invite');
-    const data = await resp.json();
-    const inviteUrl = `${window.location.origin}/?invite=${data.code}`;
-    const resultEl = $('adminInviteResult');
-    if (resultEl) {
-      resultEl.innerHTML = `<a href="${inviteUrl}" target="_blank" style="color:var(--accent);">${inviteUrl}</a>
-        <button class="btn subtle" style="font-size:11px;padding:2px 8px;margin-top:4px;" onclick="navigator.clipboard.writeText('${inviteUrl}')">Копировать</button>`;
-    }
-    loadAdminUsers();
-  } catch (e) {
-    console.warn('Generate invite failed:', e);
-  }
-};
-
-async function loadAdminUsers() {
-  if (!state.profile) return;
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return;
-  try {
-    const resp = await fetch(new URL('/admin/users', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.profile.userId })
-    });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const list = $('adminUserList');
-    if (!list) return;
-    list.innerHTML = '';
-    for (const user of data.users || []) {
-      if (user.userId === state.profile.userId) continue;
-      const item = document.createElement('div');
-      item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--line);font-size:13px;';
-      const avatarDiv = document.createElement('div');
-      avatarDiv.style.cssText = 'width:28px;height:28px;border-radius:50%;overflow:hidden;background:var(--panel-input);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;';
-      if (user.hasAvatar) {
-        avatarDiv.innerHTML = `<img src="${new URL(`/profile/avatar/${encodeURIComponent(user.userId)}`, serverUrl)}" style="width:100%;height:100%;object-fit:cover;">`;
-      } else {
-        avatarDiv.textContent = (user.displayName || user.userId).charAt(1).toUpperCase() || '?';
-      }
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;';
-      const nameSpan = document.createElement('div');
-      nameSpan.textContent = user.displayName || user.userId;
-      nameSpan.style.cssText = 'font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      const idSpan = document.createElement('div');
-      idSpan.textContent = user.userId;
-      idSpan.style.cssText = 'font-size:11px;color:var(--muted);';
-      info.appendChild(nameSpan);
-      info.appendChild(idSpan);
-      const statusSpan = document.createElement('span');
-      statusSpan.style.cssText = `font-size:11px;${user.online ? 'color:var(--online);' : 'color:var(--muted);'}`;
-      statusSpan.textContent = user.online ? 'online' : 'offline';
-      const banBtn = document.createElement('button');
-      banBtn.style.cssText = 'font-size:11px;padding:2px 8px;border-radius:8px;border:1px solid;';
-      if (user.banned) {
-        banBtn.textContent = 'Разбан';
-        banBtn.style.borderColor = 'var(--online)';
-        banBtn.style.color = 'var(--online)';
-        banBtn.onclick = () => unbanUser(user.userId);
-      } else {
-        banBtn.textContent = 'Бан';
-        banBtn.style.borderColor = 'var(--danger)';
-        banBtn.style.color = 'var(--danger)';
-        banBtn.onclick = () => banUser(user.userId);
-      }
-      item.appendChild(avatarDiv);
-      item.appendChild(info);
-      item.appendChild(statusSpan);
-      item.appendChild(banBtn);
-      list.appendChild(item);
-    }
-  } catch (e) {
-    console.warn('Load admin users failed:', e);
-  }
-}
-
-async function banUser(targetUserId) {
-  if (!state.profile || !confirm(`Заблокировать ${targetUserId}?`)) return;
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return;
-  try {
-    await fetch(new URL('/admin/ban', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.profile.userId, targetUserId })
-    });
-    loadAdminUsers();
-  } catch (e) {
-    console.warn('Ban failed:', e);
-  }
-}
-
-async function unbanUser(targetUserId) {
-  if (!state.profile) return;
-  const serverUrl = resolveSignalingUrl();
-  if (!serverUrl) return;
-  try {
-    await fetch(new URL('/admin/unban', serverUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: state.profile.userId, targetUserId })
-    });
-    loadAdminUsers();
-  } catch (e) {
-    console.warn('Unban failed:', e);
-  }
-}
-
 window.renameCurrentContact = async () => {
   openChatMenu();
 };
