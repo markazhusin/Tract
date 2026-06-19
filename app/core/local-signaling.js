@@ -49,7 +49,7 @@ export class HostedSignaling {
   startPresence() {
     // Initial heartbeat schedule – runs immediately on start
     this.scheduleHeartbeat();
-  },
+  }
 
   scheduleHeartbeat() {
     // Clear any existing timeout
