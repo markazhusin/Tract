@@ -1575,10 +1575,15 @@
                     <span class="material-icons" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--accent);font-size:18px;pointer-events:none;">edit</span>
                   </div>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;padding:8px 0 0;">
-                  <span class="material-icons" style="color:var(--muted);font-size:16px;">alternate_email</span>
-                  <span style="font-size:13px;color:var(--muted);">Логин: </span>
-                  <span id="settingUserId" style="font-size:13px;color:var(--muted);"></span>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0 0;margin-top:10px;border-top:1px solid var(--line);">
+                  <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;align-self:flex-start;">Ваш ID</div>
+                  <img id="myIdQr" alt="QR вашего ID" style="width:160px;height:160px;border-radius:12px;background:#f4f4f4;display:none;">
+                  <span id="settingUserId" style="font-size:14px;color:var(--text);font-family:ui-monospace,Menlo,monospace;word-break:break-all;text-align:center;"></span>
+                  <div style="font-size:12px;color:var(--muted);text-align:center;">Покажите QR или передайте ID — по нему вас добавят в контакты.</div>
+                  <div style="display:flex;gap:8px;width:100%;">
+                    <button type="button" class="btn subtle" style="flex:1;" onclick="copyMyId()">Скопировать ID</button>
+                    <button type="button" class="btn primary" style="flex:1;" onclick="shareMyId()">Поделиться</button>
+                  </div>
                 </div>
               </div>
 

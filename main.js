@@ -154,6 +154,64 @@ async function updateInviteArtifacts() {
   }
 }
 
+// Link a friend can open to add me by my (key-derived) ID in one tap.
+function buildContactShareLink() {
+  const u = new URL(buildAppShareLink());
+  if (state.profile?.userId) u.searchParams.set('add', state.profile.userId);
+  return u.href;
+}
+
+// Render the "share my ID" block in settings: the ID text + a QR of the
+// add-me link. The user never picked this ID — it's their public-key address —
+// so this is how others reach them.
+async function renderMyIdShare() {
+  if (!state.profile) return;
+  const idEl = $('settingUserId');
+  if (idEl) idEl.textContent = state.profile.userId;
+  const qr = $('myIdQr');
+  if (!qr) return;
+  try {
+    qr.src = await QRCode.toDataURL(buildContactShareLink(), {
+      width: 196,
+      margin: 1,
+      color: { dark: '#0a0a0a', light: '#f4f4f4' }
+    });
+    qr.style.display = 'block';
+  } catch (e) {
+    console.warn('My-ID QR failed:', e);
+  }
+}
+
+window.copyMyId = async () => {
+  if (!state.profile) return;
+  try {
+    await navigator.clipboard.writeText(state.profile.userId);
+    setStatus('online', 'ID скопирован');
+  } catch {
+    setStatus('warn', 'Не удалось скопировать');
+  }
+};
+
+window.shareMyId = async () => {
+  if (!state.profile) return;
+  const url = buildContactShareLink();
+  const text = `Добавь меня в Tract: ${state.profile.userId}`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Tract', text, url });
+      return;
+    }
+    await navigator.clipboard.writeText(url);
+    setStatus('online', 'Ссылка скопирована');
+  } catch (e) {
+    if (e?.name === 'AbortError') return; // user dismissed the share sheet
+    try {
+      await navigator.clipboard.writeText(url);
+      setStatus('online', 'Ссылка скопирована');
+    } catch {}
+  }
+};
+
 let inboxTimer = null;
 
 async function pullInbox() {
@@ -1094,6 +1152,7 @@ function renderProfileCards() {
   }
   if (nameSettings) nameSettings.textContent = state.profile.displayName;
   if (idSettings) idSettings.textContent = state.profile.userId;
+  renderMyIdShare();
 }
 
 function updateSettingsPanel() {
@@ -1374,6 +1433,19 @@ function consumeChatDeepLink() {
   return normalizeLogin(chatId);
 }
 
+// "Add me" links (?add=<id>) let someone open the app and add a contact in one
+// tap — the share-by-ID counterpart to the QR in settings.
+function consumeAddDeepLink() {
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('add');
+  if (!id) return null;
+  params.delete('add');
+  const next = params.toString();
+  const url = `${window.location.pathname}${next ? `?${next}` : ''}${window.location.hash}`;
+  window.history.replaceState({}, '', url);
+  return normalizeLogin(id);
+}
+
 async function openChatFromDeepLink(chatId) {
   if (!chatId || !state.profile) return;
   if (!state.contacts.has(chatId) && !state.groups.has(chatId)) return;
@@ -1637,6 +1709,14 @@ async function bootstrapAuthenticatedSession(auth) {
   const deepLinkChat = consumeChatDeepLink();
   if (deepLinkChat) {
     openChatFromDeepLink(deepLinkChat).catch(() => {});
+  }
+
+  // Someone shared their ID with us (?add=<id>): add them automatically.
+  const pendingAdd = consumeAddDeepLink();
+  if (pendingAdd && pendingAdd !== state.profile.userId) {
+    const input = $('addUserId');
+    if (input) input.value = pendingAdd.replace(/^@/, '');
+    window.addContactById?.().catch(() => {});
   }
 }
 
