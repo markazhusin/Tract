@@ -20,11 +20,11 @@ final class NodeConfig: ObservableObject {
 
     let roomId = "tract-public"
 
-    /// Built-in bootstrap nodes. Set the first to your deployed node (e.g. Railway).
-    /// Anyone running `tract-node` can be added here or learned via gossip later.
+    /// Built-in bootstrap entries — no hosting, no central seed. A node is found
+    /// locally (same machine), or you add a live node's address (manual/QR): anyone
+    /// can run `tract-node` anywhere and expose it anonymously (e.g. an
+    /// `*.trycloudflare.com` tunnel or a Tor .onion). Learned nodes join via gossip.
     private static let seeds: [String] = [
-        // TODO: set to your public node once deployed, e.g. "https://tract.up.railway.app"
-        "https://tract-web-minimal-production.up.railway.app",
         "http://127.0.0.1:8877"
     ]
 

@@ -4,16 +4,12 @@ import SwiftUI
 
 enum TransportKind: String {
     case localMesh
-    case bluetoothLE
     case internetP2P
-    case relay
 
     var title: String {
         switch self {
         case .localMesh: return "Локальный меш"
-        case .bluetoothLE: return "Bluetooth LE"
         case .internetP2P: return "Интернет (P2P)"
-        case .relay: return "Ретранслятор"
         }
     }
 }
@@ -67,10 +63,9 @@ protocol AppTransport: AnyObject {
     func send(_ framed: Data, to userId: String, reliable: Bool)
 }
 
-/// Plug-in point for the next milestone: internet P2P (WebRTC) + the Go server as
-/// a switchboard (signaling / presence / TURN fallback / store-and-forward).
-/// Reports unavailable until implemented, so the router transparently falls back
-/// to the local mesh today and will start using the internet automatically later.
+/// Internet P2P (signaling + WebRTC) is driven directly by the signaling and call
+/// layers, not through this router, which routes the local mesh. This entry reports
+/// unavailable so the router stays mesh-only.
 final class InternetTransport: AppTransport {
     let kind: TransportKind = .internetP2P
     var isAvailable: Bool { false }

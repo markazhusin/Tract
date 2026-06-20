@@ -50,13 +50,13 @@ type identity struct {
 func main() {
 	name := flag.String("name", "Desktop", "display name")
 	home := flag.String("home", "", "config dir (default ~/.tract-cli)")
-	server := flag.String("server", "", "node URL (default: env TRACT_NODE or the public node)")
+	server := flag.String("server", "", "node URL (default: env TRACT_NODE or http://127.0.0.1:8877)")
 	stealthFlag := flag.Bool("stealth", false, "invisible: don't show up in presence")
 	flag.Parse()
 	stealth = *stealthFlag
 
 	nodeURL = strings.TrimRight(firstNonEmpty(*server, os.Getenv("TRACT_NODE"),
-		"https://tract-web-minimal-production.up.railway.app"), "/")
+		"http://127.0.0.1:8877"), "/")
 
 	dir := *home
 	if dir == "" {
