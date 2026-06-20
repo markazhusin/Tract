@@ -4,8 +4,8 @@ import MultipeerConnectivity
 
 /// Receives events from the offline mesh and forwards them to the web layer.
 protocol MeshTransportDelegate: AnyObject {
-    /// A packet arrived from a nearby device (already E2E-encrypted by the app).
-    func mesh(_ mesh: MeshTransport, didReceive packetJSON: String, from peer: String)
+    /// Raw bytes arrived from a nearby device (tagged: message / call-control / audio).
+    func mesh(_ mesh: MeshTransport, didReceive data: Data, from peer: String)
     /// The number of directly-connected mesh peers changed.
     func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int)
     /// A nearby device was discovered, advertising its app identity + public key.
@@ -77,12 +77,13 @@ final class MeshTransport: NSObject {
         start()
     }
 
-    /// Flood a packet (UTF-8 JSON) to every connected peer.
-    func broadcast(_ packetJSON: String) {
+    /// Flood raw bytes to every connected peer. `.reliable` for messages/control,
+    /// `.unreliable` for real-time audio (drop late packets instead of stalling).
+    func broadcast(_ data: Data, reliable: Bool = true) {
         let peers = session.connectedPeers
-        guard !peers.isEmpty, let data = packetJSON.data(using: .utf8) else { return }
+        guard !peers.isEmpty else { return }
         do {
-            try session.send(data, toPeers: peers, with: .reliable)
+            try session.send(data, toPeers: peers, with: reliable ? .reliable : .unreliable)
         } catch {
             NSLog("[Mesh] send error: \(error)")
         }
@@ -100,8 +101,7 @@ extension MeshTransport: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        guard let json = String(data: data, encoding: .utf8) else { return }
-        DispatchQueue.main.async { self.delegate?.mesh(self, didReceive: json, from: peerID.displayName) }
+        DispatchQueue.main.async { self.delegate?.mesh(self, didReceive: data, from: peerID.displayName) }
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}

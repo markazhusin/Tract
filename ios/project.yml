@@ -23,9 +23,9 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tract.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.mikkyhost.tract
         INFOPLIST_FILE: Tract/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Automatic
         # Set your Apple Developer team here (or pick it in Xcode → Signing).
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: "UB96Q2XNTF"
