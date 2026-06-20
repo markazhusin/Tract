@@ -58,3 +58,6 @@ ios/*.xcodeproj
 ios/build/
 ios/DerivedData/
 *.xcuserstate
+
+# Prebuilt node executables (distribute via GitHub Releases, not git)
+dist-node/

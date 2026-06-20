@@ -88,6 +88,7 @@ struct ContactsView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
+                    Color.clear.frame(height: 96)
                 }
             }
         }

@@ -37,7 +37,9 @@ struct MainTabView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .background(Theme.bg.ignoresSafeArea())
-            .safeAreaInset(edge: .bottom) {
+            .overlay(alignment: .bottom) {
+                // Floating glass bar: content scrolls UNDER it so Liquid Glass
+                // refracts the content behind — no opaque backing.
                 BottomBar(tab: $tab, showSearch: $showSearch, unread: mesh.totalUnread)
             }
             .navigationDestination(for: Contact.self) { ChatDetailView(contact: $0) }

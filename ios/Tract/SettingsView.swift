@@ -27,7 +27,7 @@ struct SettingsView: View {
         let m = meshState
         let meshCall: (LinkState, String) = mesh.peerCount > 0
             ? (.on, "Готов") : (mesh.running ? (.error, "Ждёт пира") : (.off, "Выключен"))
-        let net: (LinkState, String) = node.isConfigured ? (.on, "Узел задан") : (.off, "Укажите узел")
+        let net: (LinkState, String) = node.isConfigured ? (.on, "Подключён") : (.dev, "Поиск узла…")
         return [
             TransportItem(icon: "dot.radiowaves.left.and.right", color: Theme.online,
                           title: "Локальный меш (Wi-Fi + Bluetooth)", status: m.1, state: m.0),
@@ -71,17 +71,30 @@ struct SettingsView: View {
                                 .padding(.horizontal, 6)
                         }
 
-                        // Self-hosted signaling node (run the Go server anywhere).
+                        // Signaling node — auto-discovered. The user never types a URL.
                         VStack(alignment: .leading, spacing: 7) {
-                            sectionTitle("Сигналинг-узел")
+                            sectionTitle("Сигналинг-узел (авто)")
                             GroupCard {
                                 HStack(spacing: 12) {
                                     Image(systemName: "server.rack")
                                         .font(.system(size: 16))
                                         .foregroundStyle(node.isConfigured ? Theme.online : Theme.muted)
                                         .frame(width: 24)
-                                    TextField("https://адрес-узла или IP:порт", text: $node.serverURL)
+                                    Text(node.statusText)
                                         .font(.system(size: 15))
+                                        .foregroundStyle(Theme.text)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if !node.isConfigured { ProgressView().controlSize(.small) }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                RowDivider(leading: 14)
+                                HStack(spacing: 12) {
+                                    Image(systemName: "slider.horizontal.3")
+                                        .font(.system(size: 16)).foregroundStyle(Theme.muted).frame(width: 24)
+                                    TextField("Свой узел вручную (необязательно)", text: $node.manualURL)
+                                        .font(.system(size: 14))
                                         .foregroundStyle(Theme.text)
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
@@ -91,9 +104,9 @@ struct SettingsView: View {
                                         .onSubmit { urlFocused = false }
                                 }
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
+                                .padding(.vertical, 11)
                             }
-                            Text("Свой узел для звонков/чатов по интернету. Подними Go-сервер (ноут, VPS, позже OpenWRT) и впиши адрес. Узел видит только зашифрованный сигналинг — медиа идёт P2P. Применяется при следующем входе.")
+                            Text("Узел находится автоматически — адрес вводить не нужно. Достаточно, чтобы в сети был хотя бы один живой узел (Railway, чей-то ПК, узел в меше). Узел видит только зашифрованный сигналинг — медиа идёт P2P.")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(Theme.muted)
                                 .padding(.horizontal, 6)
@@ -123,6 +136,8 @@ struct SettingsView: View {
                                 .contentShape(Rectangle())
                             }.buttonStyle(.plain)
                         }
+
+                        Color.clear.frame(height: 96)
                     }
                     .padding(.horizontal, 14)
                     .padding(.top, 8)

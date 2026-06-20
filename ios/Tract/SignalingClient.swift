@@ -11,6 +11,8 @@ final class SignalingClient {
     private var displayName = ""
     private var publicKeyHex = ""
     private var running = false
+    private var registered = false
+    private var lastBase: URL?
 
     /// Delivered on the main queue: (fromPeerId, type, payload). `payload` is a
     /// String for offer/answer SDP, or [String:Any] for ICE / app packets.
@@ -27,7 +29,6 @@ final class SignalingClient {
         self.publicKeyHex = publicKeyHex
         guard !running else { return }
         running = true
-        Task { await self.register() }
         Task { await self.heartbeatLoop() }
         Task { await self.pollLoop() }
     }
@@ -48,11 +49,16 @@ final class SignalingClient {
 
     private func heartbeatLoop() async {
         while running {
-            try? await post("peer/heartbeat", [
-                "peerId": peerId, "roomId": node.roomId, "displayName": displayName,
-                "publicKeyHex": publicKeyHex, "hideOnline": false,
-                "lastSeen": Int(Date().timeIntervalSince1970 * 1000)
-            ])
+            // The node is discovered asynchronously; (re)register whenever it changes.
+            if let base = node.baseURL {
+                if base != lastBase { lastBase = base; registered = false }
+                if !registered { await register(); registered = true }
+                try? await post("peer/heartbeat", [
+                    "peerId": peerId, "roomId": node.roomId, "displayName": displayName,
+                    "publicKeyHex": publicKeyHex, "hideOnline": false,
+                    "lastSeen": Int(Date().timeIntervalSince1970 * 1000)
+                ])
+            }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
@@ -94,7 +100,7 @@ final class SignalingClient {
 
     private func pollLoop() async {
         while running {
-            await poll()
+            if node.baseURL != nil { await poll() }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }

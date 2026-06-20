@@ -1,30 +1,113 @@
 import Foundation
 import Combine
 
-/// Address of the signaling node (the "switchboard"). Self-hostable: run the Go
-/// server anywhere (home laptop, VPS, later an OpenWRT router) and point the app
-/// here. The node only relays opaque signaling — media/content stay P2P/E2E.
+/// Automatic signaling-node discovery — the user never types a server URL.
+/// The app pings a set of candidate nodes (built-in seeds + nodes it has learned)
+/// and uses whichever is online. Any node that is up serves the whole network.
+/// Literal zero-knowledge discovery is impossible, so we bootstrap from seeds and
+/// grow the list by gossip; an optional manual override exists for power users.
 final class NodeConfig: ObservableObject {
-    @Published var serverURL: String {
-        didSet { UserDefaults.standard.set(serverURL, forKey: Self.key) }
+    @Published private(set) var activeURL: URL?
+    @Published private(set) var statusText = "Поиск узла…"
+
+    /// Optional advanced override. Empty by default — normal users ignore it.
+    @Published var manualURL: String {
+        didSet {
+            UserDefaults.standard.set(manualURL, forKey: Self.manualKey)
+            Task { await resolve() }
+        }
     }
 
-    /// Shared room so devices (incl. the web build) discover each other.
     let roomId = "tract-public"
 
-    private static let key = "tract.node.url"
+    /// Built-in bootstrap nodes. Set the first to your deployed node (e.g. Railway).
+    /// Anyone running `tract-node` can be added here or learned via gossip later.
+    private static let seeds: [String] = [
+        // TODO: set to your public node once deployed, e.g. "https://tract.up.railway.app"
+        "https://tract-web-minimal-production.up.railway.app",
+        "http://127.0.0.1:8877"
+    ]
 
-    init() {
-        serverURL = UserDefaults.standard.string(forKey: Self.key) ?? ""
+    private static let manualKey = "tract.node.manual"
+    private static let learnedKey = "tract.nodes.learned"
+
+    private var learned: [String] {
+        get { UserDefaults.standard.stringArray(forKey: Self.learnedKey) ?? [] }
+        set { UserDefaults.standard.set(Array(Set(newValue)), forKey: Self.learnedKey) }
     }
 
-    var isConfigured: Bool { baseURL != nil }
+    var baseURL: URL? { activeURL }
+    var isConfigured: Bool { activeURL != nil }
 
-    var baseURL: URL? {
-        let s = serverURL.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
-        let withScheme = s.hasPrefix("http://") || s.hasPrefix("https://") ? s : "https://\(s)"
-        guard let u = URL(string: withScheme) else { return nil }
-        return u
+    init() {
+        manualURL = UserDefaults.standard.string(forKey: Self.manualKey) ?? ""
+        Task { await resolveLoop() }
+    }
+
+    private func resolveLoop() async {
+        while true {
+            await resolve()
+            try? await Task.sleep(nanoseconds: activeURL == nil ? 8_000_000_000 : 45_000_000_000)
+        }
+    }
+
+    /// Probe all candidates; keep the current node if still healthy, else pick the
+    /// fastest responding one.
+    func resolve() async {
+        var candidates: [String] = []
+        let manual = manualURL.trimmingCharacters(in: .whitespaces)
+        if !manual.isEmpty { candidates.append(manual) }
+        if let active = activeURL?.absoluteString { candidates.append(active) }
+        candidates.append(contentsOf: learned)
+        candidates.append(contentsOf: Self.seeds)
+
+        var seen = Set<String>()
+        let unique = candidates.compactMap { Self.normalize($0) }.filter { seen.insert($0.absoluteString).inserted }
+
+        let healthy = await withTaskGroup(of: (URL, TimeInterval)?.self) { group -> [(URL, TimeInterval)] in
+            for url in unique {
+                group.addTask { await Self.ping(url) }
+            }
+            var out: [(URL, TimeInterval)] = []
+            for await r in group { if let r { out.append(r) } }
+            return out
+        }
+
+        await MainActor.run {
+            guard !healthy.isEmpty else {
+                self.activeURL = nil
+                self.statusText = "Узел не найден"
+                return
+            }
+            // Prefer manual, then the current active (sticky), else lowest latency.
+            let pick: URL
+            if !manual.isEmpty, let m = healthy.first(where: { $0.0.absoluteString == Self.normalize(manual)?.absoluteString }) {
+                pick = m.0
+            } else if let cur = self.activeURL, healthy.contains(where: { $0.0 == cur }) {
+                pick = cur
+            } else {
+                pick = healthy.min(by: { $0.1 < $1.1 })!.0
+            }
+            self.activeURL = pick
+            self.statusText = "Подключён: \(pick.host ?? pick.absoluteString)"
+            self.learned = self.learned + [pick.absoluteString]
+        }
+    }
+
+    private static func normalize(_ s: String) -> URL? {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        let withScheme = t.hasPrefix("http://") || t.hasPrefix("https://") ? t : "https://\(t)"
+        return URL(string: withScheme)
+    }
+
+    /// GET /health with a short timeout; returns latency if reachable.
+    private static func ping(_ base: URL) async -> (URL, TimeInterval)? {
+        var req = URLRequest(url: base.appendingPathComponent("health"))
+        req.timeoutInterval = 4
+        let start = Date()
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+        return (base, Date().timeIntervalSince(start))
     }
 }

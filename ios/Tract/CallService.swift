@@ -76,7 +76,7 @@ final class CallService: ObservableObject {
     }
 
     func goOnline(_ identity: Identity) {
-        guard let node, node.isConfigured else { return }
+        guard let node else { return }
         let sig = SignalingClient(node: node, peerId: Self.stablePeerId)
         sig.onSignal = { [weak self] from, type, payload in self?.handleSignal(from: from, type: type, payload: payload) }
         sig.start(userId: identity.userId, displayName: identity.displayName, publicKeyHex: identity.publicKeyHex)
