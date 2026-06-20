@@ -1,0 +1,131 @@
+import Foundation
+import WebRTC
+
+/// One WebRTC audio call. Media is P2P (Opus, echo-cancelled, jitter-buffered) —
+/// superb quality, minimal latency; the node only relays SDP/ICE, never the audio.
+final class WebRTCCallEngine: NSObject, RTCPeerConnectionDelegate {
+
+    private static let factory: RTCPeerConnectionFactory = {
+        RTCInitializeSSL()
+        return RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(),
+                                        decoderFactory: RTCDefaultVideoDecoderFactory())
+    }()
+
+    private var pc: RTCPeerConnection?
+    private var localAudioTrack: RTCAudioTrack?
+
+    var onLocalIce: ((RTCIceCandidate) -> Void)?
+    var onConnected: (() -> Void)?
+    var onClosed: (() -> Void)?
+
+    func setMuted(_ muted: Bool) { localAudioTrack?.isEnabled = !muted }
+
+    func configure(iceServers: [[String: Any]]) {
+        let servers: [RTCIceServer] = iceServers.compactMap { dict in
+            guard let urls = dict["urls"] as? [String] ?? (dict["urls"] as? String).map({ [$0] }) else { return nil }
+            if let user = dict["username"] as? String, let cred = dict["credential"] as? String {
+                return RTCIceServer(urlStrings: urls, username: user, credential: cred)
+            }
+            return RTCIceServer(urlStrings: urls)
+        }
+
+        let config = RTCConfiguration()
+        config.iceServers = servers
+        config.sdpSemantics = .unifiedPlan
+        config.continualGatheringPolicy = .gatherContinually
+
+        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
+
+        configureAudioSession()
+
+        // Local microphone track.
+        let audioConstraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        let source = Self.factory.audioSource(with: audioConstraints)
+        let track = Self.factory.audioTrack(with: source, trackId: "audio0")
+        localAudioTrack = track
+        pc?.add(track, streamIds: ["stream0"])
+    }
+
+    private func configureAudioSession() {
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        try? session.setCategory(.playAndRecord, with: [.defaultToSpeaker, .allowBluetooth])
+        try? session.setMode(.voiceChat)
+        try? session.setActive(true)
+        session.unlockForConfiguration()
+    }
+
+    private var offerAnswerConstraints: RTCMediaConstraints {
+        RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true"],
+                            optionalConstraints: nil)
+    }
+
+    func createOffer(_ completion: @escaping (String?) -> Void) {
+        pc?.offer(for: offerAnswerConstraints) { [weak self] sdp, _ in
+            guard let self, let sdp else { completion(nil); return }
+            self.pc?.setLocalDescription(sdp) { _ in completion(sdp.sdp) }
+        }
+    }
+
+    func createAnswer(_ completion: @escaping (String?) -> Void) {
+        pc?.answer(for: offerAnswerConstraints) { [weak self] sdp, _ in
+            guard let self, let sdp else { completion(nil); return }
+            self.pc?.setLocalDescription(sdp) { _ in completion(sdp.sdp) }
+        }
+    }
+
+    func setRemote(sdp: String, type: RTCSdpType, _ completion: @escaping () -> Void) {
+        let desc = RTCSessionDescription(type: type, sdp: sdp)
+        pc?.setRemoteDescription(desc) { _ in completion() }
+    }
+
+    func add(candidate: [String: Any]) {
+        guard let sdp = candidate["candidate"] as? String else { return }
+        let mid = candidate["sdpMid"] as? String
+        let line = (candidate["sdpMLineIndex"] as? Int).map(Int32.init) ?? 0
+        pc?.add(RTCIceCandidate(sdp: sdp, sdpMLineIndex: line, sdpMid: mid)) { _ in }
+    }
+
+    func close() {
+        pc?.close()
+        pc = nil
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        try? session.setActive(false)
+        session.unlockForConfiguration()
+    }
+
+    // MARK: RTCPeerConnectionDelegate
+
+    func peerConnection(_ pc: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        onLocalIce?(candidate)
+    }
+
+    func peerConnection(_ pc: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+        DispatchQueue.main.async {
+            switch newState {
+            case .connected, .completed: self.onConnected?()
+            case .failed, .disconnected, .closed: self.onClosed?()
+            default: break
+            }
+        }
+    }
+
+    func peerConnection(_ pc: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    func peerConnection(_ pc: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    func peerConnection(_ pc: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    func peerConnectionShouldNegotiate(_ pc: RTCPeerConnection) {}
+    func peerConnection(_ pc: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    func peerConnection(_ pc: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+    func peerConnection(_ pc: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+}
+
+/// Helper to build an ICE candidate dict for the wire (matches the web's shape).
+extension RTCIceCandidate {
+    var wireDict: [String: Any] {
+        var d: [String: Any] = ["candidate": sdp, "sdpMLineIndex": Int(sdpMLineIndex)]
+        if let mid = sdpMid { d["sdpMid"] = mid }
+        return d
+    }
+}

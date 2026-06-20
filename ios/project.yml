@@ -10,10 +10,16 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     TARGETED_DEVICE_FAMILY: "1"   # iPhone
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    from: "149.0.0"
 targets:
   Tract:
     type: application
     platform: iOS
+    dependencies:
+      - package: WebRTC
     sources:
       - path: Tract
         excludes:

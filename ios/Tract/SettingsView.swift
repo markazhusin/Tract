@@ -11,7 +11,9 @@ struct TransportItem {
 struct SettingsView: View {
     @EnvironmentObject var identity: IdentityStore
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var node: NodeConfig
     @State private var confirmDelete = false
+    @FocusState private var urlFocused: Bool
 
     private var id: Identity? { identity.identity }
 
@@ -23,23 +25,24 @@ struct SettingsView: View {
 
     private var transports: [TransportItem] {
         let m = meshState
-        let callState: (LinkState, String) = mesh.peerCount > 0
+        let meshCall: (LinkState, String) = mesh.peerCount > 0
             ? (.on, "Готов") : (mesh.running ? (.error, "Ждёт пира") : (.off, "Выключен"))
+        let net: (LinkState, String) = node.isConfigured ? (.on, "Узел задан") : (.off, "Укажите узел")
         return [
             TransportItem(icon: "dot.radiowaves.left.and.right", color: Theme.online,
                           title: "Локальный меш (Wi-Fi + Bluetooth)", status: m.1, state: m.0),
             TransportItem(icon: "phone.fill", color: Color(hex: "#36c5c0"),
-                          title: "Звонки по мешу", status: callState.1, state: callState.0),
-            TransportItem(icon: "globe", color: Color(hex: "#5b9cf2"),
-                          title: "Интернет P2P — чаты (WebRTC)", status: "В разработке", state: .dev),
+                          title: "Звонки по мешу", status: meshCall.1, state: meshCall.0),
             TransportItem(icon: "phone.arrow.up.right.fill", color: Color(hex: "#5b9cf2"),
-                          title: "Интернет P2P — звонки (WebRTC)", status: "В разработке", state: .dev),
+                          title: "Интернет-звонки (WebRTC)", status: net.1, state: net.0),
+            TransportItem(icon: "antenna.radiowaves.left.and.right", color: Color(hex: "#5b9cf2"),
+                          title: "Сигналинг-узел", status: net.1, state: net.0),
+            TransportItem(icon: "globe", color: Color(hex: "#f2a35b"),
+                          title: "Интернет-чаты + доставка офлайн", status: "В разработке", state: .dev),
             TransportItem(icon: "video.fill", color: Color(hex: "#c77dff"),
                           title: "Видеозвонки", status: "В разработке", state: .dev),
             TransportItem(icon: "dot.radiowaves.right", color: Color(hex: "#c77dff"),
                           title: "Bluetooth LE (дальний, прямой)", status: "В разработке", state: .dev),
-            TransportItem(icon: "antenna.radiowaves.left.and.right", color: Color(hex: "#f2a35b"),
-                          title: "Сигналинг-релей (сервер-коммутатор)", status: "В разработке", state: .dev),
             TransportItem(icon: "bell.badge.fill", color: Color(hex: "#f2a35b"),
                           title: "Пуш / звонок на закрытое прил.", status: "В разработке", state: .dev),
         ]
@@ -63,6 +66,34 @@ struct SettingsView: View {
                                 }
                             }
                             Text("Маршрут выбирается автоматически: рядом → меш (Wi-Fi/Bluetooth, без сервера, мин. задержка); иначе → интернет P2P; не пробилось → ретранслятор. Каждое устройство — узел: и клиент, и сервер одновременно.")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Theme.muted)
+                                .padding(.horizontal, 6)
+                        }
+
+                        // Self-hosted signaling node (run the Go server anywhere).
+                        VStack(alignment: .leading, spacing: 7) {
+                            sectionTitle("Сигналинг-узел")
+                            GroupCard {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "server.rack")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(node.isConfigured ? Theme.online : Theme.muted)
+                                        .frame(width: 24)
+                                    TextField("https://адрес-узла или IP:порт", text: $node.serverURL)
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(Theme.text)
+                                        .textInputAutocapitalization(.never)
+                                        .autocorrectionDisabled()
+                                        .keyboardType(.URL)
+                                        .focused($urlFocused)
+                                        .submitLabel(.done)
+                                        .onSubmit { urlFocused = false }
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                            }
+                            Text("Свой узел для звонков/чатов по интернету. Подними Go-сервер (ноут, VPS, позже OpenWRT) и впиши адрес. Узел видит только зашифрованный сигналинг — медиа идёт P2P. Применяется при следующем входе.")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(Theme.muted)
                                 .padding(.horizontal, 6)

@@ -3,7 +3,10 @@ import SwiftUI
 struct ChatDetailView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var call: CallService
+    @EnvironmentObject var node: NodeConfig
     let contact: Contact
+
+    private var canCall: Bool { mesh.route(for: contact.userId) != .offline || node.isConfigured }
 
     @State private var draft = ""
     @FocusState private var inputFocused: Bool
@@ -60,9 +63,9 @@ struct ChatDetailView: View {
                 Button { call.startCall(to: contact) } label: {
                     Image(systemName: "phone.fill")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(mesh.route(for: contact.userId) != .offline ? Theme.accent : Theme.muted)
+                        .foregroundStyle(canCall ? Theme.accent : Theme.muted)
                 }
-                .disabled(mesh.route(for: contact.userId) == .offline)
+                .disabled(!canCall)
             }
         }
         .toolbarBackground(Theme.bgDeep, for: .navigationBar)
