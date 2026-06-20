@@ -37,6 +37,7 @@ const room = "tract-public"
 var (
 	nodeURL string
 	peerID  = fmt.Sprintf("cli-%d", time.Now().UnixNano()%1_000_000)
+	stealth bool // invisible in presence (hideOnline)
 )
 
 type identity struct {
@@ -50,7 +51,9 @@ func main() {
 	name := flag.String("name", "Desktop", "display name")
 	home := flag.String("home", "", "config dir (default ~/.tract-cli)")
 	server := flag.String("server", "", "node URL (default: env TRACT_NODE or the public node)")
+	stealthFlag := flag.Bool("stealth", false, "invisible: don't show up in presence")
 	flag.Parse()
+	stealth = *stealthFlag
 
 	nodeURL = strings.TrimRight(firstNonEmpty(*server, os.Getenv("TRACT_NODE"),
 		"https://tract-web-minimal-production.up.railway.app"), "/")
@@ -320,7 +323,7 @@ func open(b64 string, key []byte) (string, error) {
 func register(id *identity) {
 	postJSON("/peer/register", map[string]any{
 		"peerId": peerID, "roomId": room, "userId": id.UserID,
-		"displayName": id.Name, "publicKeyHex": id.PubHex, "hideOnline": false,
+		"displayName": id.Name, "publicKeyHex": id.PubHex, "hideOnline": stealth,
 	}, nil)
 }
 

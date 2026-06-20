@@ -10,6 +10,8 @@ protocol MeshTransportDelegate: AnyObject {
     func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int)
     /// A nearby device was discovered, advertising its app identity + public key.
     func mesh(_ mesh: MeshTransport, didDiscover userId: String, publicKeyHex: String, name: String)
+    /// A peer just connected — a chance to flush the courier (store-and-forward) queue.
+    func meshDidConnectPeer(_ mesh: MeshTransport)
 }
 
 /// Infrastructure-less device-to-device transport built on MultipeerConnectivity,
@@ -32,6 +34,10 @@ final class MeshTransport: NSObject {
     private(set) var displayName: String = ""
     private(set) var publicKeyHex: String = ""
 
+    /// Stealth: don't advertise our identity (we won't appear as a nearby contact),
+    /// but keep connecting + relaying — an invisible courier node.
+    var stealth: Bool = false
+
     override init() {
         // Multipeer peer name is just a device label; the real identity is the
         // app-level userId advertised in discoveryInfo.
@@ -51,9 +57,19 @@ final class MeshTransport: NSObject {
         restart()
     }
 
+    /// Toggle stealth at runtime (re-advertises without/with our identity).
+    func setStealth(_ on: Bool) {
+        guard stealth != on else { return }
+        stealth = on
+        if advertiser != nil { restart() }
+    }
+
     func start() {
-        // discoveryInfo is small; uid + compressed pubkey hex (66 chars) + name fit.
-        let info = ["uid": userId, "name": displayName, "pk": publicKeyHex]
+        // In stealth we still advertise the service (so peers connect and we can
+        // relay) but WITHOUT our identity, so we don't show up as a contact.
+        let info: [String: String] = stealth
+            ? ["r": "1"]
+            : ["uid": userId, "name": displayName, "pk": publicKeyHex]
         let adv = MCNearbyServiceAdvertiser(peer: myPeerID, discoveryInfo: info, serviceType: Self.serviceType)
         adv.delegate = self
         adv.startAdvertisingPeer()
@@ -98,6 +114,9 @@ final class MeshTransport: NSObject {
 extension MeshTransport: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         notifyPeerCount()
+        if state == .connected {
+            DispatchQueue.main.async { self.delegate?.meshDidConnectPeer(self) }
+        }
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {

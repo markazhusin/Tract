@@ -61,6 +61,23 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     private var inboxRunning = false
     private var processedPacketIds = Set<String>()
 
+    /// Stealth: invisible to nearby/network discovery, but still relays others'
+    /// (encrypted) messages — an invisible courier node.
+    @Published var stealth: Bool = UserDefaults.standard.bool(forKey: "tract.stealth") {
+        didSet {
+            UserDefaults.standard.set(stealth, forKey: "tract.stealth")
+            transport.setStealth(stealth)
+        }
+    }
+
+    // Multi-hop relay: dedup seen packets + a small "courier" store-and-forward
+    // queue we flush to peers as they connect.
+    private var seenMeshIds = Set<String>()
+    private var seenOrder: [String] = []
+    private struct CourierItem { let id: String; let frame: Data; let at: Date }
+    private var courier: [CourierItem] = []
+    private let meshTTL = 6
+
     private let myPeerId: String = {
         let k = "tract.peerId"
         if let s = UserDefaults.standard.string(forKey: k) { return s }
@@ -81,6 +98,7 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         self.identity = identity
         running = true
         load(identity.userId)
+        transport.stealth = stealth
         transport.setIdentity(userId: identity.userId,
                               displayName: identity.displayName,
                               publicKeyHex: identity.publicKeyHex)
@@ -189,13 +207,16 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         }
 
         if route(for: contact.userId) == .localMesh {
-            let packet: [String: String] = [
-                "to": contact.userId, "from": id.userId, "fromName": id.displayName,
-                "fromPk": id.publicKeyHex, "box": box
+            let pid = UUID().uuidString
+            let packet: [String: Any] = [
+                "id": pid, "to": contact.userId, "from": id.userId, "fromName": id.displayName,
+                "fromPk": id.publicKeyHex, "box": box, "ttl": meshTTL
             ]
             if let data = try? JSONSerialization.data(withJSONObject: packet) {
                 var framed = Data([UInt8(ascii: "M")]); framed.append(data)
+                markSeen(pid)
                 transport.broadcast(framed, reliable: true)
+                courierEnqueue(id: pid, frame: framed)   // carry it to peers that connect later
             }
         } else {
             let userId = contact.userId
@@ -309,15 +330,58 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     }
 
     private func handleMeshMessage(_ payload: Data) {
-        guard let id = identity,
-              let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: String],
-              obj["to"] == id.userId,
-              let box = obj["box"], let fromPk = obj["fromPk"], let from = obj["from"],
-              let key = Crypto.sharedKey(my: id.privateKey, theirHex: fromPk),
-              let text = Crypto.open(box, key: key) else { return }
-        upsert(userId: from, name: obj["fromName"] ?? from, pk: fromPk, online: true)
-        append(ChatMessage(text: text, fromMe: false, time: Date()), to: from, preview: text, bumpUnread: true)
-        save()
+        guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        let pid = obj["id"] as? String ?? ""
+        if !pid.isEmpty {
+            if seenMeshIds.contains(pid) { return }   // dedup: already handled/forwarded
+            markSeen(pid)
+        }
+
+        let to = obj["to"] as? String ?? ""
+        if let id = identity, to == id.userId {
+            // Addressed to us: decrypt and show.
+            guard let box = obj["box"] as? String, let fromPk = obj["fromPk"] as? String,
+                  let from = obj["from"] as? String,
+                  let key = Crypto.sharedKey(my: id.privateKey, theirHex: fromPk),
+                  let text = Crypto.open(box, key: key) else { return }
+            upsert(userId: from, name: obj["fromName"] as? String ?? from, pk: fromPk, online: true)
+            append(ChatMessage(text: text, fromMe: false, time: Date()), to: from, preview: text, bumpUnread: true)
+            save()
+            return
+        }
+
+        // Not for us → relay (multi-hop "jumps") + carry as courier. We can't read
+        // it (E2E), we just pass it along. Works even in stealth.
+        var ttl = (obj["ttl"] as? Int) ?? Int((obj["ttl"] as? Double) ?? 0)
+        guard ttl > 0 else { return }
+        ttl -= 1
+        var fwd = obj
+        fwd["ttl"] = ttl
+        if let data = try? JSONSerialization.data(withJSONObject: fwd) {
+            var framed = Data([UInt8(ascii: "M")]); framed.append(data)
+            transport.broadcast(framed, reliable: true)
+            if !pid.isEmpty { courierEnqueue(id: pid, frame: framed) }
+        }
+    }
+
+    // MARK: Relay helpers (dedup + courier store-and-forward)
+
+    private func markSeen(_ id: String) {
+        guard seenMeshIds.insert(id).inserted else { return }
+        seenOrder.append(id)
+        if seenOrder.count > 600 { seenMeshIds.remove(seenOrder.removeFirst()) }
+    }
+
+    private func courierEnqueue(id: String, frame: Data) {
+        courier.removeAll { Date().timeIntervalSince($0.at) > 600 }   // keep 10 min
+        guard !courier.contains(where: { $0.id == id }) else { return }
+        courier.append(CourierItem(id: id, frame: frame, at: Date()))
+        if courier.count > 80 { courier.removeFirst(courier.count - 80) }
+    }
+
+    func meshDidConnectPeer(_ mesh: MeshTransport) {
+        courier.removeAll { Date().timeIntervalSince($0.at) > 600 }
+        for item in courier { transport.broadcast(item.frame, reliable: true) }
     }
 
     func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int) { peerCount = count }

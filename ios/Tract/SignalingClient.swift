@@ -40,10 +40,12 @@ final class SignalingClient {
 
     // MARK: Presence
 
+    private var stealth: Bool { UserDefaults.standard.bool(forKey: "tract.stealth") }
+
     private func register() async {
         try? await post("peer/register", [
             "peerId": peerId, "roomId": node.roomId, "userId": userId,
-            "displayName": displayName, "publicKeyHex": publicKeyHex, "hideOnline": false
+            "displayName": displayName, "publicKeyHex": publicKeyHex, "hideOnline": stealth
         ])
     }
 
@@ -69,7 +71,7 @@ final class SignalingClient {
                 }
                 try? await post("peer/heartbeat", [
                     "peerId": peerId, "roomId": node.roomId, "displayName": displayName,
-                    "publicKeyHex": publicKeyHex, "hideOnline": false,
+                    "publicKeyHex": publicKeyHex, "hideOnline": stealth,
                     "lastSeen": Int(Date().timeIntervalSince1970 * 1000)
                 ])
             }
