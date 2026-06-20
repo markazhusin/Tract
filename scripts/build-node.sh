@@ -18,8 +18,12 @@ LDFLAGS="-s -w"
 build() {
   local os="$1" arch="$2" ext="${3:-}"
   echo "[build] $os/$arch"
+  # Signaling node (server) — run it on any PC to become a node of the network.
   GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
     -o "$OUT/tract-node-$os-$arch$ext" .
+  # Universal desktop client — speaks the native protocol (same as the iOS app).
+  GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
+    -o "$OUT/tract-cli-$os-$arch$ext" ./cmd/tract-cli
 }
 
 build darwin arm64
