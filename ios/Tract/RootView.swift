@@ -25,7 +25,10 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: identity.identity)
         .animation(.easeInOut(duration: 0.25), value: call.phase)
-        .onAppear { call.configure(mesh: mesh, node: node) }
+        .onAppear {
+            mesh.node = node
+            call.configure(mesh: mesh, node: node)
+        }
         .onChange(of: identity.identity) { newValue in
             if let id = newValue {
                 mesh.start(identity: id)

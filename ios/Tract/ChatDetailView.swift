@@ -9,6 +9,7 @@ struct ChatDetailView: View {
     private var canCall: Bool { mesh.route(for: contact.userId) != .offline || node.isConfigured }
 
     @State private var draft = ""
+    @State private var sendError = ""
     @FocusState private var inputFocused: Bool
 
     private var thread: [ChatMessage] { mesh.messages[contact.userId] ?? [] }
@@ -73,6 +74,14 @@ struct ChatDetailView: View {
     }
 
     private var inputBar: some View {
+        VStack(spacing: 0) {
+        if !sendError.isEmpty {
+            Text(sendError)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.danger)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.top, 6)
+        }
         HStack(spacing: 10) {
             HStack {
                 TextField("Сообщение", text: $draft, axis: .vertical)
@@ -97,6 +106,7 @@ struct ChatDetailView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        }
         .background(Theme.bgDeep)
     }
 
@@ -106,8 +116,12 @@ struct ChatDetailView: View {
 
     private func send() {
         guard canSend else { return }
-        mesh.send(text: draft, to: contact)
-        draft = ""
+        if mesh.send(text: draft, to: contact) {
+            draft = ""
+            sendError = ""
+        } else {
+            sendError = "Не удалось отправить: контакт несовместим (другой тип ключа)."
+        }
     }
 }
 
