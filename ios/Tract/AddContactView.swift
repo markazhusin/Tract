@@ -100,9 +100,13 @@ struct AddContactView: View {
     }
 
     private func add() {
+        let raw = input
+        guard node.isConfigured || raw.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("tract:") else {
+            status = "Сеть ещё подключается — повторите через пару секунд."
+            return
+        }
         busy = true
         status = "Ищу контакт…"
-        let raw = input
         Task {
             let ok = await mesh.lookupContact(by: raw, node: node)
             await MainActor.run {

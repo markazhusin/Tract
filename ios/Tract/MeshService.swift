@@ -124,12 +124,9 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         let id = normalizeId(trimmed)
         guard id.count > 1, let base = node.baseURL else { return false }
 
-        if let pk = await fetchPubkey(base: base, path: "peers/by-user/\(id)", roomId: node.roomId) {
-            await MainActor.run { self.addContact(userId: id, name: id, pubkeyHex: pk, online: true) }
-            return true
-        }
-        if let pk = await fetchPubkey(base: base, path: "identity/\(id)", roomId: nil) {
-            await MainActor.run { self.addContact(userId: id, name: id, pubkeyHex: pk, online: false) }
+        // The node stores each user's identity blob (with publicKeyHex) at /identity/:id.
+        if let (pk, name) = await fetchIdentity(base: base, id: id) {
+            await MainActor.run { self.addContact(userId: id, name: name, pubkeyHex: pk, online: false) }
             return true
         }
         return false
@@ -141,21 +138,20 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         return t
     }
 
-    private func fetchPubkey(base: URL, path: String, roomId: String?) async -> String? {
-        guard var comps = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false) else { return nil }
-        if let roomId { comps.queryItems = [URLQueryItem(name: "roomId", value: roomId)] }
-        guard let url = comps.url else { return nil }
-        var req = URLRequest(url: url); req.timeoutInterval = 8
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        for key in ["peer", "identity"] {
-            if let nested = obj[key] as? [String: Any], let pk = nested["publicKeyHex"] as? String, !pk.isEmpty { return pk }
-            if let blob = obj[key] as? String, let bd = blob.data(using: .utf8),
-               let bo = try? JSONSerialization.jsonObject(with: bd) as? [String: Any],
-               let pk = bo["publicKeyHex"] as? String, !pk.isEmpty { return pk }
-        }
-        if let pk = obj["publicKeyHex"] as? String, !pk.isEmpty { return pk }
-        return nil
+    /// Fetch a user's public key + name from the node's identity store.
+    private func fetchIdentity(base: URL, id: String) async -> (pubkey: String, name: String)? {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent("identity").appendingPathComponent(encoded))
+        req.timeoutInterval = 8
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let blobStr = obj["identityBlob"] as? String,
+              let blobData = blobStr.data(using: .utf8),
+              let blob = try? JSONSerialization.jsonObject(with: blobData) as? [String: Any],
+              let pk = blob["publicKeyHex"] as? String, !pk.isEmpty else { return nil }
+        let name = (blob["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id
+        return (pk, name)
     }
 
     func markRead(_ userId: String) {

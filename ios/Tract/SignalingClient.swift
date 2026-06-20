@@ -47,12 +47,26 @@ final class SignalingClient {
         ])
     }
 
+    /// Publish our identity (public key + name) so other devices can add us by @id.
+    private func uploadIdentity() async {
+        let blob: [String: Any] = [
+            "version": 2, "userId": userId, "publicKeyHex": publicKeyHex, "displayName": displayName
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: blob),
+              let blobStr = String(data: data, encoding: .utf8) else { return }
+        try? await post("identity/store", ["userId": userId, "identityBlob": blobStr])
+    }
+
     private func heartbeatLoop() async {
         while running {
             // The node is discovered asynchronously; (re)register whenever it changes.
             if let base = node.baseURL {
                 if base != lastBase { lastBase = base; registered = false }
-                if !registered { await register(); registered = true }
+                if !registered {
+                    await register()
+                    await uploadIdentity()   // publish our pubkey so others can add us by ID
+                    registered = true
+                }
                 try? await post("peer/heartbeat", [
                     "peerId": peerId, "roomId": node.roomId, "displayName": displayName,
                     "publicKeyHex": publicKeyHex, "hideOnline": false,
