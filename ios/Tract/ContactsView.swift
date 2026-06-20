@@ -95,6 +95,11 @@ struct ContactsView: View {
                                 ContactRow(contact: c, showPreview: false)
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { mesh.deleteContact(c.userId) } label: {
+                                    Label("Удалить контакт", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 8)

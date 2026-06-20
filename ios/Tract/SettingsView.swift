@@ -12,7 +12,9 @@ struct SettingsView: View {
     @EnvironmentObject var identity: IdentityStore
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var node: NodeConfig
+    @EnvironmentObject var lock: AppLock
     @State private var confirmDelete = false
+    @State private var showPasscodeSetup = false
 
     private var id: Identity? { identity.identity }
 
@@ -94,22 +96,25 @@ struct SettingsView: View {
                                 .padding(.horizontal, 6)
                         }
 
-                        // Privacy: invisible mode (still relays others' messages).
+                        // Security: passcode lock at entry.
                         VStack(alignment: .leading, spacing: 7) {
-                            sectionTitle("Приватность")
+                            sectionTitle("Безопасность")
                             GroupCard {
                                 HStack(spacing: 13) {
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(Color(hex: "#c77dff")).frame(width: 30, height: 30)
-                                        .overlay(Image(systemName: "eye.slash.fill")
+                                        .fill(Color(hex: "#5b9cf2")).frame(width: 30, height: 30)
+                                        .overlay(Image(systemName: "lock.fill")
                                             .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white))
-                                    Text("Невидимость").font(.system(size: 17)).foregroundStyle(Theme.text)
+                                    Text("Код-пароль").font(.system(size: 17)).foregroundStyle(Theme.text)
                                     Spacer()
-                                    Toggle("", isOn: $mesh.stealth).labelsHidden().tint(Theme.accent)
+                                    Toggle("", isOn: Binding(
+                                        get: { lock.isEnabled },
+                                        set: { on in if on { showPasscodeSetup = true } else { lock.disable() } }
+                                    )).labelsHidden().tint(Theme.accent)
                                 }
                                 .padding(.horizontal, 14).padding(.vertical, 8)
                             }
-                            Text("Вас не видно рядом (Bluetooth/Wi-Fi) и в сети. Но устройство продолжает передавать чужие зашифрованные сообщения — как курьер, прыжками по мешу.")
+                            Text("Запрашивать код при входе и после сворачивания приложения.")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(Theme.muted)
                                 .padding(.horizontal, 6)
@@ -155,6 +160,7 @@ struct SettingsView: View {
             } message: {
                 Text("Ключ будет стёрт с устройства без возможности восстановления.")
             }
+            .sheet(isPresented: $showPasscodeSetup) { PasscodeSetupView() }
     }
 
     private var profileHeader: some View {

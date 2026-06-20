@@ -24,18 +24,21 @@ extension Color {
 }
 
 enum Theme {
-    static let bg = Color(hex: "#141515")
-    static let bgDeep = Color(hex: "#050508")
-    static let panel = Color(hex: "#1b1c1c")
-    static let panelInput = Color(hex: "#202121")
-    static let line = Color(hex: "#2a2b2b")
-    static let text = Color(hex: "#f5f5f5")
-    static let muted = Color(hex: "#9a9a9a")
-    static let accent = Color(hex: "#B7FFF9")
-    static let online = Color(hex: "#4dcd5e")
-    static let danger = Color(hex: "#e56565")
-    static let warn = Color(hex: "#e7a23d")
-    static let onAccent = Color(hex: "#0c1413")
+    // Cohesive cool-graphite scale: one elevated surface for every card / field /
+    // incoming bubble, with the mint accent reserved for primary/own elements.
+    static let bgDeep = Color(hex: "#0E1012")   // nav bar, input bar, tab bar backdrop
+    static let bg = Color(hex: "#15171A")        // main background
+    static let panel = Color(hex: "#1F2226")     // unified surface (cards, fields, incoming bubble)
+    static let panelInput = Color(hex: "#1F2226")
+    static let bubbleIn = Color(hex: "#1F2226")
+    static let line = Color(hex: "#2A2E33")      // subtle dividers
+    static let text = Color(hex: "#F1F3F4")
+    static let muted = Color(hex: "#8A9098")
+    static let accent = Color(hex: "#B7FFF9")    // mint — used sparingly (own bubble, primary, active)
+    static let onAccent = Color(hex: "#0B1413")
+    static let online = Color(hex: "#49C96A")
+    static let danger = Color(hex: "#E5654F")
+    static let warn = Color(hex: "#E0A23C")
 }
 
 // MARK: - Liquid Glass (iOS 26) with graceful fallback

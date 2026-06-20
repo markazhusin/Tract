@@ -20,28 +20,37 @@ struct ChatDetailView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: 3) {
                         if thread.isEmpty {
-                            Text("Сообщения E2E-зашифрованы и идут напрямую через меш, без сервера.")
+                            Text("Сообщения E2E-зашифрованы и идут напрямую — узлы их не читают.")
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.muted)
                                 .multilineTextAlignment(.center)
-                                .padding(.horizontal, 30)
-                                .padding(.top, 30)
+                                .padding(.horizontal, 36)
+                                .padding(.top, 40)
                         }
                         ForEach(thread) { m in
                             MessageBubble(message: m).id(m.id)
+                                .contextMenu {
+                                    Button {
+                                        UIPasteboard.general.string = m.text
+                                    } label: { Label("Копировать", systemImage: "doc.on.doc") }
+                                    Button(role: .destructive) {
+                                        mesh.deleteMessage(m.id, in: contact.userId)
+                                    } label: { Label("Удалить", systemImage: "trash") }
+                                }
                         }
-                        Color.clear.frame(height: 8).id("bottom")
+                        Color.clear.frame(height: 6).id("bottom")
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
                     .padding(.top, 10)
                 }
                 .onChange(of: thread.count) { _ in
+                    mesh.openedChat(contact.userId)   // ack messages that arrive while open
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .onAppear {
-                    mesh.markRead(contact.userId)
+                    mesh.openedChat(contact.userId)
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
@@ -50,23 +59,25 @@ struct ChatDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 9) {
-                    Avatar(name: contact.displayName, seed: contact.userId, size: 32)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(contact.displayName).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
-                        RouteBadge(quality: mesh.route(for: contact.userId))
-                    }
+                VStack(spacing: 1) {
+                    Text(contact.displayName)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Text(mesh.route(for: contact.userId).label)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
                 }
             }
-        }
-        .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { call.startCall(to: contact) } label: {
-                    Image(systemName: "phone.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(canCall ? Theme.accent : Theme.muted)
+                HStack(spacing: 14) {
+                    Button { call.startCall(to: contact) } label: {
+                        Image(systemName: "phone.fill")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(canCall ? Theme.accent : Theme.muted)
+                    }
+                    .disabled(!canCall)
+                    Avatar(name: contact.displayName, seed: contact.userId, size: 32)
                 }
-                .disabled(!canCall)
             }
         }
         .toolbarBackground(Theme.bgDeep, for: .navigationBar)
@@ -75,37 +86,46 @@ struct ChatDetailView: View {
 
     private var inputBar: some View {
         VStack(spacing: 0) {
-        if !sendError.isEmpty {
-            Text(sendError)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.danger)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16).padding(.top, 6)
-        }
-        HStack(spacing: 10) {
-            HStack {
+            if !sendError.isEmpty {
+                Text(sendError)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.top, 6)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Theme.muted)
+                    .frame(width: 30, height: 40)
+
                 TextField("Сообщение", text: $draft, axis: .vertical)
-                    .font(.system(size: 16))
+                    .font(.system(size: 16.5))
                     .foregroundStyle(Theme.text)
                     .focused($inputFocused)
-                    .lineLimit(1...5)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Theme.panelInput, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Theme.panelInput, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(width: 42, height: 42)
-                    .background(canSend ? Theme.accent : Theme.muted.opacity(0.4), in: Circle())
+                if canSend {
+                    Button(action: send) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(Theme.onAccent)
+                            .frame(width: 40, height: 40)
+                            .background(Theme.accent, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 19))
+                        .foregroundStyle(Theme.muted)
+                        .frame(width: 40, height: 40)
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
         }
         .background(Theme.bgDeep)
     }
@@ -128,25 +148,42 @@ struct ChatDetailView: View {
 struct MessageBubble: View {
     let message: ChatMessage
 
+    private var textColor: Color { message.fromMe ? Theme.onAccent : Theme.text }
+    private var metaColor: Color { message.fromMe ? Theme.onAccent.opacity(0.55) : Theme.muted }
+
     var body: some View {
-        HStack {
-            if message.fromMe { Spacer(minLength: 50) }
-            VStack(alignment: .trailing, spacing: 2) {
+        HStack(spacing: 0) {
+            if message.fromMe { Spacer(minLength: 56) }
+            // Bubble hugs the text; time + checks sit at the bottom-right.
+            HStack(alignment: .bottom, spacing: 6) {
                 Text(message.text)
-                    .font(.system(size: 16))
-                    .foregroundStyle(message.fromMe ? Theme.onAccent : Theme.text)
-                Text(timeString)
-                    .font(.system(size: 10))
-                    .foregroundStyle(message.fromMe ? Theme.onAccent.opacity(0.6) : Theme.muted)
+                    .font(.system(size: 16.5))
+                    .foregroundStyle(textColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 3) {
+                    Text(timeString).font(.system(size: 11)).foregroundStyle(metaColor)
+                    if message.fromMe { checks }
+                }
+                .padding(.bottom, 1)
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .background(
-                message.fromMe ? Theme.accent : Theme.panel,
+                message.fromMe ? Theme.accent : Theme.bubbleIn,
                 in: RoundedRectangle(cornerRadius: 18, style: .continuous)
             )
-            if !message.fromMe { Spacer(minLength: 50) }
+            if !message.fromMe { Spacer(minLength: 56) }
         }
+    }
+
+    /// ✓ sent · ✓✓ read (two overlapped check glyphs).
+    private var checks: some View {
+        HStack(spacing: -4) {
+            Image(systemName: "checkmark")
+            if message.read == true { Image(systemName: "checkmark") }
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(metaColor)
     }
 
     private var timeString: String {

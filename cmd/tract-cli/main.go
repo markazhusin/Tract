@@ -156,7 +156,7 @@ func (c *client) send(text string) {
 		fmt.Println("шифр:", err)
 		return
 	}
-	payload := map[string]any{"type": "text", "senderId": c.id.UserID, "fromPk": c.id.PubHex, "box": box}
+	payload := map[string]any{"type": "text", "senderId": c.id.UserID, "fromPk": c.id.PubHex, "box": box, "pid": newID()}
 	body := map[string]any{"from": peerID, "to": "", "toUserId": to, "roomId": room, "type": "app_packet", "payload": payload}
 	if err := postJSON("/signal", body, nil); err != nil {
 		fmt.Println("отправка:", err)
@@ -221,6 +221,24 @@ func (c *client) deliver(payload map[string]any) {
 	}
 	c.mu.Unlock()
 	fmt.Printf("\n[%s] %s → you: %s\n", time.Now().Format("15:04"), from, text)
+	if pid, _ := payload["pid"].(string); pid != "" {
+		go c.sendReceipt(from, pid) // tell the sender we read it (✓✓)
+	}
+}
+
+func (c *client) sendReceipt(to, pid string) {
+	if to == "" || pid == "" {
+		return
+	}
+	payload := map[string]any{"type": "message_control", "action": "read", "pid": pid, "senderId": c.id.UserID}
+	body := map[string]any{"from": peerID, "to": "", "toUserId": to, "roomId": room, "type": "app_packet", "payload": payload}
+	postJSON("/signal", body, nil)
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // ---- identity / crypto (must match the iOS app) ----

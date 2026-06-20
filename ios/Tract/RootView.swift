@@ -5,6 +5,7 @@ struct RootView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var call: CallService
     @EnvironmentObject var node: NodeConfig
+    @EnvironmentObject var lock: AppLock
 
     var body: some View {
         ZStack {
@@ -22,7 +23,14 @@ struct RootView: View {
                 CallOverlayView()
                     .zIndex(10)
             }
+
+            if lock.isLocked {
+                LockView()
+                    .transition(.opacity)
+                    .zIndex(20)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: lock.isLocked)
         .animation(.easeInOut(duration: 0.25), value: identity.identity)
         .animation(.easeInOut(duration: 0.25), value: call.phase)
         .onAppear {

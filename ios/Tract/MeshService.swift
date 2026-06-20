@@ -17,9 +17,11 @@ struct Contact: Identifiable, Equatable, Hashable, Codable {
 
 struct ChatMessage: Identifiable, Equatable, Codable {
     var id = UUID()
+    var pid: String?      // wire packet id (for read receipts); optional for old data
     let text: String
     let fromMe: Bool
     let time: Date
+    var read: Bool?       // outgoing: true once the recipient acked (✓✓)
 }
 
 enum LinkState {
@@ -70,10 +72,25 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         }
     }
 
+    /// Nearby discovery on/off (the mesh). When off we don't advertise/browse.
+    @Published var meshEnabled: Bool = (UserDefaults.standard.object(forKey: "tract.meshEnabled") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(meshEnabled, forKey: "tract.meshEnabled")
+            guard let id = identity else { return }
+            if meshEnabled {
+                transport.setIdentity(userId: id.userId, displayName: id.displayName, publicKeyHex: id.publicKeyHex)
+            } else {
+                transport.stop()
+                peerCount = 0
+            }
+        }
+    }
+
     // Multi-hop relay: dedup seen packets + a small "courier" store-and-forward
     // queue we flush to peers as they connect.
     private var seenMeshIds = Set<String>()
     private var seenOrder: [String] = []
+    private var ackedPids = Set<String>()   // incoming msgs we've already sent a read receipt for
     private struct CourierItem { let id: String; let frame: Data; let at: Date }
     private var courier: [CourierItem] = []
     private let meshTTL = 6
@@ -99,9 +116,11 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         running = true
         load(identity.userId)
         transport.stealth = stealth
-        transport.setIdentity(userId: identity.userId,
-                              displayName: identity.displayName,
-                              publicKeyHex: identity.publicKeyHex)
+        if meshEnabled {
+            transport.setIdentity(userId: identity.userId,
+                                  displayName: identity.displayName,
+                                  publicKeyHex: identity.publicKeyHex)
+        }
         startInboxLoop()
     }
 
@@ -139,9 +158,18 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     func messages(for contact: Contact) -> [ChatMessage] { messages[contact.userId] ?? [] }
 
-    func markRead(_ userId: String) {
-        guard let i = contacts.firstIndex(where: { $0.userId == userId }), contacts[i].unread != 0 else { return }
-        contacts[i].unread = 0
+    /// User opened the chat: clear unread AND send read receipts (✓✓) for every
+    /// incoming message we haven't acked yet — so "seen" lights up on the sender.
+    func openedChat(_ userId: String) {
+        if let i = contacts.firstIndex(where: { $0.userId == userId }) { contacts[i].unread = 0 }
+        if let msgs = messages[userId] {
+            for m in msgs where !m.fromMe {
+                if let pid = m.pid, !pid.isEmpty, !ackedPids.contains(pid) {
+                    ackedPids.insert(pid)
+                    sendReceipt(to: userId, pid: pid)
+                }
+            }
+        }
         save()
     }
 
@@ -149,6 +177,26 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     func addContact(userId: String, name: String, pubkeyHex: String, online: Bool) {
         upsert(userId: userId, name: name, pk: pubkeyHex, online: online)
+        save()
+    }
+
+    // MARK: Deletion
+
+    func deleteMessage(_ id: UUID, in userId: String) {
+        guard var arr = messages[userId] else { return }
+        arr.removeAll { $0.id == id }
+        messages[userId] = arr
+        if let i = contacts.firstIndex(where: { $0.userId == userId }) {
+            contacts[i].lastMessage = arr.last?.text ?? ""
+            contacts[i].lastTime = arr.last?.time
+        }
+        save()
+    }
+
+    /// Remove a contact and its whole conversation.
+    func deleteContact(_ userId: String) {
+        messages[userId] = nil
+        contacts.removeAll { $0.userId == userId }
         save()
     }
 
@@ -206,8 +254,8 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
             return false   // incompatible/invalid key (e.g. a secp256k1 web contact)
         }
 
+        let pid = UUID().uuidString
         if route(for: contact.userId) == .localMesh {
-            let pid = UUID().uuidString
             let packet: [String: Any] = [
                 "id": pid, "to": contact.userId, "from": id.userId, "fromName": id.displayName,
                 "fromPk": id.publicKeyHex, "box": box, "ttl": meshTTL
@@ -220,10 +268,10 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
             }
         } else {
             let userId = contact.userId
-            Task { await self.sendAppPacket(toUserId: userId, box: box) }
+            Task { await self.sendAppPacket(toUserId: userId, box: box, pid: pid) }
         }
 
-        append(ChatMessage(text: trimmed, fromMe: true, time: Date()), to: contact.userId, preview: trimmed, bumpUnread: false)
+        append(ChatMessage(pid: pid, text: trimmed, fromMe: true, time: Date()), to: contact.userId, preview: trimmed, bumpUnread: false)
         save()
         return true
     }
@@ -243,9 +291,25 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     // MARK: Internet send/receive (signaling node: app_packet + inbox)
 
-    private func sendAppPacket(toUserId: String, box: String) async {
-        guard let id = identity, let base = node?.baseURL, let room = node?.roomId else { return }
-        let payload: [String: Any] = ["type": "text", "senderId": id.userId, "fromPk": id.publicKeyHex, "box": box]
+    private func sendAppPacket(toUserId: String, box: String, pid: String) async {
+        guard let id = identity else { return }
+        await postAppPacket(toUserId: toUserId, payload: [
+            "type": "text", "senderId": id.userId, "fromPk": id.publicKeyHex, "box": box, "pid": pid
+        ])
+    }
+
+    /// Read receipt back to the sender (✓✓). Sent as a message_control app_packet.
+    private func sendReceipt(to userId: String, pid: String) {
+        guard let id = identity, node?.isConfigured == true else { return }
+        Task {
+            await self.postAppPacket(toUserId: userId, payload: [
+                "type": "message_control", "action": "read", "pid": pid, "senderId": id.userId
+            ])
+        }
+    }
+
+    private func postAppPacket(toUserId: String, payload: [String: Any]) async {
+        guard let base = node?.baseURL, let room = node?.roomId else { return }
         let body: [String: Any] = ["from": myPeerId, "to": "", "toUserId": toUserId,
                                    "roomId": room, "type": "app_packet", "payload": payload]
         var req = URLRequest(url: base.appendingPathComponent("signal"))
@@ -304,16 +368,35 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     }
 
     private func handleAppPacket(_ payload: [String: Any]) {
-        guard let id = identity,
-              (payload["type"] as? String) == "text",
-              let from = payload["senderId"] as? String, from != id.userId,
+        guard let id = identity, let from = payload["senderId"] as? String, from != id.userId else { return }
+        let type = payload["type"] as? String
+
+        // Read receipt from the recipient → mark our outgoing message ✓✓.
+        if type == "message_control", payload["action"] as? String == "read",
+           let pid = payload["pid"] as? String {
+            markRead(pid: pid, in: from)
+            return
+        }
+
+        guard type == "text",
               let fromPk = payload["fromPk"] as? String,
               let box = payload["box"] as? String,
               let key = Crypto.sharedKey(my: id.privateKey, theirHex: fromPk),
               let text = Crypto.open(box, key: key) else { return }
         upsert(userId: from, name: from, pk: fromPk, online: false)
-        append(ChatMessage(text: text, fromMe: false, time: Date()), to: from, preview: text, bumpUnread: true)
+        append(ChatMessage(pid: payload["pid"] as? String, text: text, fromMe: false, time: Date()),
+               to: from, preview: text, bumpUnread: true)
         save()
+    }
+
+    private func markRead(pid: String, in contactUserId: String) {
+        guard var arr = messages[contactUserId] else { return }
+        var changed = false
+        for i in arr.indices where arr[i].fromMe && arr[i].pid == pid && arr[i].read != true {
+            arr[i].read = true
+            changed = true
+        }
+        if changed { messages[contactUserId] = arr; save() }
     }
 
     // MARK: MeshTransportDelegate (called on main)
@@ -345,7 +428,8 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
                   let key = Crypto.sharedKey(my: id.privateKey, theirHex: fromPk),
                   let text = Crypto.open(box, key: key) else { return }
             upsert(userId: from, name: obj["fromName"] as? String ?? from, pk: fromPk, online: true)
-            append(ChatMessage(text: text, fromMe: false, time: Date()), to: from, preview: text, bumpUnread: true)
+            append(ChatMessage(pid: pid.isEmpty ? nil : pid, text: text, fromMe: false, time: Date()),
+                   to: from, preview: text, bumpUnread: true)
             save()
             return
         }

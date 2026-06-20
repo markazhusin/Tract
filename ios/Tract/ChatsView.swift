@@ -3,11 +3,16 @@ import SwiftUI
 struct ChatsView: View {
     @EnvironmentObject var mesh: MeshService
     @State private var showAdd = false
+    @State private var showQuick = false
 
-    private var meshStatus: (text: String, color: Color) {
-        if !mesh.running { return ("Меш выключен", Theme.muted) }
-        if mesh.peerCount > 0 { return ("В сети рядом: \(mesh.peerCount)", Theme.online) }
-        return ("Ищу устройства рядом…", Theme.warn)
+    private var nearbySubtitle: AnyView? {
+        guard mesh.peerCount > 0 else { return nil }   // no eternal "searching" — only real status
+        return AnyView(
+            HStack(spacing: 6) {
+                Circle().fill(Theme.online).frame(width: 7, height: 7)
+                Text("рядом: \(mesh.peerCount)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+            }
+        )
     }
 
     var body: some View {
@@ -36,6 +41,11 @@ struct ChatsView: View {
                                 ContactRow(contact: c)
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) { mesh.deleteContact(c.userId) } label: {
+                                    Label("Удалить чат", systemImage: "trash")
+                                }
+                            }
                             if c.id != mesh.contacts.last?.id {
                                 RowDivider(leading: 79)
                             }
@@ -48,21 +58,14 @@ struct ChatsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(
-                title: "Чаты",
-                subtitle: AnyView(
-                    HStack(spacing: 6) {
-                        Circle().fill(meshStatus.color).frame(width: 7, height: 7)
-                        Text(meshStatus.text).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
-                    }
-                )
-            ) {
+            ScreenHeader(title: "Чаты", subtitle: nearbySubtitle) {
                 HStack(spacing: 8) {
-                    CircleGlassButton(systemName: "shield.lefthalf.filled") {}
+                    CircleGlassButton(systemName: "shield.lefthalf.filled") { showQuick = true }
                     CircleGlassButton(systemName: "square.and.pencil") { showAdd = true }
                 }
             }
         }
         .sheet(isPresented: $showAdd) { AddContactView() }
+        .sheet(isPresented: $showQuick) { QuickSettingsView() }
     }
 }
