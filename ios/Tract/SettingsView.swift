@@ -13,7 +13,6 @@ struct SettingsView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var node: NodeConfig
     @State private var confirmDelete = false
-    @FocusState private var urlFocused: Bool
 
     private var id: Identity? { identity.identity }
 
@@ -36,7 +35,7 @@ struct SettingsView: View {
             TransportItem(icon: "phone.arrow.up.right.fill", color: Color(hex: "#5b9cf2"),
                           title: "Интернет-звонки (WebRTC)", status: net.1, state: net.0),
             TransportItem(icon: "antenna.radiowaves.left.and.right", color: Color(hex: "#5b9cf2"),
-                          title: "Сигналинг-узел", status: net.1, state: net.0),
+                          title: "Интернет (соединение)", status: net.1, state: net.0),
             TransportItem(icon: "globe", color: Color(hex: "#f2a35b"),
                           title: "Интернет-чаты + доставка офлайн", status: "В разработке", state: .dev),
             TransportItem(icon: "video.fill", color: Color(hex: "#c77dff"),
@@ -71,42 +70,25 @@ struct SettingsView: View {
                                 .padding(.horizontal, 6)
                         }
 
-                        // Signaling node — auto-discovered. The user never types a URL.
+                        // Network status — fully automatic; no server details shown.
                         VStack(alignment: .leading, spacing: 7) {
-                            sectionTitle("Сигналинг-узел (авто)")
+                            sectionTitle("Сеть")
                             GroupCard {
                                 HStack(spacing: 12) {
-                                    Image(systemName: "server.rack")
+                                    Image(systemName: node.isConfigured ? "wifi" : "wifi.slash")
                                         .font(.system(size: 16))
                                         .foregroundStyle(node.isConfigured ? Theme.online : Theme.muted)
                                         .frame(width: 24)
-                                    Text(node.statusText)
-                                        .font(.system(size: 15))
+                                    Text(node.isConfigured ? "Подключено" : node.statusText)
+                                        .font(.system(size: 16))
                                         .foregroundStyle(Theme.text)
-                                        .lineLimit(1)
                                     Spacer()
                                     if !node.isConfigured { ProgressView().controlSize(.small) }
                                 }
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                RowDivider(leading: 14)
-                                HStack(spacing: 12) {
-                                    Image(systemName: "slider.horizontal.3")
-                                        .font(.system(size: 16)).foregroundStyle(Theme.muted).frame(width: 24)
-                                    TextField("Свой узел вручную (необязательно)", text: $node.manualURL)
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Theme.text)
-                                        .textInputAutocapitalization(.never)
-                                        .autocorrectionDisabled()
-                                        .keyboardType(.URL)
-                                        .focused($urlFocused)
-                                        .submitLabel(.done)
-                                        .onSubmit { urlFocused = false }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 11)
+                                .padding(.vertical, 13)
                             }
-                            Text("Узел находится автоматически — адрес вводить не нужно. Достаточно, чтобы в сети был хотя бы один живой узел (Railway, чей-то ПК, узел в меше). Узел видит только зашифрованный сигналинг — медиа идёт P2P.")
+                            Text("Связь по интернету подключается автоматически — настраивать ничего не нужно. Содержимое сообщений и звонков идёт напрямую и зашифровано (E2E).")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(Theme.muted)
                                 .padding(.horizontal, 6)

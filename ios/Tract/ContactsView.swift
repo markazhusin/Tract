@@ -68,14 +68,25 @@ struct ContactRow: View {
 
 struct ContactsView: View {
     @EnvironmentObject var mesh: MeshService
+    @State private var showAdd = false
 
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if mesh.contacts.isEmpty {
-                EmptyHint(icon: "person.2",
-                          title: "Пока никого рядом",
-                          subtitle: "Контакты появятся автоматически, когда рядом включат другое устройство Tract. Интернет не нужен.")
+                VStack(spacing: 16) {
+                    EmptyHint(icon: "person.2",
+                              title: "Пока никого",
+                              subtitle: "Добавьте контакт по ID или дождитесь устройство рядом по мешу.")
+                    Button { showAdd = true } label: {
+                        Label("Добавить по ID", systemImage: "plus")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.onAccent)
+                            .padding(.horizontal, 18).padding(.vertical, 11)
+                            .background(Theme.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -93,8 +104,11 @@ struct ContactsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(title: "Контакты")
+            ScreenHeader(title: "Контакты") {
+                CircleGlassButton(systemName: "person.badge.plus") { showAdd = true }
+            }
         }
+        .sheet(isPresented: $showAdd) { AddContactView() }
     }
 }
 

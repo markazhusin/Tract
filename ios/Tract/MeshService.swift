@@ -101,6 +101,63 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     func messages(for contact: Contact) -> [ChatMessage] { messages[contact.userId] ?? [] }
 
+    /// Add a contact explicitly (by ID / QR). Public entry for AddContactView.
+    func addContact(userId: String, name: String, pubkeyHex: String, online: Bool) {
+        upsert(userId: userId, name: name, pk: pubkeyHex, online: online)
+    }
+
+    /// Resolve and add a contact by `@id` or a `tract:<id>:<pubkey>` link.
+    /// The link form works offline; a bare `@id` is looked up on the node.
+    func lookupContact(by raw: String, node: NodeConfig) async -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.lowercased().hasPrefix("tract:") {
+            let parts = trimmed.dropFirst(6).split(separator: ":")
+            if parts.count >= 2 {
+                let id = normalizeId(String(parts[0]))
+                let pk = String(parts[1])
+                await MainActor.run { self.addContact(userId: id, name: id, pubkeyHex: pk, online: false) }
+                return true
+            }
+        }
+
+        let id = normalizeId(trimmed)
+        guard id.count > 1, let base = node.baseURL else { return false }
+
+        if let pk = await fetchPubkey(base: base, path: "peers/by-user/\(id)", roomId: node.roomId) {
+            await MainActor.run { self.addContact(userId: id, name: id, pubkeyHex: pk, online: true) }
+            return true
+        }
+        if let pk = await fetchPubkey(base: base, path: "identity/\(id)", roomId: nil) {
+            await MainActor.run { self.addContact(userId: id, name: id, pubkeyHex: pk, online: false) }
+            return true
+        }
+        return false
+    }
+
+    private func normalizeId(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespaces).lowercased()
+        if !t.isEmpty, !t.hasPrefix("@") { t = "@" + t }
+        return t
+    }
+
+    private func fetchPubkey(base: URL, path: String, roomId: String?) async -> String? {
+        guard var comps = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false) else { return nil }
+        if let roomId { comps.queryItems = [URLQueryItem(name: "roomId", value: roomId)] }
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url); req.timeoutInterval = 8
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        for key in ["peer", "identity"] {
+            if let nested = obj[key] as? [String: Any], let pk = nested["publicKeyHex"] as? String, !pk.isEmpty { return pk }
+            if let blob = obj[key] as? String, let bd = blob.data(using: .utf8),
+               let bo = try? JSONSerialization.jsonObject(with: bd) as? [String: Any],
+               let pk = bo["publicKeyHex"] as? String, !pk.isEmpty { return pk }
+        }
+        if let pk = obj["publicKeyHex"] as? String, !pk.isEmpty { return pk }
+        return nil
+    }
+
     func markRead(_ userId: String) {
         guard let i = contacts.firstIndex(where: { $0.userId == userId }), contacts[i].unread != 0 else { return }
         contacts[i].unread = 0

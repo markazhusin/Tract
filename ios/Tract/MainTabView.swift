@@ -111,6 +111,7 @@ struct SearchSheet: View {
     @EnvironmentObject var mesh: MeshService
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var showAdd = false
 
     private var results: [Contact] {
         guard !query.isEmpty else { return mesh.contacts }
@@ -125,8 +126,18 @@ struct SearchSheet: View {
             ZStack {
                 Theme.bg.ignoresSafeArea()
                 if results.isEmpty {
-                    EmptyHint(icon: "magnifyingglass", title: "Ничего не найдено",
-                              subtitle: "Контакты появляются автоматически, когда рядом есть устройство Tract.")
+                    VStack(spacing: 16) {
+                        EmptyHint(icon: "magnifyingglass", title: "Ничего не найдено",
+                                  subtitle: "Добавьте контакт по его ID.")
+                        Button { showAdd = true } label: {
+                            Label("Добавить по ID", systemImage: "plus")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.onAccent)
+                                .padding(.horizontal, 18).padding(.vertical, 11)
+                                .background(Theme.accent, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
@@ -145,10 +156,15 @@ struct SearchSheet: View {
             .navigationTitle("Поиск")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .foregroundStyle(Theme.accent)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
+            .sheet(isPresented: $showAdd) { AddContactView() }
         }
         .preferredColorScheme(.dark)
     }

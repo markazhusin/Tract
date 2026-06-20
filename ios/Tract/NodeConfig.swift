@@ -8,7 +8,7 @@ import Combine
 /// grow the list by gossip; an optional manual override exists for power users.
 final class NodeConfig: ObservableObject {
     @Published private(set) var activeURL: URL?
-    @Published private(set) var statusText = "Поиск узла…"
+    @Published private(set) var statusText = "Поиск сети…"
 
     /// Optional advanced override. Empty by default — normal users ignore it.
     @Published var manualURL: String {
@@ -76,7 +76,7 @@ final class NodeConfig: ObservableObject {
         await MainActor.run {
             guard !healthy.isEmpty else {
                 self.activeURL = nil
-                self.statusText = "Узел не найден"
+                self.statusText = "Сеть недоступна"
                 return
             }
             // Prefer manual, then the current active (sticky), else lowest latency.
@@ -89,7 +89,7 @@ final class NodeConfig: ObservableObject {
                 pick = healthy.min(by: { $0.1 < $1.1 })!.0
             }
             self.activeURL = pick
-            self.statusText = "Подключён: \(pick.host ?? pick.absoluteString)"
+            self.statusText = "Подключено"
             self.learned = self.learned + [pick.absoluteString]
         }
     }
