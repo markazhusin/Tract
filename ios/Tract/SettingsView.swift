@@ -19,9 +19,11 @@ struct SettingsView: View {
     private var id: Identity? { identity.identity }
 
     private var meshState: (LinkState, String) {
-        if !mesh.running { return (.off, "Выключен") }
+        if !mesh.meshEnabled { return (.off, "Выключен") }
+        if mesh.meshError != nil { return (.error, "Нет доступа") }
+        if !mesh.running { return (.off, "Не запущен") }
         if mesh.peerCount > 0 { return (.on, "\(mesh.peerCount) рядом") }
-        return (.error, "Поиск…")
+        return (.dev, "Поиск…")
     }
 
     // Transport is now exactly two real links — everything else (mesh calls,
@@ -55,6 +57,18 @@ struct SettingsView: View {
                                              title: t.title, status: t.status, state: t.state)
                                 if idx != transports.count - 1 { RowDivider() }
                             }
+                        }
+                        if let err = mesh.meshError {
+                            fixItBanner(icon: "wifi.exclamationmark", text: err) {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
+                        }
+                        if !node.isConfigured {
+                            fixItBanner(icon: "antenna.radiowaves.left.and.right.slash",
+                                        text: "Узел сети не найден. Без запущенной ноды (tract-node рядом в той же Wi-Fi или вручную) интернет-звонки и доставка офлайн недоступны — работает только связь рядом по мешу.",
+                                        action: nil)
                         }
                         Text("Маршрут выбирается автоматически: рядом → меш (Wi-Fi/Bluetooth, без сервера); иначе → интернет P2P; не пробилось → ретранслятор. Звонки и чаты идут по тому же каналу, напрямую и зашифрованно (E2E). Меш работает, пока приложение открыто.")
                             .font(.system(size: 12.5))
@@ -181,6 +195,33 @@ struct SettingsView: View {
             Toggle("", isOn: isOn).labelsHidden().tint(Theme.accent)
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
+    }
+
+    @ViewBuilder
+    private func fixItBanner(icon: String, text: String, action: (() -> Void)?) -> some View {
+        let content = HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.warn)
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if action != nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.muted.opacity(0.6))
+            }
+        }
+        .padding(12)
+        .background(Theme.warn.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+        if let action {
+            Button(action: action) { content.contentShape(Rectangle()) }.buttonStyle(.plain)
+        } else {
+            content
+        }
     }
 
     private func sectionTitle(_ t: String) -> some View {

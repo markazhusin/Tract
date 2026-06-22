@@ -12,6 +12,10 @@ protocol MeshTransportDelegate: AnyObject {
     func mesh(_ mesh: MeshTransport, didDiscover userId: String, publicKeyHex: String, name: String)
     /// A peer just connected — a chance to flush the courier (store-and-forward) queue.
     func meshDidConnectPeer(_ mesh: MeshTransport)
+    /// Advertising/browsing could not start — almost always the iOS "Local Network"
+    /// permission being denied. Surfaced so the UI can tell the user to grant it
+    /// instead of silently spinning "Поиск…" forever.
+    func mesh(_ mesh: MeshTransport, didFailWith reason: String)
 }
 
 /// Infrastructure-less device-to-device transport built on MultipeerConnectivity,
@@ -79,6 +83,7 @@ final class MeshTransport: NSObject {
         br.delegate = self
         br.startBrowsingForPeers()
         browser = br
+        NSLog("[Mesh] start: advertising+browsing '\(Self.serviceType)' as '\(myPeerID.displayName)' uid=\(userId) stealth=\(stealth)")
     }
 
     func stop() {
@@ -113,6 +118,7 @@ final class MeshTransport: NSObject {
 
 extension MeshTransport: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        NSLog("[Mesh] peer \(peerID.displayName) state=\(state.rawValue) (0=notConn 1=conn… 2=connected)")
         notifyPeerCount()
         if state == .connected {
             DispatchQueue.main.async { self.delegate?.meshDidConnectPeer(self) }
@@ -135,24 +141,59 @@ extension MeshTransport: MCNearbyServiceAdvertiserDelegate {
                     invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         // Open mesh: auto-accept. Readability is enforced by E2E encryption, not
         // by who we connect to.
+        NSLog("[Mesh] invitation from \(peerID.displayName) → accept")
         invitationHandler(true, session)
+    }
+
+    func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
+        NSLog("[Mesh] ADVERTISE FAILED: \(error.localizedDescription)")
+        DispatchQueue.main.async {
+            self.delegate?.mesh(self, didFailWith: Self.explain(error))
+        }
     }
 }
 
 extension MeshTransport: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
+        NSLog("[Mesh] found peer \(peerID.displayName) info=\(info ?? [:])")
         if let uid = info?["uid"], !uid.isEmpty {
             let pk = info?["pk"] ?? ""
             let name = info?["name"] ?? peerID.displayName
             DispatchQueue.main.async { self.delegate?.mesh(self, didDiscover: uid, publicKeyHex: pk, name: name) }
         }
-        // Deterministic tie-break so two peers don't invite each other at once.
-        if myPeerID.displayName < peerID.displayName {
+        // Deterministic tie-break so the two peers don't invite each other at once.
+        // MUST NOT use MCPeerID.displayName: on iOS 16+ UIDevice.current.name is the
+        // generic "iPhone" for every device, so two phones tie and NEITHER invites →
+        // they never connect. Compare the app-level userId instead (globally unique).
+        // If the peer is in stealth (no advertised uid) we can't compare, so we just
+        // invite — better a possible double-invite than no connection.
+        let peerUid = info?["uid"] ?? ""
+        let shouldInvite = peerUid.isEmpty ? true : (userId < peerUid)
+        if shouldInvite {
+            NSLog("[Mesh] inviting \(peerID.displayName) (myUid=\(userId) peerUid=\(peerUid))")
             browser.invitePeer(peerID, to: session, withContext: nil, timeout: 15)
         }
     }
 
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
+        NSLog("[Mesh] lost peer \(peerID.displayName)")
         notifyPeerCount()
+    }
+
+    func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
+        NSLog("[Mesh] BROWSE FAILED: \(error.localizedDescription)")
+        DispatchQueue.main.async {
+            self.delegate?.mesh(self, didFailWith: Self.explain(error))
+        }
+    }
+
+    /// Turn an MC error into a short Russian hint. The common one by far is the
+    /// Local Network permission being off.
+    static func explain(_ error: Error) -> String {
+        let d = error.localizedDescription.lowercased()
+        if d.contains("local network") || d.contains("not permitted") || d.contains("permission") {
+            return "Нет доступа к локальной сети. Настройки iOS → Tract → «Локальная сеть» → включить."
+        }
+        return "Меш не запустился: \(error.localizedDescription)"
     }
 }

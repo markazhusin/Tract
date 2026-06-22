@@ -36,6 +36,14 @@ struct RootView: View {
         .onAppear {
             mesh.node = node
             call.configure(mesh: mesh, node: node)
+            // Cold launch with an already-restored account: Identity.init() loads it
+            // synchronously, so onChange(of:identity) never fires and the transport
+            // would otherwise never come up (mesh dead, calls offline). Bring it
+            // online here. (start/goOnline are safe to re-run on later changes.)
+            if let id = identity.identity, !mesh.running {
+                mesh.start(identity: id)
+                call.goOnline(id)
+            }
         }
         .onChange(of: identity.identity) { newValue in
             if let id = newValue {

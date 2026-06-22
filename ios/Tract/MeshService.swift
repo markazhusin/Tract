@@ -53,6 +53,9 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     @Published var messages: [String: [ChatMessage]] = [:]
     @Published var peerCount: Int = 0
     @Published var running: Bool = false
+    /// Non-nil when the mesh failed to start (almost always the iOS Local Network
+    /// permission being denied). Drives a fix-it hint in Settings.
+    @Published var meshError: String? = nil
 
     private let transport = MeshTransport()
     private(set) var identity: Identity?
@@ -121,6 +124,7 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     func start(identity: Identity) {
         self.identity = identity
         running = true
+        meshError = nil
         load(identity.userId)
         transport.stealth = stealth
         if meshEnabled {
@@ -472,8 +476,13 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     }
 
     func meshDidConnectPeer(_ mesh: MeshTransport) {
+        meshError = nil   // we clearly have local-network access — clear any stale hint
         courier.removeAll { Date().timeIntervalSince($0.at) > 600 }
         for item in courier { transport.broadcast(item.frame, reliable: true) }
+    }
+
+    func mesh(_ mesh: MeshTransport, didFailWith reason: String) {
+        meshError = reason
     }
 
     func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int) {
