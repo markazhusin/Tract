@@ -46,6 +46,29 @@ type Options struct {
 	DataDir string // storage dir; default "./data"
 	DistDir string // optional static web dir; "" disables static serving
 	Wipe    bool   // erase DataDir before start (one-shot reset)
+
+	// Embedded STUN/TURN relay — makes this node able to relay calls for peers
+	// behind NAT/CGNAT (LTE included). Needs a reachable public address.
+	TURN       bool   // enable the embedded relay
+	TURNPort   string // default "3478"
+	PublicHost string // public IP or DDNS hostname; "" = auto-discover via STUN
+	TURNUser   string // default "tract"
+	TURNSecret string // TURN password; "" = generated and logged
+
+	// Bonjour/mDNS LAN advertisement — nearby devices auto-discover this node.
+	Bonjour bool
+
+	// DHT federation — nodes find each other's users via DHTs so users on
+	// different nodes reach each other (rendezvous without a central server).
+	DHT          bool
+	DHTPort      string // private Kademlia UDP listen, default 8878
+	DHTBootstrap string // comma-separated UDP addresses of known private DHT nodes
+	AdvertiseURL string // override the http URL this node announces in the DHT
+
+	// Mainline DHT — the GLOBAL BitTorrent DHT (BEP-5/44) used as the primary
+	// rendezvous. On by default; bootstraps off public routers automatically.
+	MainlineOff       bool   // disable joining the global Mainline DHT
+	MainlineBootstrap string // extra comma-separated UDP bootstrap addrs (optional)
 }
 
 // Start runs the node and blocks until ctx is cancelled, then shuts down
@@ -105,6 +128,20 @@ func Start(ctx context.Context, opts Options) error {
 
 	setupRoutes(router)
 
+	if opts.TURN {
+		if err := startTURN(ctx, opts); err != nil {
+			log.Printf("[Tract TURN] relay disabled: %v", err)
+		}
+	}
+
+	if opts.Bonjour {
+		startBonjour(ctx, opts.Port)
+	}
+
+	if opts.DHT {
+		startDHT(ctx, opts)
+	}
+
 	if opts.DistDir != "" {
 		if _, statErr := os.Stat(opts.DistDir); statErr == nil {
 			router.Static("/assets", filepath.Join(opts.DistDir, "assets"))
@@ -163,6 +200,8 @@ func normalizeUserId(value string) string {
 func setupRoutes(router *gin.Engine) {
 	router.GET("/health", handleHealth)
 	router.GET("/ice", handleIceConfig)
+	router.GET("/getstream/config", handleGetStreamConfig)
+	router.GET("/getstream/token", handleGetStreamToken)
 	router.GET("/events/:peerId", handleSSE)
 
 	router.POST("/peer/register", handlePeerRegister)
@@ -170,6 +209,7 @@ func setupRoutes(router *gin.Engine) {
 	router.POST("/peer/unregister", handlePeerUnregister)
 	router.GET("/peers/discover", handlePeersDiscover)
 	router.GET("/peers/by-user/:userId", handlePeersByUser)
+	router.GET("/locate/:userId", handleLocate)
 
 	router.POST("/signal", handleSignal)
 	router.GET("/signal/poll/:peerId", handleSignalPoll)
@@ -205,6 +245,26 @@ func handleIceConfig(c *gin.Context) {
 	cred := strings.TrimSpace(os.Getenv("TURN_CREDENTIAL"))
 
 	iceServers := []gin.H{}
+
+	// Our own embedded relay (this node, if running TURN): a STUN entry first for
+	// direct (server-reflexive) candidates, then the TURN entry as relay fallback.
+	if urls, embUser, embPass, ok := relaySnapshot(); ok && len(urls) > 0 {
+		stunURLs := make([]string, 0, len(urls))
+		for _, u := range urls {
+			s := strings.TrimPrefix(u, "turn:")
+			if i := strings.IndexByte(s, '?'); i >= 0 {
+				s = s[:i]
+			}
+			stunURLs = append(stunURLs, "stun:"+s)
+		}
+		iceServers = append(iceServers, gin.H{"urls": stunURLs})
+		iceServers = append(iceServers, gin.H{
+			"urls":       urls,
+			"username":   embUser,
+			"credential": embPass,
+		})
+	}
+
 	if urlsRaw != "" {
 		urls := []string{}
 		for _, u := range strings.Split(urlsRaw, ",") {
@@ -221,6 +281,9 @@ func handleIceConfig(c *gin.Context) {
 			iceServers = append(iceServers, entry)
 		}
 	}
+
+	// Managed public relays (ExpressTURN) as a reliable last resort.
+	iceServers = append(iceServers, publicRelayICEServers()...)
 
 	c.JSON(200, gin.H{"iceServers": iceServers})
 }
@@ -314,6 +377,7 @@ func handlePeerRegister(c *gin.Context) {
 
 	peer := server.AnnouncePeer(req.RoomId, req.PeerId, req.UserId, req.DisplayName, req.AvatarData, req.HideOnline, req.DeviceId)
 	server.KickOtherPeers(req.UserId, req.PeerId, req.DeviceId)
+	announceUser(req.UserId)
 	c.JSON(200, gin.H{"status": "ok"})
 	_ = peer
 }
@@ -341,6 +405,7 @@ func handlePeerHeartbeat(c *gin.Context) {
 	}
 
 	if peerUserId := server.GetPeerUserId(req.RoomId, req.PeerId); peerUserId != "" {
+		announceUser(peerUserId)
 		normalized := normalizeUserId(peerUserId)
 		if storedAvatar, exists := store.GetAvatar(normalized); exists && storedAvatar != "" {
 			server.OverridePeerAvatar(req.RoomId, req.PeerId, storedAvatar)
@@ -379,6 +444,11 @@ func handlePeersByUser(c *gin.Context) {
 
 	peer := server.FindPeerByUserId(roomId, userId)
 	c.JSON(200, gin.H{"peer": peer})
+}
+
+// handleLocate returns, via the DHT, which node URLs a user is reachable through.
+func handleLocate(c *gin.Context) {
+	c.JSON(200, gin.H{"nodes": locateUser(c.Param("userId"))})
 }
 
 // ==================== SIGNALING ====================
@@ -482,6 +552,18 @@ func handleSignal(c *gin.Context) {
 			Payload: req.Payload,
 		}
 		server.SendSignal(req.RoomId, targetPeerId, signal)
+	} else if req.ToUserId != "" && c.GetHeader("X-Tract-Forwarded") == "" {
+		// Recipient isn't on this node — federate via DHT to the node holding them.
+		if fwd, err := json.Marshal(gin.H{
+			"from": req.From, "to": req.To, "toUserId": req.ToUserId,
+			"roomId": req.RoomId, "type": req.Type, "payload": req.Payload,
+		}); err == nil {
+			for _, nodeURL := range locateUser(req.ToUserId) {
+				if nodeURL != selfURL {
+					go forwardSignal(nodeURL, fwd)
+				}
+			}
+		}
 	}
 
 	c.JSON(200, gin.H{"status": "queued", "persisted": persisted})

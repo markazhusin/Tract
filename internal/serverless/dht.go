@@ -197,11 +197,11 @@ type Node struct {
 // listenAddr is what we bind ("127.0.0.1:0" for an ephemeral port); advertiseAddr,
 // if empty, defaults to the resolved local address.
 func NewNode(id NodeID, listenAddr, advertiseAddr string) (*Node, error) {
-	uaddr, err := net.ResolveUDPAddr("udp", listenAddr)
+	uaddr, err := net.ResolveUDPAddr("udp4", listenAddr)
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", uaddr)
+	conn, err := net.ListenUDP("udp4", uaddr)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +315,7 @@ func (n *Node) reply(to *net.UDPAddr, m message) {
 
 // rpc sends a request to addr and waits for the matching response.
 func (n *Node) rpc(addr string, m message) (message, error) {
-	uaddr, err := net.ResolveUDPAddr("udp", addr)
+	uaddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
 		return message{}, err
 	}

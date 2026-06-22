@@ -36,6 +36,8 @@ func (a *App) startup(ctx context.Context) {
 		if err := node.Start(ctx, node.Options{
 			Port:    a.nodePort,
 			DataDir: a.dataDir,
+			TURN:    true, // this desktop is also a media relay (call anywhere)
+			Bonjour: true, // and a LAN entry point nearby devices auto-discover
 		}); err != nil {
 			fmt.Println("[tract-desktop] embedded node stopped:", err)
 		}
