@@ -52,8 +52,16 @@ final class CallService: ObservableObject {
     weak var mesh: MeshService?
     var node: NodeConfig?
     private var signaling: SignalingClient?
+    /// Node-less internet rendezvous over the BitTorrent DHT — used when there is no
+    /// node to relay signaling (e.g. an iPhone on LTE with no Tract node nearby).
+    private var dht: DHTRendezvous { DHTRendezvous.shared }
 
     private var mode: CallMode = .mesh
+    /// For an internet call, whether signaling goes over the DHT (no node) vs a node.
+    private var internetViaDHT = false
+    private var callId = ""
+    private var remotePub = ""            // remote contact public key (for DHT E2E)
+    private var dhtOfferSDP: String?      // a received DHT offer, awaiting accept
     private var peerUserId: String?      // remote app userId
     private var remotePeerId: String?    // remote signaling peerId (internet)
     private var remoteName: String = ""
@@ -111,6 +119,11 @@ final class CallService: ObservableObject {
 
     func goOnline(_ identity: Identity) {
         loadHistory()
+        // Node-less DHT call signaling is always available (when no node, it's the
+        // ONLY internet path; when a node exists, the node path is preferred).
+        dht.onCallSignal = { [weak self] from, pub, type, payload in
+            self?.handleDHTSignal(from: from, pub: pub, type: type, payload: payload)
+        }
         guard let node else { return }
         let sig = SignalingClient(node: node, peerId: Self.stablePeerId)
         sig.onSignal = { [weak self] from, type, payload in self?.handleSignal(from: from, type: type, payload: payload) }
@@ -137,16 +150,117 @@ final class CallService: ObservableObject {
 
         if mesh?.reachability(of: contact.userId) == .localMesh {
             mode = .mesh
+            internetViaDHT = false
             phase = .outgoing(name: contact.displayName)
             sendMesh(action: "invite")
-        } else if let sig = signaling {
+        } else if let sig = signaling, node?.isConfigured == true {
             mode = .internet
+            internetViaDHT = false
             phase = .outgoing(name: contact.displayName)
             Task { await internetInvite(contact, sig) }
+        } else if dht.ready {
+            // No node — find each other and signal directly over the BitTorrent DHT.
+            mode = .internet
+            internetViaDHT = true
+            phase = .outgoing(name: contact.displayName)
+            startDHTOutgoing(contact)
         } else {
             phase = .ended(reason: "Нет связи")
             finishCallRecord()        // a placed call that never connected
             autoClearEnded()
+        }
+    }
+
+    // MARK: - DHT internet call (no node)
+
+    private func startDHTOutgoing(_ contact: Contact) {
+        callId = UUID().uuidString.prefix(12).lowercased()
+        remotePub = contact.publicKeyHex
+        peerUserId = contact.userId
+        startDHTMedia(asCaller: true)
+    }
+
+    /// Build/answer media for the DHT path (non-trickle: ICE baked into one SDP).
+    private func startDHTMedia(asCaller: Bool) {
+        AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard granted else { self.micDenied = true; return }
+                Task {
+                    let ice = await self.iceServersForDHT()
+                    await MainActor.run {
+                        self.ensureWebRTC(asCaller: asCaller)
+                        self.webrtc?.configure(iceServers: ice)
+                        if asCaller {
+                            self.webrtc?.createOfferFull { sdp in
+                                guard let sdp else { return }
+                                let toUser = self.peerUserId ?? ""
+                                let pub = self.remotePub
+                                let payload: [String: Any] = ["callId": self.callId, "fromName": self.myName,
+                                                              "sdp": sdp, "ts": Int64(Date().timeIntervalSince1970)]
+                                Task { await self.dht.sendCall(toUserId: toUser, toPub: pub, type: "offer", payload: payload) }
+                            }
+                        } else if let offer = self.dhtOfferSDP {
+                            self.webrtc?.setRemote(sdp: offer, type: .offer) {
+                                self.webrtc?.createAnswerFull { ans in
+                                    guard let ans else { return }
+                                    let toUser = self.peerUserId ?? ""
+                                    let pub = self.remotePub
+                                    let payload: [String: Any] = ["callId": self.callId, "sdp": ans,
+                                                                  "ts": Int64(Date().timeIntervalSince1970)]
+                                    Task { await self.dht.sendCall(toUserId: toUser, toPub: pub, type: "answer", payload: payload) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// ICE servers without a node: public STUN + the baked-in ExpressTURN relay.
+    private func iceServersForDHT() async -> [[String: Any]] {
+        [
+            ["urls": [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302",
+                "stun:stun.cloudflare.com:3478",
+                "stun:free.expressturn.com:3478",
+            ]],
+            ["urls": ["turn:free.expressturn.com:3478"],
+             "username": "000000002097466615",
+             "credential": "XbNNDiAEa142/ZiNAhE8/Ab3qTQ="],
+        ]
+    }
+
+    private func handleDHTSignal(from: String, pub: String, type: String, payload: [String: Any]) {
+        let cid = payload["callId"] as? String ?? ""
+        switch type {
+        case "offer":
+            guard !phase.isActive else { return }   // busy → ignore (no ringback over DHT)
+            guard let sdp = payload["sdp"] as? String else { return }
+            mode = .internet
+            internetViaDHT = true
+            callId = cid
+            peerUserId = from
+            remotePub = pub
+            remoteName = payload["fromName"] as? String ?? from
+            dhtOfferSDP = sdp
+            beginCallRecord(outgoing: false, userId: from, name: remoteName)
+            phase = .incoming(from: from, name: remoteName)
+            NotificationService.shared.notifyCall(from: remoteName)
+        case "answer":
+            guard internetViaDHT, cid == callId, case .outgoing = phase,
+                  let sdp = payload["sdp"] as? String else { return }
+            markCallConnected()
+            phase = .connected(name: remoteName)
+            webrtc?.setRemote(sdp: sdp, type: .answer) {}
+        case "call":   // control: decline / end
+            let action = payload["action"] as? String ?? ""
+            guard internetViaDHT, cid == callId || callId.isEmpty else { return }
+            if action == "decline", phase.isActive { teardown(reason: "Звонок отклонён") }
+            if action == "end", phase.isActive { teardown(reason: "") }
+        default: break
         }
     }
 
@@ -178,13 +292,22 @@ final class CallService: ObservableObject {
             startMeshAudio()
             startQKD(asAlice: false)   // answerer = Bob
         case .internet:
-            if let sig = signaling, let rpid = remotePeerId {
-                Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
-                                            payload: ["action": "accept"]) }
+            if internetViaDHT {
+                // Answerer over DHT: build the answer from the stored offer and
+                // publish it back to the caller's inbox. ICE is baked in (non-trickle).
+                startDHTMedia(asCaller: false)
+                phase = .connected(name: name)
+                // BB84 skipped on the DHT path (too many round-trips); the call is
+                // still E2E via DTLS-SRTP. See DHTRendezvous header.
+            } else {
+                if let sig = signaling, let rpid = remotePeerId {
+                    Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
+                                                payload: ["action": "accept"]) }
+                }
+                startInternetMedia(asCaller: false)
+                phase = .connected(name: name)
+                startQKD(asAlice: false)   // answerer = Bob
             }
-            startInternetMedia(asCaller: false)
-            phase = .connected(name: name)
-            startQKD(asAlice: false)   // answerer = Bob
         }
     }
 
@@ -209,7 +332,14 @@ final class CallService: ObservableObject {
         switch mode {
         case .mesh: sendMesh(action: action)
         case .internet:
-            if let sig = signaling, let rpid = remotePeerId {
+            if internetViaDHT {
+                let toUser = peerUserId ?? ""
+                let pub = remotePub
+                guard !toUser.isEmpty, !pub.isEmpty else { return }
+                let payload: [String: Any] = ["callId": callId, "action": action,
+                                              "ts": Int64(Date().timeIntervalSince1970)]
+                Task { await dht.sendCall(toUserId: toUser, toPub: pub, type: "control", payload: payload) }
+            } else if let sig = signaling, let rpid = remotePeerId {
                 Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
                                             payload: ["action": action]) }
             }
@@ -433,6 +563,10 @@ final class CallService: ObservableObject {
         finishCallRecord()
         peerUserId = nil
         remotePeerId = nil
+        internetViaDHT = false
+        callId = ""
+        remotePub = ""
+        dhtOfferSDP = nil
         muted = false
         if reason.isEmpty {
             phase = .idle

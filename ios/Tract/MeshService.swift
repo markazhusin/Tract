@@ -133,6 +133,32 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
                                   publicKeyHex: identity.publicKeyHex)
         }
         startInboxLoop()
+        wireDHT()
+    }
+
+    /// Feed the node-less DHT rendezvous our contacts (whose inboxes to poll) and
+    /// receive offline text it pulls from our own inbox.
+    private func wireDHT() {
+        let dht = DHTRendezvous.shared
+        dht.contactsProvider = { [weak self] in
+            (self?.contacts ?? []).map { (userId: $0.userId, pub: $0.publicKeyHex) }
+        }
+        dht.onTextMessage = { [weak self] from, fromPk, text, pid in
+            self?.receiveDHTText(from: from, fromPk: fromPk, text: text, pid: pid)
+        }
+    }
+
+    /// Inbound offline text pulled from our DHT inbox (already decrypted by the
+    /// rendezvous layer). Deduped on pid against what we've already shown.
+    private func receiveDHTText(from: String, fromPk: String, text: String, pid: String) {
+        if !pid.isEmpty {
+            if processedPacketIds.contains(pid) { return }
+            processedPacketIds.insert(pid)
+        }
+        upsert(userId: from, name: from, pk: fromPk, online: false)
+        append(ChatMessage(pid: pid.isEmpty ? nil : pid, text: text, fromMe: false, time: Date()),
+               to: from, preview: text, bumpUnread: true)
+        save()
     }
 
     func stop() {
@@ -149,10 +175,12 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     // MARK: Route (UI + send selection)
 
-    /// Nearby mesh peer → local mesh (best); otherwise internet if a node is up.
+    /// Nearby mesh peer → local mesh (best); otherwise internet — via a node if one
+    /// is configured, else node-lessly over the BitTorrent DHT (when it's ready).
     func route(for userId: String) -> RouteQuality {
         if running, let c = contacts.first(where: { $0.userId == userId }), c.online { return .localMesh }
         if node?.isConfigured == true { return .internetDirect }
+        if DHTRendezvous.shared.ready { return .internetDirect }
         return .offline
     }
 
@@ -278,9 +306,14 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
                 transport.broadcast(framed, reliable: true)
                 courierEnqueue(id: pid, frame: framed)   // carry it to peers that connect later
             }
-        } else {
+        } else if node?.isConfigured == true {
             let userId = contact.userId
             Task { await self.sendAppPacket(toUserId: userId, box: box, pid: pid) }
+        } else {
+            // No node — deliver into the recipient's DHT inbox (E2E, store-and-forward).
+            // sendText re-encrypts with the X25519 shared key itself, so pass plaintext.
+            let userId = contact.userId, pub = contact.publicKeyHex
+            Task { await DHTRendezvous.shared.sendText(toUserId: userId, toPub: pub, text: trimmed, pid: pid) }
         }
 
         append(ChatMessage(pid: pid, text: trimmed, fromMe: true, time: Date()), to: contact.userId, preview: trimmed, bumpUnread: false)

@@ -18,7 +18,13 @@ final class WebRTCCallEngine: NSObject, RTCPeerConnectionDelegate {
     var onConnected: (() -> Void)?
     var onClosed: (() -> Void)?
 
+    /// Fired once when ICE gathering completes — used by the non-trickle DHT path,
+    /// which bakes all candidates into a single SDP instead of trickling them.
+    private var gatheringDone: (() -> Void)?
+
     func setMuted(_ muted: Bool) { localAudioTrack?.isEnabled = !muted }
+
+    func localSDP() -> String? { pc?.localDescription?.sdp }
 
     func configure(iceServers: [[String: Any]]) {
         let servers: [RTCIceServer] = iceServers.compactMap { dict in
@@ -83,6 +89,38 @@ final class WebRTCCallEngine: NSObject, RTCPeerConnectionDelegate {
         }
     }
 
+    /// Non-trickle variants for the DHT path: create the SDP, set it local, then wait
+    /// for ICE gathering to COMPLETE (or `timeout`) so the returned SDP already carries
+    /// all candidates — no separate ICE channel needed (DHT round-trips are too slow
+    /// to trickle).
+    func createOfferFull(timeout: TimeInterval = 6, _ completion: @escaping (String?) -> Void) {
+        pc?.offer(for: offerAnswerConstraints) { [weak self] sdp, _ in
+            guard let self, let sdp else { completion(nil); return }
+            self.pc?.setLocalDescription(sdp) { _ in self.waitGathering(timeout: timeout, completion) }
+        }
+    }
+
+    func createAnswerFull(timeout: TimeInterval = 6, _ completion: @escaping (String?) -> Void) {
+        pc?.answer(for: offerAnswerConstraints) { [weak self] sdp, _ in
+            guard let self, let sdp else { completion(nil); return }
+            self.pc?.setLocalDescription(sdp) { _ in self.waitGathering(timeout: timeout, completion) }
+        }
+    }
+
+    private func waitGathering(timeout: TimeInterval, _ completion: @escaping (String?) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { completion(nil); return }
+            if self.pc?.iceGatheringState == .complete { completion(self.pc?.localDescription?.sdp); return }
+            var done = false
+            let finish = { [weak self] in
+                if done { return }; done = true
+                completion(self?.pc?.localDescription?.sdp)
+            }
+            self.gatheringDone = finish
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish() }
+        }
+    }
+
     func setRemote(sdp: String, type: RTCSdpType, _ completion: @escaping () -> Void) {
         let desc = RTCSessionDescription(type: type, sdp: sdp)
         pc?.setRemoteDescription(desc) { _ in completion() }
@@ -124,7 +162,12 @@ final class WebRTCCallEngine: NSObject, RTCPeerConnectionDelegate {
     func peerConnection(_ pc: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ pc: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ pc: RTCPeerConnection) {}
-    func peerConnection(_ pc: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    func peerConnection(_ pc: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        if newState == .complete {
+            let cb = gatheringDone; gatheringDone = nil
+            DispatchQueue.main.async { cb?() }
+        }
+    }
     func peerConnection(_ pc: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ pc: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
 }

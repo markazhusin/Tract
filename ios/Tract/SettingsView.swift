@@ -14,6 +14,7 @@ struct SettingsView: View {
     @EnvironmentObject var node: NodeConfig
     @EnvironmentObject var lock: AppLock
     @EnvironmentObject var notifications: NotificationService
+    @ObservedObject private var dht = DHTRendezvous.shared
     @State private var showPasscodeSetup = false
 
     private var id: Identity? { identity.identity }
@@ -31,7 +32,16 @@ struct SettingsView: View {
     // them as separate rows was the same status repeated. One row per actual link.
     private var transports: [TransportItem] {
         let m = meshState
-        let net: (LinkState, String) = node.isConfigured ? (.on, "Подключён") : (.dev, "Поиск узла…")
+        // Internet works two ways: through a configured node, or node-lessly over the
+        // BitTorrent DHT. Don't get stuck on "Поиск узла…" — the DHT path needs no node.
+        let net: (LinkState, String)
+        if node.isConfigured {
+            net = (.on, "Подключён (узел)")
+        } else if dht.ready {
+            net = (.on, "Через DHT")
+        } else {
+            net = (.dev, "Подключение…")
+        }
         return [
             TransportItem(icon: "dot.radiowaves.left.and.right", color: Theme.online,
                           title: "Рядом (Wi-Fi + Bluetooth)", status: m.1, state: m.0),

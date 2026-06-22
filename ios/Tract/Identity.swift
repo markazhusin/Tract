@@ -193,6 +193,18 @@ enum Crypto {
               let pt = try? AES.GCM.open(box, using: key) else { return nil }
         return String(data: pt, encoding: .utf8)
     }
+
+    /// Raw-bytes variants (DHT rendezvous payloads are binary, not base64 text).
+    static func sealData(_ data: Data, key: SymmetricKey) -> Data? {
+        guard let sealed = try? AES.GCM.seal(data, using: key) else { return nil }
+        return sealed.combined
+    }
+
+    static func openData(_ data: Data, key: SymmetricKey) -> Data? {
+        guard let box = try? AES.GCM.SealedBox(combined: data),
+              let pt = try? AES.GCM.open(box, using: key) else { return nil }
+        return pt
+    }
 }
 
 // MARK: - Keychain (stores the raw private key, hardware-encrypted, device-only)

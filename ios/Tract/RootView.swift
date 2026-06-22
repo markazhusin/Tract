@@ -43,15 +43,18 @@ struct RootView: View {
             if let id = identity.identity, !mesh.running {
                 mesh.start(identity: id)
                 call.goOnline(id)
+                DHTRendezvous.shared.start(identity: id)
             }
         }
         .onChange(of: identity.identity) { newValue in
             if let id = newValue {
                 mesh.start(identity: id)
                 call.goOnline(id)
+                DHTRendezvous.shared.start(identity: id)
             } else {
                 call.goOffline()
                 mesh.stop()
+                DHTRendezvous.shared.stop()
             }
         }
     }
