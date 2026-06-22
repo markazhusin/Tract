@@ -64,8 +64,15 @@ func runQuantum() {
 }
 
 func runSignal(args []string) {
+	// NOTE: this function now supports a "client" (node‑less) mode.
+	// In client mode we perform a one‑shot announce/discover using the
+	// serverless client helpers and then exit immediately. This is useful
+	// for scripts or when the device has only LTE and we want to avoid
+	// staying online as a full DHT node.
+
 	fs := flag.NewFlagSet("signal", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:0", "UDP listen address")
+	clientMode := fs.Bool("client", false, "perform one‑shot announce/discover without staying a DHT node")
 	bootstrap := fs.String("bootstrap", "", "address of an existing node to join")
 	rendezvous := fs.String("rendezvous", "", "shared secret both peers agree on out of band")
 	card := fs.String("card", "", "signaling card to announce under the rendezvous key")
@@ -94,6 +101,37 @@ func runSignal(args []string) {
 		select {}
 	}
 	key := serverless.RendezvousKey(*rendezvous)
+
+	// ---------------------------------------------------------------------
+	// Client‑less (one‑shot) mode
+	// ---------------------------------------------------------------------
+	if *clientMode {
+		if *bootstrap == "" && (*card != "" || *discover) {
+			fmt.Fprintln(os.Stderr, "client‑mode: -bootstrap required for announce/discover; proceeding with local only")
+		}
+		if *card != "" {
+			stored, err := serverless.AnnounceOneShot(key, []byte(*card), *bootstrap)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "announce error:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("client‑announce stored on %d remote node(s) (bootstrap %s)\n", stored, *bootstrap)
+		}
+		if *discover {
+			vals, err := serverless.DiscoverOneShot(key, *bootstrap)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "discover error:", err)
+				os.Exit(1)
+			}
+			fmt.Printf("client‑discover found %d card(s) at rendezvous %q:\n", len(vals), *rendezvous)
+			for _, v := range vals {
+				fmt.Printf("  - %s\n", string(v))
+			}
+		}
+		// Nothing to keep online – exit.
+		return
+	}
+
 
 	if *card != "" {
 		n := node.Announce(key, []byte(*card))
