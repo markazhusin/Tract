@@ -288,6 +288,7 @@ final class CallService: ObservableObject {
             remoteName = name
             beginCallRecord(outgoing: false, userId: from, name: name)
             phase = .incoming(from: from, name: name)
+            NotificationService.shared.notifyCall(from: name)
         case "accept":
             if case .outgoing = phase, mode == .mesh {
                 markCallConnected()
@@ -347,6 +348,7 @@ final class CallService: ObservableObject {
             remoteName = name
             beginCallRecord(outgoing: false, userId: peerUserId ?? "", name: name)
             phase = .incoming(from: fromPeerId, name: name)
+            NotificationService.shared.notifyCall(from: name)
         case "accept":
             if case .outgoing = phase, mode == .internet {
                 markCallConnected()

@@ -3,7 +3,6 @@ import SwiftUI
 struct ChatsView: View {
     @EnvironmentObject var mesh: MeshService
     @State private var showAdd = false
-    @State private var showQuick = false
 
     private var nearbySubtitle: AnyView? {
         guard mesh.peerCount > 0 else { return nil }   // no eternal "searching" — only real status
@@ -59,13 +58,9 @@ struct ChatsView: View {
         }
         .safeAreaInset(edge: .top) {
             ScreenHeader(title: "Чаты", subtitle: nearbySubtitle) {
-                HStack(spacing: 8) {
-                    CircleGlassButton(systemName: "shield.lefthalf.filled") { showQuick = true }
-                    CircleGlassButton(systemName: "square.and.pencil") { showAdd = true }
-                }
+                CircleGlassButton(systemName: "square.and.pencil") { showAdd = true }
             }
         }
         .sheet(isPresented: $showAdd) { AddContactView() }
-        .sheet(isPresented: $showQuick) { QuickSettingsView() }
     }
 }

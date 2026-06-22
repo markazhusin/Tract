@@ -543,12 +543,20 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     private func append(_ message: ChatMessage, to userId: String, preview: String, bumpUnread: Bool) {
         messages[userId, default: []].append(message)
+        var senderName = userId
         if let i = contacts.firstIndex(where: { $0.userId == userId }) {
             contacts[i].lastMessage = preview
             contacts[i].lastTime = message.time
             if bumpUnread { contacts[i].unread += 1 }
+            senderName = contacts[i].displayName
         }
         contacts.sort { ($0.lastTime ?? .distantPast) > ($1.lastTime ?? .distantPast) }
+        // Incoming message (not our own echo) → local notification, if enabled and
+        // we're not already on screen. Centralised here so mesh + internet paths
+        // both notify.
+        if bumpUnread && !message.fromMe {
+            NotificationService.shared.notifyMessage(from: senderName, text: preview)
+        }
     }
 
     // MARK: Persistence (per account)
