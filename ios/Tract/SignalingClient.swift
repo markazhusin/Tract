@@ -14,6 +14,12 @@ final class SignalingClient {
     private var registered = false
     private var lastBase: URL?
 
+    /// Backup signaling over GetStream — a reserve for reliability/load. Receives
+    /// in parallel always; used for sending when the node path fails. Bootstrapped
+    /// lazily from the node (the only holder of the Stream secret).
+    private var stream: StreamSignalingFallback?
+    private var streamReady = false
+
     /// Delivered on the main queue: (fromPeerId, type, payload). `payload` is a
     /// String for offer/answer SDP, or [String:Any] for ICE / app packets.
     var onSignal: ((String, String, Any) -> Void)?
@@ -29,8 +35,13 @@ final class SignalingClient {
         self.publicKeyHex = publicKeyHex
         guard !running else { return }
         running = true
+        stream = StreamSignalingFallback(node: node, myUserId: userId)
+        stream?.onSignal = { [weak self] from, type, payload in
+            self?.onSignal?(from, type, payload)
+        }
         Task { await self.heartbeatLoop() }
         Task { await self.pollLoop() }
+        Task { await self.streamLoop() }
     }
 
     func stop() {
@@ -94,30 +105,70 @@ final class SignalingClient {
 
     /// ICE servers from the node (TURN) plus public STUN for NAT discovery.
     func iceServers() async -> [[String: Any]] {
+        // A spread of public STUN servers maximizes server-reflexive (public-IP)
+        // candidate discovery for direct connections; more servers = more chances
+        // one is reachable. IPv6 direct paths use host candidates (no STUN needed).
         var servers: [[String: Any]] = [
-            ["urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]]
+            ["urls": [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302",
+                "stun:stun2.l.google.com:19302",
+                "stun:stun.cloudflare.com:3478",
+                "stun:free.expressturn.com:3478",
+            ]]
         ]
         if let base = node.baseURL, let data = try? await get(base.appendingPathComponent("ice")),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let list = obj["iceServers"] as? [[String: Any]] {
             servers.append(contentsOf: list)
         }
+        // ExpressTURN managed relay (last resort): also baked in client-side so a
+        // call can still traverse symmetric/CGNAT NAT even before /ice is reachable.
+        // A TURN credential is necessarily client-visible; this is a shared account,
+        // not a secret. The node's /ice returns the same entry — duplicates are
+        // harmless (WebRTC de-dupes ICE servers).
+        servers.append([
+            "urls": ["turn:free.expressturn.com:3478"],
+            "username": "000000002097466615",
+            "credential": "XbNNDiAEa142/ZiNAhE8/Ab3qTQ=",
+        ])
         return servers
     }
 
     // MARK: Signaling
 
     func sendSignal(toPeerId: String, toUserId: String, type: String, payload: Any) async {
-        try? await post("signal", [
-            "from": peerId, "to": toPeerId, "toUserId": toUserId,
-            "roomId": node.roomId, "type": type, "payload": payload
-        ])
+        // Remember the peer so its backup channel is polled for replies.
+        if !toUserId.isEmpty { stream?.register(peerUserId: toUserId) }
+        do {
+            try await post("signal", [
+                "from": peerId, "to": toPeerId, "toUserId": toUserId,
+                "roomId": node.roomId, "type": type, "payload": payload
+            ])
+        } catch {
+            // Node path failed — fall back to the GetStream reserve transport.
+            await stream?.send(toUserId: toUserId, fromPeerId: peerId, type: type, payload: payload)
+        }
     }
 
     private func pollLoop() async {
         while running {
             if node.baseURL != nil { await poll() }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+    }
+
+    /// Keep the GetStream reserve bootstrapped (token from the node) and poll the
+    /// backup channels for incoming signaling, so a peer whose own node is down can
+    /// still reach us. Best-effort; never blocks the primary path.
+    private func streamLoop() async {
+        while running {
+            if !streamReady, node.baseURL != nil {
+                await stream?.bootstrap()
+                streamReady = stream?.isEnabled ?? false
+            }
+            if streamReady { await stream?.pollAll() }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 

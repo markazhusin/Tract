@@ -28,7 +28,7 @@ struct MainTabView: View {
     @State private var showSearch = false
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             TabView(selection: $tab) {
                 ContactsView().tag(Tab.contacts)
                 CallsView().tag(Tab.calls)
@@ -42,9 +42,9 @@ struct MainTabView: View {
                 // refracts the content behind — no opaque backing.
                 BottomBar(tab: $tab, showSearch: $showSearch, unread: mesh.totalUnread)
             }
-            .navigationDestination(for: Contact.self) { ChatDetailView(contact: $0) }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationBarHidden(true)
         }
+        .navigationViewStyle(.stack)
         .sheet(isPresented: $showSearch) { SearchSheet() }
     }
 }
@@ -122,7 +122,7 @@ struct SearchSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             ZStack {
                 Theme.bg.ignoresSafeArea()
                 if results.isEmpty {
@@ -142,7 +142,7 @@ struct SearchSheet: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(results) { c in
-                                NavigationLink(value: c) { ContactRow(contact: c) }
+                                NavigationLink(destination: ChatDetailView(contact: c)) { ContactRow(contact: c) }
                                     .buttonStyle(.plain)
                             }
                         }
@@ -151,21 +151,21 @@ struct SearchSheet: View {
                     }
                 }
             }
-            .navigationDestination(for: Contact.self) { ChatDetailView(contact: $0) }
             .searchable(text: $query, prompt: "Поиск")
             .navigationTitle("Поиск")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button { showAdd = true } label: { Image(systemName: "plus") }
                         .foregroundStyle(Theme.accent)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
             .sheet(isPresented: $showAdd) { AddContactView() }
         }
+        .navigationViewStyle(.stack)
         .preferredColorScheme(.dark)
     }
 }

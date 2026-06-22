@@ -30,6 +30,7 @@
 	<array>
 		<string>_tract-mesh._tcp</string>
 		<string>_tract-mesh._udp</string>
+		<string>_tract._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Tract needs the camera for video calls.</string>

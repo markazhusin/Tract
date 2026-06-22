@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import CryptoKit
 import CommonCrypto
+import Security
 
 // MARK: - Hex helpers
 
@@ -62,7 +63,19 @@ final class IdentityStore: ObservableObject {
     private let key = "tract.identity.v2"
 
     init() {
-        // Locked on launch: an account may exist but requires the password to unlock.
+        restoreSession()
+    }
+
+    /// Auto-restore the unlocked session from the Keychain so a normal relaunch
+    /// (including after iOS evicted the backgrounded app) does NOT ask for the
+    /// main password. The optional AppLock passcode is the only gate. Deliberate
+    /// "Заблокировать" and account deletion clear the Keychain.
+    private func restoreSession() {
+        guard let raw = Keychain.load(),
+              let record = stored(),
+              let pk = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) else { return }
+        identity = Identity(privateKey: pk, publicKeyHex: record.publicKeyHex,
+                            userId: record.userId, displayName: record.displayName)
     }
 
     var hasAccount: Bool { UserDefaults.standard.data(forKey: key) != nil }
@@ -97,6 +110,7 @@ final class IdentityStore: ObservableObject {
             box: box.base64EncodedString()
         )
         UserDefaults.standard.set(try JSONEncoder().encode(record), forKey: key)
+        Keychain.save(pk.rawRepresentation)
         identity = Identity(privateKey: pk, publicKeyHex: pubHex, userId: userId, displayName: displayName)
     }
 
@@ -112,15 +126,22 @@ final class IdentityStore: ObservableObject {
             throw IdentityError.wrongPassword
         }
         let pk = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
+        Keychain.save(pk.rawRepresentation)
         identity = Identity(privateKey: pk, publicKeyHex: record.publicKeyHex, userId: record.userId, displayName: record.displayName)
     }
 
-    /// Lock the session (keeps the encrypted account on disk).
-    func lock() { identity = nil }
+    /// Deliberate lock / sign-out: clears the in-memory session AND the Keychain,
+    /// so the next launch asks for the main password again. (Normal backgrounding
+    /// keeps you signed in via restoreSession.)
+    func lock() {
+        Keychain.delete()
+        identity = nil
+    }
 
     /// Permanently remove the account from this device.
     func deleteAccount() {
         UserDefaults.standard.removeObject(forKey: key)
+        Keychain.delete()
         identity = nil
     }
 }
@@ -171,5 +192,41 @@ enum Crypto {
               let box = try? AES.GCM.SealedBox(combined: data),
               let pt = try? AES.GCM.open(box, using: key) else { return nil }
         return String(data: pt, encoding: .utf8)
+    }
+}
+
+// MARK: - Keychain (stores the raw private key, hardware-encrypted, device-only)
+
+enum Keychain {
+    private static let service = "com.mikkyhost.tract"
+    private static let account = "identity.privatekey.v2"
+
+    private static func baseQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    static func save(_ data: Data) {
+        SecItemDelete(baseQuery() as CFDictionary)
+        var add = baseQuery()
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func load() -> Data? {
+        var q = baseQuery()
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    static func delete() {
+        SecItemDelete(baseQuery() as CFDictionary)
     }
 }

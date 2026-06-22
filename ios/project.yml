@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.tract
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "16.0"   # runs fine on iOS 26; bump to "26.0" if you target it explicitly
+    iOS: "15.0"   # min supported; runs fine up to iOS 26
 settings:
   base:
     SWIFT_VERSION: "5.0"

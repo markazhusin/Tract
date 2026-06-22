@@ -13,6 +13,9 @@ struct Contact: Identifiable, Equatable, Hashable, Codable {
     var lastMessage: String
     var lastTime: Date?
     var unread: Int
+    /// When we last observed this contact online (mesh discovery). Drives the
+    /// "был(а) …" last-seen subtitle. Optional → old saved data decodes fine.
+    var lastSeen: Date? = nil
 }
 
 struct ChatMessage: Identifiable, Equatable, Codable {
@@ -43,6 +46,10 @@ enum LinkState {
 /// are persisted per-account so they survive restarts.
 final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     @Published var contacts: [Contact] = []
+    /// Devices seen nearby over the mesh. Being visible nearby is NOT being a
+    /// contact — a contact exists only once explicitly added (or once you've
+    /// actually exchanged a message). Not persisted; rebuilt from discovery.
+    @Published var nearby: [Contact] = []
     @Published var messages: [String: [ChatMessage]] = [:]
     @Published var peerCount: Int = 0
     @Published var running: Bool = false
@@ -130,6 +137,7 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         identity = nil
         running = false
         contacts = []
+        nearby = []
         messages = [:]
         peerCount = 0
         processedPacketIds = []
@@ -468,25 +476,68 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         for item in courier { transport.broadcast(item.frame, reliable: true) }
     }
 
-    func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int) { peerCount = count }
+    func mesh(_ mesh: MeshTransport, didChangePeerCount count: Int) {
+        peerCount = count
+        // No mesh peers left → no contact is reachable nearby. Flip them offline
+        // (their lastSeen keeps the last time we saw them) so the UI shows "был(а)".
+        if count == 0 {
+            var changed = false
+            for i in contacts.indices where contacts[i].online {
+                contacts[i].online = false
+                changed = true
+            }
+            if changed { save() }
+        }
+    }
 
     func mesh(_ mesh: MeshTransport, didDiscover userId: String, publicKeyHex: String, name: String) {
         guard userId != identity?.userId, !userId.isEmpty else { return }
-        upsert(userId: userId, name: name, pk: publicKeyHex, online: true)
+        // Already a contact → just refresh online/key. Otherwise it's a NEARBY
+        // device (visible, but not a contact until added).
+        if let i = contacts.firstIndex(where: { $0.userId == userId }) {
+            contacts[i].online = true
+            contacts[i].lastSeen = Date()
+            if !publicKeyHex.isEmpty { contacts[i].publicKeyHex = publicKeyHex }
+            if !name.isEmpty { contacts[i].displayName = name }
+            save()
+        } else {
+            upsertNearby(userId: userId, name: name, pk: publicKeyHex)
+        }
+    }
+
+    private func upsertNearby(userId: String, name: String, pk: String) {
+        if let i = nearby.firstIndex(where: { $0.userId == userId }) {
+            nearby[i].online = true
+            if !name.isEmpty { nearby[i].displayName = name }
+            if !pk.isEmpty { nearby[i].publicKeyHex = pk }
+        } else {
+            nearby.append(Contact(userId: userId, displayName: name.isEmpty ? userId : name,
+                                  publicKeyHex: pk, online: true,
+                                  lastMessage: "", lastTime: nil, unread: 0))
+        }
+    }
+
+    /// Explicitly turn a nearby device into a contact (контакт = добавлен).
+    func promoteToContact(_ userId: String) {
+        guard let n = nearby.first(where: { $0.userId == userId }) else { return }
+        upsert(userId: n.userId, name: n.displayName, pk: n.publicKeyHex, online: true)
         save()
     }
 
     // MARK: Mutators
 
     private func upsert(userId: String, name: String, pk: String, online: Bool) {
+        nearby.removeAll { $0.userId == userId }   // a contact is no longer merely "nearby"
         if let i = contacts.firstIndex(where: { $0.userId == userId }) {
             contacts[i].online = online
+            if online { contacts[i].lastSeen = Date() }
             if !name.isEmpty { contacts[i].displayName = name }
             if !pk.isEmpty { contacts[i].publicKeyHex = pk }
         } else {
             contacts.append(Contact(userId: userId, displayName: name.isEmpty ? userId : name,
                                     publicKeyHex: pk, online: online,
-                                    lastMessage: "", lastTime: nil, unread: 0))
+                                    lastMessage: "", lastTime: nil, unread: 0,
+                                    lastSeen: online ? Date() : nil))
         }
     }
 

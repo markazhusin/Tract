@@ -26,7 +26,10 @@ struct Avatar: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(color.gradient)
+            Circle().fill(
+                LinearGradient(colors: [color, color.opacity(0.72)],
+                               startPoint: .top, endPoint: .bottom)
+            )
             Text(initials)
                 .font(.system(size: size * 0.4, weight: .semibold))
                 .foregroundStyle(.white)

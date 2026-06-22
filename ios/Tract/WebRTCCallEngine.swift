@@ -32,7 +32,15 @@ final class WebRTCCallEngine: NSObject, RTCPeerConnectionDelegate {
         let config = RTCConfiguration()
         config.iceServers = servers
         config.sdpSemantics = .unifiedPlan
+        // Maximize DIRECT connections (relay only as last resort):
         config.continualGatheringPolicy = .gatherContinually
+        config.iceTransportPolicy = .all          // try host/srflx before relay
+        config.candidateNetworkPolicy = .all       // gather on Wi-Fi AND cellular (multi-homed)
+        config.bundlePolicy = .maxBundle
+        config.rtcpMuxPolicy = .require
+        config.iceCandidatePoolSize = 1            // pre-gather so candidates are ready
+        // IPv6 host candidates are gathered by default and trickled below — that's
+        // the path that connects two CGNAT phones directly when both have IPv6.
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)

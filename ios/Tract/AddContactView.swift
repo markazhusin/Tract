@@ -17,7 +17,7 @@ struct AddContactView: View {
     private var shareString: String { "tract:\(myId):\(myPk)" }
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             ZStack {
                 Theme.bg.ignoresSafeArea()
                 ScrollView {
@@ -87,11 +87,12 @@ struct AddContactView: View {
             .navigationTitle("Новый контакт")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
         }
+        .navigationViewStyle(.stack)
         .preferredColorScheme(.dark)
     }
 

@@ -13,7 +13,6 @@ struct SettingsView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var node: NodeConfig
     @EnvironmentObject var lock: AppLock
-    @State private var confirmDelete = false
     @State private var showPasscodeSetup = false
 
     private var id: Identity? { identity.identity }
@@ -36,16 +35,10 @@ struct SettingsView: View {
                           title: "Звонки по мешу", status: meshCall.1, state: meshCall.0),
             TransportItem(icon: "phone.arrow.up.right.fill", color: Color(hex: "#5b9cf2"),
                           title: "Интернет-звонки (WebRTC)", status: net.1, state: net.0),
+            TransportItem(icon: "globe", color: Color(hex: "#f2a35b"),
+                          title: "Интернет-чаты + доставка офлайн", status: net.1, state: net.0),
             TransportItem(icon: "antenna.radiowaves.left.and.right", color: Color(hex: "#5b9cf2"),
                           title: "Интернет (соединение)", status: net.1, state: net.0),
-            TransportItem(icon: "globe", color: Color(hex: "#f2a35b"),
-                          title: "Интернет-чаты + доставка офлайн", status: "В разработке", state: .dev),
-            TransportItem(icon: "video.fill", color: Color(hex: "#c77dff"),
-                          title: "Видеозвонки", status: "В разработке", state: .dev),
-            TransportItem(icon: "dot.radiowaves.right", color: Color(hex: "#c77dff"),
-                          title: "Bluetooth LE (дальний, прямой)", status: "В разработке", state: .dev),
-            TransportItem(icon: "bell.badge.fill", color: Color(hex: "#f2a35b"),
-                          title: "Пуш / звонок на закрытое прил.", status: "В разработке", state: .dev),
         ]
     }
 
@@ -120,28 +113,18 @@ struct SettingsView: View {
                                 .padding(.horizontal, 6)
                         }
 
-                        VStack(spacing: 0) {
-                            GroupCard {
+                        GroupCard {
+                            NavigationLink(destination: ProfileView()) {
                                 SettingsRow(icon: "person.crop.circle", iconColor: Color(hex: "#e56565"), title: "Мой профиль")
-                                RowDivider()
-                                SettingsRow(icon: "key.fill", iconColor: Color(hex: "#c77dff"), title: "Мой ID", value: id?.userId, showChevron: false)
                             }
+                            .buttonStyle(.plain)
+                            RowDivider()
+                            SettingsRow(icon: "key.fill", iconColor: Color(hex: "#c77dff"), title: "Мой ID", value: id?.userId, showChevron: false)
                         }
 
                         GroupCard {
                             Button { identity.lock() } label: {
                                 SettingsRow(icon: "lock.fill", iconColor: Theme.muted, title: "Заблокировать", showChevron: false)
-                            }.buttonStyle(.plain)
-                            RowDivider()
-                            Button { confirmDelete = true } label: {
-                                HStack {
-                                    Text("Удалить аккаунт")
-                                        .font(.system(size: 17))
-                                        .foregroundStyle(Theme.danger)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 14).padding(.vertical, 12)
-                                .contentShape(Rectangle())
                             }.buttonStyle(.plain)
                         }
 
@@ -154,12 +137,6 @@ struct SettingsView: View {
         .safeAreaInset(edge: .top) {
             ScreenHeader(title: "Настройки")
         }
-            .alert("Удалить аккаунт?", isPresented: $confirmDelete) {
-                Button("Отмена", role: .cancel) {}
-                Button("Удалить", role: .destructive) { identity.deleteAccount() }
-            } message: {
-                Text("Ключ будет стёрт с устройства без возможности восстановления.")
-            }
             .sheet(isPresented: $showPasscodeSetup) { PasscodeSetupView() }
     }
 

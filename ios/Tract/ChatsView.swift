@@ -23,7 +23,7 @@ struct ChatsView: View {
                 VStack(spacing: 16) {
                     EmptyHint(icon: "bubble.left.and.bubble.right",
                               title: "Нет чатов",
-                              subtitle: "Добавьте контакт по ID (кнопка ✎ вверху) или дождитесь устройство рядом по мешу.")
+                              subtitle: "Добавьте контакт по ID кнопкой вверху или дождитесь устройство рядом по мешу.")
                     Button { showAdd = true } label: {
                         Label("Добавить по ID", systemImage: "plus")
                             .font(.system(size: 15, weight: .semibold))
@@ -37,7 +37,7 @@ struct ChatsView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(mesh.contacts) { c in
-                            NavigationLink(value: c) {
+                            NavigationLink(destination: ChatDetailView(contact: c)) {
                                 ContactRow(contact: c)
                             }
                             .buttonStyle(.plain)

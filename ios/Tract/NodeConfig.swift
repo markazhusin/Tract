@@ -39,8 +39,18 @@ final class NodeConfig: ObservableObject {
     var baseURL: URL? { activeURL }
     var isConfigured: Bool { activeURL != nil }
 
+    private let bonjour = BonjourDiscovery()
+
     init() {
         manualURL = UserDefaults.standard.string(forKey: Self.manualKey) ?? ""
+        // Zero-config LAN discovery: any node advertising _tract._tcp nearby
+        // (e.g. the desktop app) is learned and probed automatically.
+        bonjour.onFound = { [weak self] url in
+            guard let self else { return }
+            if !self.learned.contains(url) { self.learned = self.learned + [url] }
+            Task { await self.resolve() }
+        }
+        bonjour.start()
         Task { await resolveLoop() }
     }
 

@@ -68,7 +68,7 @@ struct ChatDetailView: View {
                         .foregroundStyle(Theme.muted)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 14) {
                     Button { call.startCall(to: contact) } label: {
                         Image(systemName: "phone.fill")
@@ -80,8 +80,16 @@ struct ChatDetailView: View {
                 }
             }
         }
-        .toolbarBackground(Theme.bgDeep, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+    }
+
+    /// Growing multiline field on iOS 16+, plain field on iOS 15.
+    @ViewBuilder private var messageField: some View {
+        if #available(iOS 16.0, *) {
+            TextField("Сообщение", text: $draft, axis: .vertical)
+                .lineLimit(1...6)
+        } else {
+            TextField("Сообщение", text: $draft)
+        }
     }
 
     private var inputBar: some View {
@@ -99,11 +107,10 @@ struct ChatDetailView: View {
                     .foregroundStyle(Theme.muted)
                     .frame(width: 30, height: 40)
 
-                TextField("Сообщение", text: $draft, axis: .vertical)
+                messageField
                     .font(.system(size: 16.5))
                     .foregroundStyle(Theme.text)
                     .focused($inputFocused)
-                    .lineLimit(1...6)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(Theme.panelInput, in: RoundedRectangle(cornerRadius: 20, style: .continuous))

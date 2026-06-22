@@ -6,7 +6,7 @@ struct QuickSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             ZStack {
                 Theme.bg.ignoresSafeArea()
                 ScrollView {
@@ -29,11 +29,12 @@ struct QuickSettingsView: View {
             .navigationTitle("Приватность и сеть")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
         }
+        .navigationViewStyle(.stack)
         .preferredColorScheme(.dark)
     }
 

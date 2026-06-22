@@ -19,6 +19,23 @@ enum CallPhase: Equatable {
 
 enum CallMode { case mesh, internet }
 
+/// One entry in the call journal. Persisted per-account so history survives
+/// restarts. `userId` may be empty for an inbound internet call we couldn't map
+/// to a known contact (we only have the remote signaling peer + its name).
+struct CallRecord: Identifiable, Equatable, Codable {
+    var id = UUID()
+    let userId: String
+    let name: String
+    let outgoing: Bool        // true = we placed it
+    let connected: Bool       // true once the call was actually answered
+    let viaMesh: Bool         // true = local mesh, false = internet (WebRTC)
+    let time: Date            // when it started
+    var duration: TimeInterval = 0
+
+    /// Incoming + never answered = missed (shown in red, like Telegram).
+    var missed: Bool { !outgoing && !connected }
+}
+
 /// Calls with automatic transport: nearby → mesh (serverless, lowest latency);
 /// otherwise → internet P2P via WebRTC (Opus, echo-cancelled), signaled through
 /// the self-hosted node. The node only relays SDP/ICE — audio stays P2P/E2E.
@@ -26,6 +43,11 @@ final class CallService: ObservableObject {
     @Published var phase: CallPhase = .idle
     @Published var muted: Bool = false
     @Published var micDenied: Bool = false
+    /// True once the BB84 key-agreement ceremony for the live call has completed
+    /// without a QBER breach. A compromised exchange instead collapses the call.
+    @Published var qkdVerified: Bool = false
+    /// Call journal, newest first.
+    @Published var history: [CallRecord] = []
 
     weak var mesh: MeshService?
     var node: NodeConfig?
@@ -36,6 +58,13 @@ final class CallService: ObservableObject {
     private var remotePeerId: String?    // remote signaling peerId (internet)
     private var remoteName: String = ""
     private var cancellable: AnyCancellable?
+
+    // In-flight call metadata, folded into a CallRecord when the call concludes.
+    private var recStartedAt: Date?
+    private var recConnectedAt: Date?
+    private var recOutgoing = false
+    private var recPeerUserId = ""
+    private var recPeerName = ""
 
     // Mesh audio (AVAudioEngine)
     private let engine = AVAudioEngine()
@@ -48,6 +77,11 @@ final class CallService: ObservableObject {
 
     // Internet audio (WebRTC)
     private var webrtc: WebRTCCallEngine?
+
+    // BB84 quantum key-agreement ceremony for the live call. Runs over whatever
+    // signaling transport the call uses; a QBER breach collapses the call.
+    private var bb84: BB84Session?
+    private var sessionKey: Data?
 
     private var myId: String { mesh?.identity?.userId ?? "" }
     private var myName: String { mesh?.identity?.displayName ?? "" }
@@ -76,6 +110,7 @@ final class CallService: ObservableObject {
     }
 
     func goOnline(_ identity: Identity) {
+        loadHistory()
         guard let node else { return }
         let sig = SignalingClient(node: node, peerId: Self.stablePeerId)
         sig.onSignal = { [weak self] from, type, payload in self?.handleSignal(from: from, type: type, payload: payload) }
@@ -87,6 +122,8 @@ final class CallService: ObservableObject {
         signaling?.stop()
         signaling = nil
         if phase.isActive { teardown(reason: "") }
+        saveHistory()
+        history = []
     }
 
     // MARK: Outgoing
@@ -96,6 +133,7 @@ final class CallService: ObservableObject {
         peerUserId = contact.userId
         remoteName = contact.displayName
         remotePeerId = nil
+        beginCallRecord(outgoing: true, userId: contact.userId, name: contact.displayName)
 
         if mesh?.reachability(of: contact.userId) == .localMesh {
             mode = .mesh
@@ -107,6 +145,7 @@ final class CallService: ObservableObject {
             Task { await internetInvite(contact, sig) }
         } else {
             phase = .ended(reason: "Нет связи")
+            finishCallRecord()        // a placed call that never connected
             autoClearEnded()
         }
     }
@@ -114,7 +153,11 @@ final class CallService: ObservableObject {
     private func internetInvite(_ contact: Contact, _ sig: SignalingClient) async {
         guard let peer = await sig.findPeer(userId: contact.userId),
               let rpid = peer["peerId"] as? String else {
-            await MainActor.run { self.phase = .ended(reason: "Абонент не в сети"); self.autoClearEnded() }
+            await MainActor.run {
+                self.phase = .ended(reason: "Абонент не в сети")
+                self.finishCallRecord()
+                self.autoClearEnded()
+            }
             return
         }
         await MainActor.run { self.remotePeerId = rpid }
@@ -127,11 +170,13 @@ final class CallService: ObservableObject {
     func accept() {
         guard case .incoming(_, let name) = phase else { return }
         remoteName = name
+        markCallConnected()
         switch mode {
         case .mesh:
             sendMesh(action: "accept")
             phase = .connected(name: name)
             startMeshAudio()
+            startQKD(asAlice: false)   // answerer = Bob
         case .internet:
             if let sig = signaling, let rpid = remotePeerId {
                 Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
@@ -139,6 +184,7 @@ final class CallService: ObservableObject {
             }
             startInternetMedia(asCaller: false)
             phase = .connected(name: name)
+            startQKD(asAlice: false)   // answerer = Bob
         }
     }
 
@@ -176,9 +222,59 @@ final class CallService: ObservableObject {
         mesh?.sendControl(dict)
     }
 
+    // MARK: BB84 quantum key agreement
+
+    /// Begin the BB84 ceremony for the connected call. The party that placed the
+    /// call is Alice (prepares qubits); the answerer is Bob (measures them). On
+    /// success both hold an identical session key; on a QBER breach the call
+    /// collapses on both ends — "звонок рассыпается" if intercepted.
+    private func startQKD(asAlice: Bool) {
+        sessionKey = nil
+        qkdVerified = false
+        let session = BB84Session(role: asAlice ? .alice : .bob)
+        session.send = { [weak self] msg in self?.sendQKD(msg) }
+        session.onSuccess = { [weak self] key in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.sessionKey = key
+                self.qkdVerified = true
+            }
+        }
+        session.onAbort = { [weak self] reason in
+            DispatchQueue.main.async {
+                guard let self, self.phase.isActive else { return }
+                self.teardown(reason: reason.isEmpty ? "Канал скомпрометирован" : reason)
+            }
+        }
+        bb84 = session
+        if asAlice { session.start() }
+    }
+
+    /// Route one BB84 ceremony message over the active transport as type "qkd".
+    private func sendQKD(_ msg: [String: Any]) {
+        switch mode {
+        case .internet:
+            if let sig = signaling, let rpid = remotePeerId {
+                Task { await sig.sendSignal(toPeerId: rpid, toUserId: self.peerUserId ?? "", type: "qkd", payload: msg) }
+            }
+        case .mesh:
+            var dict: [String: Any] = ["t": "qkd", "from": myId, "d": msg]
+            if let to = peerUserId { dict["to"] = to }
+            mesh?.sendControl(dict)
+        }
+    }
+
     // MARK: Mesh signaling in
 
     private func handleMeshControl(_ payload: Data, from peer: String) {
+        // BB84 ceremony frames carry arrays/ints, so they're parsed separately from
+        // the all-string call-control frames below.
+        if let any = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+           (any["t"] as? String) == "qkd" {
+            if let to = any["to"] as? String, !to.isEmpty, to != myId { return }
+            if let d = any["d"] as? [String: Any] { bb84?.handle(d) }
+            return
+        }
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: String],
               let action = obj["action"], let from = obj["from"] else { return }
         if let to = obj["to"], !to.isEmpty, to != myId { return }
@@ -190,11 +286,14 @@ final class CallService: ObservableObject {
             mode = .mesh
             peerUserId = from
             remoteName = name
+            beginCallRecord(outgoing: false, userId: from, name: name)
             phase = .incoming(from: from, name: name)
         case "accept":
             if case .outgoing = phase, mode == .mesh {
+                markCallConnected()
                 phase = .connected(name: name)
                 startMeshAudio()
+                startQKD(asAlice: true)   // caller = Alice
             }
         case "decline":
             if phase.isActive { teardown(reason: "Звонок отклонён") }
@@ -226,6 +325,9 @@ final class CallService: ObservableObject {
         case "ice":
             guard let dict = payload as? [String: Any] else { return }
             webrtc?.add(candidate: dict)
+        case "qkd":
+            guard let dict = payload as? [String: Any] else { return }
+            bb84?.handle(dict)
         default:
             break
         }
@@ -243,11 +345,14 @@ final class CallService: ObservableObject {
             mode = .internet
             remotePeerId = fromPeerId
             remoteName = name
+            beginCallRecord(outgoing: false, userId: peerUserId ?? "", name: name)
             phase = .incoming(from: fromPeerId, name: name)
         case "accept":
             if case .outgoing = phase, mode == .internet {
+                markCallConnected()
                 phase = .connected(name: remoteName)
                 startInternetMedia(asCaller: true)
+                startQKD(asAlice: true)   // caller = Alice
             }
         case "decline":
             if phase.isActive { teardown(reason: "Звонок отклонён") }
@@ -320,6 +425,10 @@ final class CallService: ObservableObject {
         stopMeshAudio()
         webrtc?.close()
         webrtc = nil
+        bb84 = nil
+        sessionKey = nil
+        qkdVerified = false
+        finishCallRecord()
         peerUserId = nil
         remotePeerId = nil
         muted = false
@@ -329,6 +438,67 @@ final class CallService: ObservableObject {
             phase = .ended(reason: reason)
             autoClearEnded()
         }
+    }
+
+    // MARK: Call journal
+
+    private func beginCallRecord(outgoing: Bool, userId: String, name: String) {
+        recStartedAt = Date()
+        recConnectedAt = nil
+        recOutgoing = outgoing
+        recPeerUserId = userId
+        recPeerName = name
+    }
+
+    private func markCallConnected() {
+        if recConnectedAt == nil { recConnectedAt = Date() }
+    }
+
+    /// Fold the in-flight call into a journal entry. Guarded so the many teardown
+    /// paths (and explicit failures) record exactly once.
+    private func finishCallRecord() {
+        guard let started = recStartedAt else { return }
+        let connected = recConnectedAt != nil
+        let duration = recConnectedAt.map { Date().timeIntervalSince($0) } ?? 0
+        let rec = CallRecord(userId: recPeerUserId,
+                             name: recPeerName.isEmpty ? recPeerUserId : recPeerName,
+                             outgoing: recOutgoing, connected: connected,
+                             viaMesh: mode == .mesh, time: started,
+                             duration: max(0, duration))
+        recStartedAt = nil
+        recConnectedAt = nil
+        history.insert(rec, at: 0)
+        if history.count > 300 { history.removeLast(history.count - 300) }
+        saveHistory()
+    }
+
+    func deleteHistory(ids: Set<UUID>) {
+        history.removeAll { ids.contains($0.id) }
+        saveHistory()
+    }
+
+    func clearHistory() {
+        history = []
+        saveHistory()
+    }
+
+    private func historyURL() -> URL? {
+        guard let uid = mesh?.identity?.userId, !uid.isEmpty else { return nil }
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let safe = uid.replacingOccurrences(of: "@", with: "at-")
+        return docs.appendingPathComponent("calls-\(safe).json")
+    }
+
+    private func saveHistory() {
+        guard let url = historyURL() else { return }
+        if let data = try? JSONEncoder().encode(history) { try? data.write(to: url) }
+    }
+
+    private func loadHistory() {
+        guard let url = historyURL(),
+              let data = try? Data(contentsOf: url),
+              let arr = try? JSONDecoder().decode([CallRecord].self, from: data) else { return }
+        history = arr
     }
 
     private func autoClearEnded() {
