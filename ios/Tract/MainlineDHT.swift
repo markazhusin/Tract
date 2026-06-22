@@ -322,52 +322,86 @@ final class MainlineDHT {
         let target = Self.mutableTarget(pub: pub, salt: salt)
         guard let sig = try? priv.signature(for: Self.signBuffer(salt: salt, seq: seq, v: value)) else { return 0 }
 
-        struct Tok { let c: Contact; let token: Data }
-        // Collect write tokens from the nodes closest to the target. On a cold
-        // routing table the first lookup can come back thin (or empty), so warm
-        // up and retry a couple of times rather than failing the publish outright
-        // — that thin-first-lookup case is the "stuck connecting" trap.
-        var toks: [Tok] = []
-        for attempt in 0..<3 {
-            let nodes = iterativeFind(target)
-            for c in nodes {
-                guard let r = query(c, "get", ["target": .bytes(target)]) else { continue }
-                if let t = r["token"]?.dataValue, !t.isEmpty,
-                   !toks.contains(where: { $0.c.id == c.id }) {
-                    toks.append(Tok(c: c, token: t))
-                }
-                absorbNodes(r)
-            }
-            if toks.count >= 3 || attempt == 2 { break }
+        // Collect write tokens DURING the lookup: query the converging shortlist
+        // with "get" (every well-behaved node answers with a token), accumulating
+        // token-holders across ALL rounds — not just the final neighborhood. This
+        // is what makes a cold-table publish reliable: re-querying only the last 8
+        // nodes (some slow/unresponsive) was the "stuck connecting" trap.
+        //
+        // A single convergence pass can occasionally come back with no tokens
+        // (every queried node slow/unresponsive that cycle — e.g. a router briefly
+        // rate-limiting a freshly-joined node). Retry the whole pass a couple of
+        // times rather than reporting a failed publish; each retry re-densifies the
+        // neighborhood, so the next one usually lands.
+        var holders = collectTokens(target)
+        for _ in 0..<3 where holders.isEmpty {
+            holders = collectTokens(target)
         }
-
         var stored = 0
-        for t in toks {
+        for h in holders.prefix(Self.k) {
             var args: [String: Bencode] = [
-                "token": .bytes(t.token),
+                "token": .bytes(h.token),
                 "k": .bytes(pub),
                 "sig": .bytes(Data(sig)),
                 "seq": .int(seq),
                 "v": .bytes(value),
             ]
             if !salt.isEmpty { args["salt"] = .bytes(salt) }
-            if query(t.c, "put", args) != nil { stored += 1 }
+            if query(h.c, "put", args) != nil { stored += 1 }
         }
         return stored
+    }
+
+    /// Iterative lookup using "get" so every responding node yields a write token.
+    /// Returns the token-holders we touched, closest-to-target first.
+    private func collectTokens(_ target: Data) -> [(c: Contact, token: Data)] {
+        // Same target-seeded densification as get(): converge to the true-closest
+        // neighborhood so the value lands where a reader will look for it.
+        var shortlist = Self.mergeClosest(closest(target, Self.k), iterativeFind(target), target, Self.k)
+        var queried = Set<Data>()
+        var tokens: [Data: (c: Contact, token: Data)] = [:]   // keyed by node id
+        for _ in 0..<8 {
+            let batch = Self.pickUnqueried(shortlist, queried, Self.alpha)
+            if batch.isEmpty { break }
+            let group = DispatchGroup()
+            let lock = NSLock()
+            var more: [Contact] = []
+            for c in batch {
+                queried.insert(c.id)
+                group.enter()
+                queue.async {
+                    defer { group.leave() }
+                    guard let r = self.query(c, "get", ["target": .bytes(target)]) else { return }
+                    let cs = self.absorbNodes(r)
+                    lock.lock()
+                    more.append(contentsOf: cs)
+                    if let t = r["token"]?.dataValue, !t.isEmpty { tokens[c.id] = (c, t) }
+                    lock.unlock()
+                }
+            }
+            group.wait()
+            shortlist = Self.mergeClosest(shortlist, more, target, Self.k)
+        }
+        return tokens.values.sorted { Self.xorLess($0.c.id, $1.c.id, target) }
     }
 
     /// Fetch the highest-seq signed value under the keypair (and salt). The signature
     /// is verified before returning. BLOCKS.
     func get(pub: Data, salt: Data) -> (value: Data, seq: Int64)? {
         let target = Self.mutableTarget(pub: pub, salt: salt)
-        var shortlist = closest(target, Self.k)
-        if shortlist.isEmpty { shortlist = iterativeFind(target) }
+        // Densify the routing neighborhood around THIS target first (find_node),
+        // then merge with whatever the table already had. On a cold/sparse table
+        // the plain `closest()` set is only "closest we happen to know" — not the
+        // true-closest — so a reader converges to a different node set than the
+        // writer did and misses the value. A target-seeded lookup makes both
+        // sides land on the same neighborhood.
+        var shortlist = Self.mergeClosest(closest(target, Self.k), iterativeFind(target), target, Self.k)
         guard let verifyKey = try? Curve25519.Signing.PublicKey(rawRepresentation: pub) else { return nil }
 
         var queried = Set<Data>()
         var best: Data?
         var bestSeq: Int64 = -1
-        for _ in 0..<4 {
+        for _ in 0..<8 {
             let batch = Self.pickUnqueried(shortlist, queried, Self.alpha)
             if batch.isEmpty { break }
             let group = DispatchGroup()
