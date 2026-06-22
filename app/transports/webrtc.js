@@ -1,4 +1,5 @@
 import { initSignaling } from '../core/local-signaling.js';
+import { BB84Session } from '../core/bb84.js';
 
 const DISCOVERY_INTERVAL = 1000;
 
@@ -82,6 +83,7 @@ export class WebRTCTransport {
   onPeerOfflineCallback = null;
   onPeerConnectedCallback = null;
   onRemoteAudioStreamCallback = null;
+  onCallCompromisedCallback = null;
   discoveryTimer = null;
 
   constructor(myPeerId, options) {
@@ -110,6 +112,11 @@ export class WebRTCTransport {
 
     this.signaling.onSignal('ice', ({ from, payload }) => {
       this.handleIceCandidate(from, payload);
+    });
+
+    // BB84 quantum key-agreement ceremony frames.
+    this.signaling.onSignal('qkd', ({ from, payload }) => {
+      this.peers.get(from)?.qkd?.handle(payload);
     });
   }
 
@@ -245,6 +252,7 @@ export class WebRTCTransport {
       console.log('[call] connection state', peerId, '→', pc.connectionState);
       if (pc.connectionState === 'connected') {
         peerState.connected = true;
+        this.startQKD(peerId, peerState);
       }
 
       if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
@@ -253,6 +261,26 @@ export class WebRTCTransport {
     };
 
     return peerState;
+  }
+
+  // Begin the BB84 ceremony for a freshly connected peer. The connection initiator
+  // (lexicographically larger peerId — see shouldInitiateConnection) plays Alice and
+  // prepares the qubits; the other side plays Bob. A QBER breach collapses the call.
+  startQKD(peerId, peerState) {
+    if (peerState.qkd) return;             // already running for this peer
+    const asAlice = this.myPeerId > peerId;
+    const session = new BB84Session(
+      asAlice ? 'alice' : 'bob',
+      (msg) => this.signaling.sendSignal(peerId, 'qkd', msg).catch(() => {}),
+      (key) => { peerState.sessionKey = key; peerState.qkdVerified = true; },
+      (reason) => {
+        if (!this.peers.has(peerId)) return;
+        this.onCallCompromisedCallback?.(peerId, reason);
+        this.closePeer(peerId);            // звонок рассыпается при компрометации
+      }
+    );
+    peerState.qkd = session;
+    if (asAlice) session.start();
   }
 
   // Kept for API compatibility: ensure a peer connection exists so an incoming
@@ -713,6 +741,12 @@ export class WebRTCTransport {
 
   onPeerConnected(callback) {
     this.onPeerConnectedCallback = callback;
+  }
+
+  // Fired when a peer's BB84 ceremony detects tampering (QBER over threshold); the
+  // call to that peer is torn down right after.
+  onCallCompromised(callback) {
+    this.onCallCompromisedCallback = callback;
   }
 
   onRemoteAudioStream(callback) {
