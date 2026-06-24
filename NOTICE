@@ -1,0 +1,20 @@
+Tract — a local-first, serverless P2P messenger
+611protocol — the layered encryption stack (quantum tamper-evidence over classical E2E)
+
+Copyright (C) 2026 Mark Azhusin (611marco)
+
+Author and originator of the Tract concept and the 611protocol:
+  Mark Azhusin (611marco)
+  Telegram:  @marco_611
+  Channel:   @tractmesh
+
+This software is licensed under the GNU Affero General Public License v3.0
+(see the LICENSE file). The AGPL is used here as a transitional license: it
+keeps Tract open and credited while it grows. In keeping with the project's
+manifest — a network that belongs to the people who use it, with no owner —
+Tract is intended to later be released freely, without a license at all
+(dedicated to the public domain), once it can stand on its own.
+
+The names "Tract" and "611protocol" identify this project and its author.
+
+With love, from Infinity, Milky Way, Earth. ❤️

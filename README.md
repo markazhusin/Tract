@@ -378,24 +378,24 @@ BT / Wi-Fi, so each device seeds the next.
 
 ## Support development
 
-Tract is built by **one developer, with no funding** — and, bluntly, no money to put
-it on the App Store or to buy the LoRa antennas, gateways, and relay hardware the next
-phases need. If Tract is useful to you, or you want this kind of infrastructure to
-exist, please consider supporting it. **Help with development is just as welcome as
-money** — see the code, open issues/PRs, port transports, test on devices.
+Tract is built by **one person, with no funding** — no money to put it on the App
+Store, and none for the LoRa antennas, gateways, and relay hardware the next phases
+need. Honestly: right now I'd be glad just to be able to buy food. If Tract is useful
+to you, or you want this kind of infrastructure to exist, any support helps me keep
+building it. **Help with development is just as welcome as money** — read the code,
+open issues/PRs, port transports, test on devices.
 
-Donations (crypto is borderless and needs no account or platform approval — fill in
-your own addresses):
+**Donate (crypto):**
 
 | Method | Address |
 |---|---|
-| **Monero (XMR)** — privacy-preserving | `<your-xmr-address>` |
-| **Bitcoin (BTC)** | `<your-btc-address>` |
-| **USDT (TRC-20)** | `<your-usdt-trc20-address>` |
-| **TON** | `<your-ton-address>` |
+| **Monero (XMR)** | `XMR_ADDRESS` |
+| **USDT (TRC-20)** | `USDT_TRC20_ADDRESS` |
+| **TON** | `TON_ADDRESS` |
+| **Bitcoin (BTC)** | `BTC_ADDRESS` |
 
-> Fiat donation platforms (GitHub Sponsors, Ko-fi, Liberapay, Buy Me a Coffee) vary in
-> regional availability; Liberapay and crypto are the most widely reachable.
+**Reach me:** Telegram [@marco_611](https://t.me/marco_611) · channel
+[@tractmesh](https://t.me/tractmesh)
 
 ## Status
 
@@ -416,3 +416,21 @@ through symmetric NAT runs into the mandatory TURN relay (solved by *many of you
 own* relays); node federation (so different nodes serve each other's users — the
 `locateUser` DHT primitive already exists); video calls; long-range Bluetooth-LE; a
 fresh web client on the native protocol.
+
+---
+
+## License & authorship
+
+Tract and the **611protocol** were created by **Mark Azhusin** (`611marco`).
+
+Licensed under the **GNU Affero General Public License v3.0** (see [`LICENSE`](LICENSE)
+and [`NOTICE`](NOTICE)). The AGPL is **transitional** — it keeps Tract open and
+credited while it grows; in keeping with the project's manifest (a network that
+belongs to the people who use it, with no owner), Tract is intended to **later be
+released freely, without a license at all** (public domain), once it can stand on its
+own.
+
+The names **Tract** and **611protocol** identify this project and its author.
+
+*With love, from Infinity, Milky Way, Earth.* ❤️
+
