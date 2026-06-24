@@ -405,8 +405,9 @@ into an archipelago, then a continent.
 - **Phase 1 — Local density.** Beachheads where motivation meets a tolerant
   environment: weak-connectivity areas, privacy-minded communities, campuses,
   festivals, makers, disaster zones. Goal: critical mass on a small footprint so the
-  mesh sustains itself. Distribute via App Store / Play for reach, plus an Android
-  APK and F-Droid for a block-resistant branch.
+  mesh sustains itself. **Ship a native Android client** (the protocol is shared with
+  iOS and the desktop), and distribute via App Store / Play for reach, plus a direct
+  Android APK and F-Droid for a block-resistant branch.
 - **Phase 2 — Hardware backbone.** Phones give intermittent coverage; always-on
   relays give permanent coverage: **OpenWrt routers** (firmware adds 802.11s mesh +
   Yggdrasil + an IPFS node + the protocol), **LoRa gateways** (ESP32 + LoRa, rooftop
@@ -468,8 +469,11 @@ stable address).
 app (needs APNs/PushKit — a local node can't wake the OS); a 100% serverless call
 through symmetric NAT runs into the mandatory TURN relay (solved by *many of your
 own* relays); node federation (so different nodes serve each other's users — the
-`locateUser` DHT primitive already exists); video calls; long-range Bluetooth-LE; a
-fresh web client on the native protocol.
+`locateUser` DHT primitive already exists); **a native Android client** (the protocol
+is shared and the Go node/CLI already run on Android hardware, so an Android app — with
+an APK + F-Droid build for a block-resistant distribution branch — is a priority next
+client); video calls; long-range Bluetooth-LE; a fresh web client on the native
+protocol.
 
 ---
 
