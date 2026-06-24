@@ -241,8 +241,8 @@ go build -o tract-node . && ./tract-node
 ./scripts/build-node.sh           # → dist-node/tract-node-<os>-<arch>
 ```
 
-The node isn't "registered" with any hosting — run it yourself anywhere, even on
-this computer, and make it reachable anonymously (see "A node anywhere — no
+The node isn't "registered" with any hosting — run it yourself anywhere and make
+it reachable anonymously (see "A node anywhere — no
 hosting").
 
 ### 2. Desktop client (`tract-cli`)
@@ -335,8 +335,7 @@ Binaries aren't kept in git — distribute via GitHub Releases.
 ## A node anywhere — no hosting
 
 A node is just `tract-node`. No provider, account, or domain required: run it on any
-computer (even this one) and make it reachable one of these ways, in increasing
-anonymity:
+computer and make it reachable one of these ways, in increasing anonymity:
 
 - **Local network** — a node on your computer, nearby clients hit its LAN address.
   Zero infrastructure.
