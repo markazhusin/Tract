@@ -389,10 +389,9 @@ open issues/PRs, port transports, test on devices.
 
 | Method | Address |
 |---|---|
-| **Monero (XMR)** | `XMR_ADDRESS` |
-| **USDT (TRC-20)** | `USDT_TRC20_ADDRESS` |
-| **TON** | `TON_ADDRESS` |
-| **Bitcoin (BTC)** | `BTC_ADDRESS` |
+| **USDT (TRC-20)** | `TKFidjphv372FQir3uDnLCEZNwrm8tLYkn` |
+| **TON** | `UQC3cck542-7Bi57hVaA6iFjnJflVYHDHosK0OpqgwBYFbsA` |
+| **Bitcoin (BTC)** | `bc1qe87f5j7qgpkg84z7ur0zxg973mpp6pe2rqur5m` |
 
 **Reach me:** Telegram [@marco_611](https://t.me/marco_611) · channel
 [@tractmesh](https://t.me/tractmesh)
