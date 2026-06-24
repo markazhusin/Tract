@@ -1,199 +1,203 @@
 # Tract
 
-Локальный-first P2P-мессенджер. **Вход свободный, администраторов нет.**
-Личность — это криптографический ключ: ID выводится из публичного ключа
-автоматически, его нельзя занять, подделать или отобрать. Отображаемое имя
-произвольное — это лишь подпись, а не адрес.
+A local-first P2P messenger. **Open entry, no admins.** Your identity is a
+cryptographic key: the ID is derived from the public key automatically — it can't
+be claimed, faked, or taken away. The display name is arbitrary — it's just a
+label, not an address.
 
-Содержимое сообщений и звонков **end-to-end зашифровано на устройстве**. Сервер
-(узел) нужен только как «коммутатор» для интернета (свести участников, придержать
-офлайн-сообщение) — он не видит содержимое. По замыслу узлов может быть много, и
-любой может поднять свой: **каждое устройство — узел сети**.
+Message and call contents are **end-to-end encrypted on the device**. A server (a
+node) is only ever a "switchboard" for the internet (introduce two participants,
+hold an offline message) — it never sees the content. By design there can be many
+nodes, and anyone can run their own: **every device is a node of the network.**
 
 ---
 
-## Из чего состоит
+## What it's made of
 
-| Компонент | Что это | Где |
+| Component | What it is | Where |
 |---|---|---|
-| **iOS-приложение** | Нативное SwiftUI-приложение (Telegram-стиль, Liquid Glass) | `ios/` |
-| **`tract-cli`** | Универсальный десктоп-клиент (Go, один бинарь, все ПК) | `cmd/tract-cli/` |
-| **`tract-node`** | Сигналинг-узел (Go, self-hostable, zero-config) | `main.go`, `internal/` |
+| **iOS app** | Native SwiftUI app (Telegram-style, Liquid Glass) | `ios/` |
+| **`tract-cli`** | Universal desktop client (Go, single binary, every OS) | `cmd/tract-cli/` |
+| **`tract-node`** | Signaling node (Go, self-hostable, zero-config) | `main.go`, `internal/` |
 
-iOS-приложение и `tract-cli` говорят на **одном нативном протоколе**
-(Curve25519 → HKDF-SHA256 → AES-GCM, `app_packet` через узел), поэтому
-**iOS ↔ десктоп совместимы напрямую**.
+The iOS app and `tract-cli` speak the **same native protocol**
+(Curve25519 → HKDF-SHA256 → AES-GCM, `app_packet` via a node), so
+**iOS ↔ desktop are directly compatible**.
 
-> ⚠️ Старый веб-клиент (`index.html` / `main.js`, крипта **secp256k1**) — **legacy**
-> и **не совместим** по шифрованию с нативными клиентами. Он сохранён для истории;
-> для новой сети используйте нативное приложение и `tract-cli`.
+> ⚠️ The old web client (`index.html` / `main.js`, **secp256k1** crypto) is
+> **legacy** and **not compatible** with the native clients' encryption. It's kept
+> for history; for the new network use the native app and `tract-cli`.
 
 ---
 
-## Транспорты (выбираются автоматически, каскадом)
+## Transports (chosen automatically, as a cascade)
 
-Маршрут выбирается сам и **не сдаётся, пока есть хоть один путь** — это и даёт
-надёжность звонков/сообщений независимо от того, рядом ли собеседники:
+The route is picked automatically and **never gives up while any path exists** —
+that's what makes calls/messages reliable regardless of whether the parties are
+nearby:
 
-| Слой | Транспорт | Когда |
+| Tier | Transport | When |
 |---|---|---|
-| 1 | **Локальный меш** (Wi-Fi P2P + Bluetooth, MultipeerConnectivity) | устройства рядом — без интернета и без сервера, минимальная задержка |
-| 2 | **P2P через узел** (HTTP/SSE сигналинг) | есть достижимый `tract-node` и собеседник на нём — ~1–2 с |
-| 3 | **DHT-rendezvous** (BitTorrent Mainline / приватный Kademlia) | узла нет или собеседника на нём нет — бессерверно, ~15–30 с |
-| 4 | **GetStream-резерв** *(опционально, выключаемо)* | ни узла, ни DHT (напр. VPN режет UDP) — крайний случай по HTTPS |
+| 1 | **Local mesh** (Wi-Fi P2P + Bluetooth, MultipeerConnectivity) | devices nearby — no internet, no server, lowest latency |
+| 2 | **P2P via a node** (HTTP/SSE signaling) | a reachable `tract-node` with the peer registered on it — ~1–2 s |
+| 3 | **DHT rendezvous** (BitTorrent Mainline / private Kademlia) | no node, or the peer isn't on it — serverless, ~15–30 s |
+| 4 | **GetStream reserve** *(optional, can be turned off)* | neither a node nor the DHT (e.g. a VPN filtering UDP) — last resort over HTTPS |
 
-- **Сообщения** теперь идут **по всем живым каналам сразу** (меш *и* интернет),
-  получатель дедупит по `pid` и показывает один раз. Поэтому сообщение
-  «проходит», даже если Bluetooth флапает или у пира оборвалась меш-сессия. Если
-  адресат офлайн — узел держит письмо в inbox, а без узла оно ложится в
-  **DHT-инбокс** адресата (E2E, store-and-forward) и доставляется «когда появится
-  в сети».
-- **Звонки** — рядом по мешу; по интернету **WebRTC** (Opus, P2P; сигналинг
-  каскадом узел → DHT-инбокс → GetStream, аудио идёт напрямую или через TURN-релей
-  при симметричном NAT). Звонок последовательно перебирает транспорты, а входящие
-  слушаются по **всем** каналам одновременно (поллинг узла + DHT-инбокс +
-  GetStream-каналы всех контактов) — поэтому звонок долетает, по какому бы пути его
-  ни отправили.
+- **Messages** now go out **over every live channel at once** (mesh *and*
+  internet); the recipient dedups on `pid` and shows it exactly once. That's why a
+  message gets through even when Bluetooth is flaky or a peer's mesh session
+  dropped. If the recipient is offline, a node holds the message in its inbox; with
+  no node it lands in the recipient's **DHT inbox** (E2E, store-and-forward) and is
+  delivered "when they come online".
+- **Calls** — nearby over the mesh; over the internet via **WebRTC** (Opus, P2P;
+  signaling cascades node → DHT inbox → GetStream, audio goes directly or via a TURN
+  relay under symmetric NAT). A call walks the transports in order, while incoming
+  calls are watched on **all** channels simultaneously (node poll + DHT inbox +
+  every contact's GetStream channel) — so a call lands no matter which path it was
+  placed on.
 
-Адрес узла не зашит в клиент и не указывает на чей-то хостинг: локально (тот же
-компьютер) узел подхватывается сам, для интернета добавь адрес живого узла — его
-может анонимно поднять кто угодно, хоть ты сам. Достаточно одного живого узла.
+The node address is not baked into the client and doesn't point at anyone's
+hosting: locally (same machine) a node is picked up automatically; for the internet
+add a live node's address — anyone can run one anonymously, including you. One live
+node is enough.
 
-### Присутствие (онлайн-статус) — по реальной достижимости
+### Presence (online status) — by real reachability
 
-Статус «в сети» отражает достижимость **самого контакта**, а не наличие интернета у
-тебя. Он опрашивается отдельно (каждые ~12 с) по двум независимым сигналам: реестр
-узла (`/peers/by-user`, с учётом «невидимости») и DHT-маяк присутствия. В списке
-чатов и в контактах статус единый: **рядом** (меш с живой сессией) → **в сети**
-(свежий сигнал присутствия) → **был(а) …** (по последнему наблюдению).
-
----
-
-## Rendezvous без сигнал-сервера (DHT)
-
-Чтобы звонки и чаты по интернету работали **даже когда ни одного «своего» узла
-рядом нет**, участники находят друг друга через распределённую хеш-таблицу — два
-слоя, primary + fallback:
-
-- **Глобальный BitTorrent Mainline DHT** (`internal/mainline`, primary) — реальная
-  публичная сеть из миллионов узлов. Реализованы BEP-5 (KRPC поверх UDP с
-  bencode: `ping`/`find_node`/`get_peers`/`get`/`put`) и **BEP-44 mutable items**
-  (запись подписана ed25519, ключ выводится из userId, поэтому контакт находится
-  по своему ID без какого-либо сервера). Бутстрап — публичные роутеры
-  (`router.bittorrent.com:6881` и др.); узел отвечает и на входящие запросы, то
-  есть сам становится участником сети.
-- **Приватный Kademlia (Tract)** (`internal/serverless`, fallback) — закрытый
-  оверлей на случай, когда публичный DHT недоступен (например, фильтрация UDP).
-
-Узел публикует свой адрес в обоих DHT (`announceUser`) и ищет адресата в объединении
-обоих (`locateUser`). Отключается переменной `TRACT_MAINLINE=off`; свои бутстрап-узлы
-— `TRACT_MAINLINE_BOOTSTRAP=host:port,host:port`.
-
-## Релеи и резервы (необязательные, заменяемые)
-
-Бессерверные пути — основные: **меш → узлы (self-host) → DHT-инбокс**. Но от двух
-вещей P2P физически не уйти: симметричный NAT/CGNAT иногда требует **релея** медиа,
-а заблокированный UDP (например, под VPN) может убить DHT. На эти случаи есть
-резервы — намеренно **заменяемые и выключаемые**, чтобы сеть не зависела ни от
-одного провайдера:
-
-- **TURN-релей** (медиа). По умолчанию вшит публичный **ExpressTURN**, плюс узел
-  отдаёт свои релеи в `/ice` (встроенный coturn и/или `TURN_URLS`). TURN-логин по
-  природе виден клиенту (это общий аккаунт, не секрет). Для своей сети раздавай
-  **свои** релеи; ExpressTURN отключается через
-  `EXPRESSTURN_URL=off` (или `EXPRESSTURN_URL/USER/CRED`). Релей через симметричный
-  NAT обязателен — децентрализованный ответ это *много своих* релеев, а не их
-  отсутствие.
-- **GetStream-резерв** (сигналинг, **не** медиа) — крайний шаг каскада: те же
-  offer/answer/ICE едут через Stream Chat, когда нет ни узла, ни DHT. Это
-  единственный путь, переживающий VPN-фильтрацию UDP **без** узла, поэтому он
-  оставлен — но **выключается** в приложении (Настройки → «Резервный сигналинг») для
-  полностью бессерверной работы, и на сервере пустым `STREAM_API_SECRET`. **Секрет
-  Stream никогда не попадает в клиент**: узел минтит короткий per-user JWT на
-  `GET /getstream/token`, клиент знает только токен и публичный API-key. Настройка —
-  `STREAM_API_KEY`/`STREAM_API_SECRET`/`STREAM_APP_ID`.
-
-> **Честно о децентрализации.** «Бессерверного» мессенджера не бывает: rendezvous,
-> NAT-обход и офлайн-доставку кто-то должен выполнять. Tract размазывает эти роли по
-> DHT, **самоподнимаемым узлам** и мешу — а ExpressTURN/GetStream это лишь
-> прагматичный bootstrap-костыль, заменяемый своими релеями/узлами и выключаемый
-> целиком. Для своей сети: подними узел (раздаёт свой TURN и токены), пропиши его в
-> сидах — и третьи стороны не нужны.
-
-## BB84 — квантовая защита канала (звонок рассыпается при компрометации)
-
-Перед разговором стороны проводят **церемонию квантового распределения ключа
-BB84** поверх уже зашифрованного сигнального канала (`internal/quantum/bb84.go`,
-порты — `ios/Tract/QuantumBB84.swift` и `app/core/bb84.js`, протокол бит-в-бит
-одинаков). Инициатор звонка — Alice (готовит кубиты), вызываемый — Bob (измеряет).
-Стороны публично сверяют выборку: измерение неизвестного кубита в неверном базисе
-неизбежно его искажает (теорема о невозможности клонирования), поэтому активный
-перехват (intercept-resend) поднимает **QBER** к ~25 %. Если QBER превышает порог
-**15 %**, ключ выбрасывается и **звонок рассыпается на обеих сторонах** — лучше
-разорвать связь, чем продолжать скомпрометированную.
-
-> Честно о рамках: ПО не передаёт настоящий фотон по сети, так что это не
-> информационно-теоретическая стойкость физического QKD, а **достоверная
-> tamper-evidence-церемония**: активный MITM, искажающий обмен, ловится проверкой
-> QBER, и сессия сносится. Эмулятор кубитов настоящий (коллапс при измерении), а
-> *выбор* бита/базиса — классическая монетка из CSPRNG, как и в реальном устройстве.
+The "online" status reflects the reachability of the **contact themselves**, not
+whether *you* have internet. It is polled separately (every ~12 s) via two
+independent signals: the node's peer registry (`/peers/by-user`, honoring "stealth")
+and the DHT presence beacon. The status is unified across the chats list and
+contacts: **nearby** (mesh with a live session) → **online** (fresh presence
+signal) → **last seen …** (from the most recent observation).
 
 ---
 
-## Быстрый старт
+## Rendezvous without a signaling server (DHT)
 
-### 1. Узел (`tract-node`)
+So calls and chats over the internet work **even when no "own" node is around**,
+peers find each other through a distributed hash table — two layers, primary +
+fallback:
 
-Запусти на любом компьютере — он станет узлом сети (порт `8877`, данные в `./data`,
-без настройки):
+- **Global BitTorrent Mainline DHT** (`internal/mainline`, primary) — the real
+  public network of millions of nodes. Implements BEP-5 (KRPC over UDP with
+  bencode: `ping`/`find_node`/`get_peers`/`get`/`put`) and **BEP-44 mutable items**
+  (the record is ed25519-signed, the key derived from the userId, so a contact is
+  found by their ID with no server at all). Bootstrap is the public routers
+  (`router.bittorrent.com:6881` and others); the node also answers incoming
+  requests, i.e. becomes a participant of the network itself.
+- **Private Kademlia (Tract)** (`internal/serverless`, fallback) — a closed overlay
+  for when the public DHT is unavailable (e.g. UDP filtering).
+
+A node publishes its address in both DHTs (`announceUser`) and looks up the peer in
+the union of both (`locateUser`). Disable with `TRACT_MAINLINE=off`; set your own
+bootstrap nodes via `TRACT_MAINLINE_BOOTSTRAP=host:port,host:port`.
+
+## Relays and reserves (optional, swappable)
+
+The serverless paths are primary: **mesh → nodes (self-host) → DHT inbox.** But
+there are two things P2P can't physically escape: symmetric NAT/CGNAT sometimes
+needs a **relay** for media, and blocked UDP (e.g. under a VPN) can kill the DHT.
+For those cases there are reserves — deliberately **swappable and disableable**, so
+the network depends on no single provider:
+
+- **TURN relay** (media). A public **ExpressTURN** is baked in by default, plus a
+  node serves its own relays via `/ice` (embedded coturn and/or `TURN_URLS`). A TURN
+  login is client-visible by nature (a shared account, not a secret). For your own
+  network, hand out **your** relays; ExpressTURN is dropped via `EXPRESSTURN_URL=off`
+  (or `EXPRESSTURN_URL/USER/CRED`). A relay through symmetric NAT is mandatory — the
+  decentralized answer is *many of your own* relays, not the absence of one.
+- **GetStream reserve** (signaling, **not** media) — the last step of the cascade:
+  the same offer/answer/ICE travel over Stream Chat when there's neither a node nor
+  the DHT. It's the only path that survives VPN UDP filtering **without** a node, so
+  it's kept — but it's **turned off** in the app (Settings → "Reserve signaling") for
+  fully serverless operation, and on the server by an empty `STREAM_API_SECRET`. **The
+  Stream secret never reaches the client**: the node mints a short per-user JWT at
+  `GET /getstream/token`, and the client only ever sees that token and the public
+  API key. Configure with `STREAM_API_KEY`/`STREAM_API_SECRET`/`STREAM_APP_ID`.
+
+> **Honest about decentralization.** A truly "serverless" messenger doesn't exist:
+> rendezvous, NAT traversal, and offline delivery must be done by *someone*. Tract
+> spreads those roles across the DHT, **self-hostable nodes**, and the mesh — while
+> ExpressTURN/GetStream are merely a pragmatic bootstrap crutch, replaceable by your
+> own relays/nodes and disableable entirely. For your own network: run a node (it
+> hands out its own TURN and tokens), add it to the seeds — and no third parties are
+> needed.
+
+## BB84 — quantum channel protection (the call collapses if compromised)
+
+Before talking, the two sides run a **BB84 quantum key-distribution ceremony** on
+top of the already-encrypted signaling channel (`internal/quantum/bb84.go`, ports in
+`ios/Tract/QuantumBB84.swift` and `app/core/bb84.js`, the protocol bit-for-bit
+identical). The call initiator is Alice (prepares qubits), the callee is Bob
+(measures). The sides publicly compare a sample: measuring an unknown qubit in the
+wrong basis inevitably disturbs it (the no-cloning theorem), so active interception
+(intercept-resend) pushes the **QBER** toward ~25%. If the QBER exceeds the **15%**
+threshold, the key is discarded and **the call collapses on both ends** — better to
+drop the link than continue a compromised one.
+
+> Honest about the limits: the software does not transmit a real photon over the
+> wire, so this is not the information-theoretic security of physical QKD but a
+> **credible tamper-evidence ceremony**: an active MITM that distorts the exchange is
+> caught by the QBER check, and the session is torn down. The qubit emulator is real
+> (collapse on measurement), while the *choice* of bit/basis is a classical coin from
+> a CSPRNG, just as on a real device.
+
+---
+
+## Quick start
+
+### 1. Node (`tract-node`)
+
+Run it on any computer — it becomes a node of the network (port `8877`, data in
+`./data`, zero config):
 
 ```bash
 go build -o tract-node . && ./tract-node
-# либо готовые бинари под все ОС:
+# or prebuilt binaries for every OS:
 ./scripts/build-node.sh           # → dist-node/tract-node-<os>-<arch>
 ```
 
-Узел не «прописан» ни на каком хостинге — подними его сам где угодно, хоть на этом
-компьютере, и сделай доступным анонимно (см. «Узел где угодно — без хостинга»).
+The node isn't "registered" with any hosting — run it yourself anywhere, even on
+this computer, and make it reachable anonymously (see "A node anywhere — no
+hosting").
 
-### 2. Десктоп-клиент (`tract-cli`)
+### 2. Desktop client (`tract-cli`)
 
 ```bash
-go build -o tract-cli ./cmd/tract-cli       # или dist-node/tract-cli-<os>-<arch>
+go build -o tract-cli ./cmd/tract-cli       # or dist-node/tract-cli-<os>-<arch>
 ./tract-cli -name Mark
 ```
 
-Покажет твой `@id`. Команды:
+Shows your `@id`. Commands:
 
-| Команда | Действие |
+| Command | Action |
 |---|---|
-| `/id` | показать свой ID |
-| `/add @xxxx` | добавить контакт по ID (ключ берётся с узла) |
-| `/to @xxxx` | выбрать текущего адресата |
-| `/who` | список контактов |
-| `<текст>` | отправить сообщение текущему адресату |
+| `/id` | show your ID |
+| `/add @xxxx` | add a contact by ID (key fetched from the node) |
+| `/to @xxxx` | select the current recipient |
+| `/who` | list contacts |
+| `<text>` | send a message to the current recipient |
 
-Флаги: `-name` (имя), `-server <url>` или env `TRACT_NODE` (свой узел),
-`-home <dir>` (каталог профиля, по умолчанию `~/.tract-cli`).
+Flags: `-name` (name), `-server <url>` or env `TRACT_NODE` (your node),
+`-home <dir>` (profile directory, default `~/.tract-cli`).
 
-### 3. iOS-приложение
+### 3. iOS app
 
-Требуется macOS + **Xcode**, **XcodeGen** (`brew install xcodegen`); бесплатного
-Apple ID достаточно. Зависимость **WebRTC** подтягивается через Swift Package
-Manager автоматически. Исходники — в `ios/Tract/` (SwiftUI), конфиг проекта —
+Requires macOS + **Xcode**, **XcodeGen** (`brew install xcodegen`); a free Apple ID
+is enough. The **WebRTC** dependency is pulled in via Swift Package Manager
+automatically. Sources are in `ios/Tract/` (SwiftUI), the project config is
 `ios/project.yml`.
 
-**Через Xcode:**
+**Via Xcode:**
 
 ```bash
 cd ios && xcodegen generate && open Tract.xcodeproj
 ```
 
-В Xcode: таргет **Tract** → **Signing & Capabilities** → выбери свою команду
-(Team), при необходимости поменяй **Bundle Identifier** на уникальный → выбери
-устройство → **▶**.
+In Xcode: target **Tract** → **Signing & Capabilities** → pick your Team, change the
+**Bundle Identifier** to something unique if needed → pick a device → **▶**.
 
-**Или из командной строки** (подставь UDID устройства и Team ID):
+**Or from the command line** (substitute the device UDID and Team ID):
 
 ```bash
 cd ios && xcodegen generate
@@ -204,101 +208,102 @@ xcrun devicectl device install app --device <UDID> \
   build/Build/Products/Debug-iphoneos/Tract.app
 ```
 
-UDID устройства: `xcrun xctrace list devices`. Team ID появляется после входа в
-Apple ID в Xcode (Settings → Accounts).
+Device UDID: `xcrun xctrace list devices`. The Team ID appears after signing in with
+your Apple ID in Xcode (Settings → Accounts).
 
-На устройстве один раз:
+Once per device:
 
-- **Режим разработчика**: Настройки → Конфиденциальность и безопасность → Режим
-  разработчика → вкл → перезагрузка.
-- **Доверить профиль**: Настройки → Основные → VPN и управление устройством →
-  твой Apple ID → Доверять.
+- **Developer Mode**: Settings → Privacy & Security → Developer Mode → on → reboot.
+- **Trust the profile**: Settings → General → VPN & Device Management → your Apple ID
+  → Trust.
 
-> Бесплатный профиль подписи живёт **7 дней** — потом переустанови тем же способом.
-
----
-
-## Как пользоваться
-
-1. Создай аккаунт (имя + пароль) — ключ генерируется на устройстве, ID появляется в профиле.
-2. Покажи собеседнику свой `@id` (в iOS — экран «Новый контакт», там же QR).
-3. Добавь его по `@id` — в iOS кнопкой ✎, в `tract-cli` командой `/add`.
-4. Пиши и звони. Рядом — пойдёт по мешу без интернета; иначе — через узел.
-
-Контакт должен был **хотя бы раз войти** в приложение (тогда его публичный ключ
-публикуется на узле и его можно найти по ID).
+> A free signing profile lasts **7 days** — then reinstall the same way.
 
 ---
 
-## Сборка всех бинарей
+## How to use
+
+1. Create an account (name + password) — the key is generated on the device, the ID
+   appears in your profile.
+2. Show the other person your `@id` (on iOS — the "New contact" screen, with a QR
+   there too).
+3. Add them by `@id` — on iOS with the ✎ button, in `tract-cli` with `/add`.
+4. Chat and call. Nearby — it goes over the mesh with no internet; otherwise — via a
+   node (or node-lessly over the DHT).
+
+A contact must have **logged in at least once** (then their public key is published
+and they can be found by ID).
+
+---
+
+## Building all binaries
 
 ```bash
 ./scripts/build-node.sh
-# → dist-node/tract-node-<os>-<arch>  и  dist-node/tract-cli-<os>-<arch>
-#   (darwin/linux/windows, amd64/arm64; статичные, без зависимостей)
+# → dist-node/tract-node-<os>-<arch>  and  dist-node/tract-cli-<os>-<arch>
+#   (darwin/linux/windows, amd64/arm64; static, no dependencies)
 ```
 
-Бинари не хранятся в git — распространяй через GitHub Releases.
+Binaries aren't kept in git — distribute via GitHub Releases.
 
 ---
 
-## Узел где угодно — без хостинга
+## A node anywhere — no hosting
 
-Узел — это просто `tract-node`. Не нужны ни провайдер, ни аккаунт, ни домен:
-подними его на любом компьютере (хоть на этом) и сделай достижимым одним из
-способов, по возрастанию анонимности:
+A node is just `tract-node`. No provider, account, or domain required: run it on any
+computer (even this one) and make it reachable one of these ways, in increasing
+anonymity:
 
-- **Локальная сеть** — узел на твоём компьютере, клиенты рядом ходят на его адрес
-  в LAN. Ноль инфраструктуры.
-- **Анонимный туннель** — `npm run share` поднимает узел и публичный
-  `*.trycloudflare.com` URL **без аккаунта и без своего домена**. Раздай этот
-  адрес собеседнику (вставить/QR) — он живёт, пока открыт терминал.
-- **Tor hidden service** — `.onion`-адрес: ни IP, ни юрисдикции, ни хостинга.
-- **Свой публичный IP / VPS** — если нужен постоянный узел.
+- **Local network** — a node on your computer, nearby clients hit its LAN address.
+  Zero infrastructure.
+- **Anonymous tunnel** — `npm run share` brings up a node and a public
+  `*.trycloudflare.com` URL **with no account and no domain of your own**. Hand that
+  address to the other person (paste/QR) — it lives as long as the terminal is open.
+- **Tor hidden service** — a `.onion` address: no IP, no jurisdiction, no hosting.
+- **Your own public IP / VPS** — if you need a permanent node.
 
-Узел слушает `PORT` (по умолчанию `8877`), данные пишет в `./data` (identity-блобы
-и офлайн-инбокс). Паролей он не хранит и ключ восстановить не может.
+The node listens on `PORT` (default `8877`) and writes to `./data` (identity blobs
+and the offline inbox). It stores no passwords and can't recover a key.
 
-**Почему это лучше хостинга:** нет единственной точки, которую можно изъять или
-заблокировать; «коммутатор» поднимает кто угодно за минуту и так же гасит. Узлов
-может быть сколько угодно — сеть живёт, пока жив хотя бы один.
+**Why this beats hosting:** there's no single point that can be seized or blocked;
+anyone can bring up a "switchboard" in a minute and tear it down just as fast. There
+can be any number of nodes — the network lives as long as a single one does.
 
-Свой TURN для надёжных звонков за NAT:
+Your own TURN for reliable calls behind NAT:
 
 ```bash
 TURN_URLS="turn:turn.example.com:3478,turns:turn.example.com:5349?transport=tcp"
 TURN_USERNAME=...   TURN_CREDENTIAL=...
 ```
 
-Узел отдаёт их клиентам через `GET /ice`.
+The node hands these to clients via `GET /ice`.
 
-### Что узел хранит (`data/`)
+### What a node stores (`data/`)
 
-| Файл | Содержимое |
+| File | Contents |
 |---|---|
-| `identity-store.json` | Публичные данные + (для legacy-веба) зашифрованный ключ |
-| `message-inbox.json` | Офлайн-сообщения (доставляются при появлении в сети) |
-| `groups.json`, `avatars/` | Группы, аватары (legacy-веб) |
+| `identity-store.json` | Public data + (for the legacy web) the encrypted key |
+| `message-inbox.json` | Offline messages (delivered when the user comes online) |
+| `groups.json`, `avatars/` | Groups, avatars (legacy web) |
 
 ---
 
-## Статус
+## Status
 
-**Работает:** аккаунт и личность (Curve25519); добавление по ID + QR; текст
-iOS↔iOS и iOS↔десктоп — рядом по мешу, по интернету через узел **и без узла через
-DHT-инбокс** (store-and-forward); **доставка по нескольким каналам сразу с
-дедупом** (сообщение проходит даже при флапающем Bluetooth); сохранение переписки и
-журнала звонков между запусками; звонки рядом по мешу и по интернету (WebRTC, Opus)
-с **каскадом узел → DHT → GetStream** и TURN-релеем для NAT; **присутствие по
-реальной достижимости контакта** (узел + DHT-маяк); мульти-хоп ретрансляция и
-курьер store-and-forward по мешу; BB84-церемония на звонке; авто-обнаружение узла;
-квитанции о прочтении (✓✓); выключаемый сторонний резерв (полностью бессерверный
-режим).
+**Works:** account and identity (Curve25519); add by ID + QR; text iOS↔iOS and
+iOS↔desktop — nearby over the mesh, over the internet via a node **and node-lessly
+via the DHT inbox** (store-and-forward); **multi-channel delivery with dedup** (a
+message gets through even with flaky Bluetooth); chat history and call log persisted
+across restarts; calls nearby over the mesh and over the internet (WebRTC, Opus) with
+a **node → DHT → GetStream cascade** and a TURN relay for NAT; **presence by the
+contact's real reachability** (node + DHT beacon); multi-hop relay and a
+store-and-forward courier over the mesh; the BB84 ceremony on calls; auto node
+discovery; read receipts (✓✓); a disableable third-party reserve (fully serverless
+mode).
 
-**Ограничения / в разработке:** пуш-уведомления и звонок на **закрытое/выгруженное**
-приложение (нужен APNs/PushKit — локальный узел не может разбудить ОС); звонок 100%
-без серверов через симметричный NAT упирается в обязательность TURN-релея (решается
-*множеством своих* релеев); федерация узлов (чтобы разные узлы обслуживали
-пользователей друг друга — primitive `locateUser` по DHT уже есть); видеозвонки;
-Bluetooth-LE дальнего радиуса; свежий веб-клиент на нативном протоколе.
-
+**Limitations / in progress:** push notifications and a call to a **closed/evicted**
+app (needs APNs/PushKit — a local node can't wake the OS); a 100% serverless call
+through symmetric NAT runs into the mandatory TURN relay (solved by *many of your
+own* relays); node federation (so different nodes serve each other's users — the
+`locateUser` DHT primitive already exists); video calls; long-range Bluetooth-LE; a
+fresh web client on the native protocol.
