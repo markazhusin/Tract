@@ -197,8 +197,8 @@ extension MeshTransport: MCNearbyServiceBrowserDelegate {
     static func explain(_ error: Error) -> String {
         let d = error.localizedDescription.lowercased()
         if d.contains("local network") || d.contains("not permitted") || d.contains("permission") {
-            return "Нет доступа к локальной сети. Настройки iOS → Tract → «Локальная сеть» → включить."
+            return L("mesh.localNetworkDenied")
         }
-        return "Меш не запустился: \(error.localizedDescription)"
+        return L("mesh.startFailed") + " \(error.localizedDescription)"
     }
 }

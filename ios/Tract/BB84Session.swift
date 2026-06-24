@@ -107,7 +107,7 @@ final class BB84Session {
         let qber = m > 0 ? Double(mism) / Double(m) : 0
 
         if qber > kQBERAbortThreshold || keyBits.isEmpty {
-            abortBob(String(format: "Канал скомпрометирован (QBER %.0f%%)", qber * 100))
+            abortBob(String(format: "%@ (QBER %.0f%%)", L("call.reason.compromised"), qber * 100))
             return
         }
         finished = true
@@ -141,7 +141,7 @@ final class BB84Session {
     /// collapses the call if Bob signalled an abort.
     private func aliceFinish(success: Bool) {
         finished = true
-        guard success else { onAbort?("Канал скомпрометирован (BB84)"); return }
+        guard success else { onAbort?(L("call.reason.compromised") + " (BB84)"); return }
         var siftedBits: [Int] = []
         for i in 0..<aBases.count where aBases[i] == bBases[i] { siftedBits.append(aBits[i]) }
         var keyBits: [Int] = []

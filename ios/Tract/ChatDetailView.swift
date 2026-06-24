@@ -4,6 +4,7 @@ struct ChatDetailView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var call: CallService
     @EnvironmentObject var node: NodeConfig
+    @EnvironmentObject var loc: AppLanguage
     let contact: Contact
 
     private var canCall: Bool { mesh.route(for: contact.userId) != .offline || node.isConfigured }
@@ -22,7 +23,7 @@ struct ChatDetailView: View {
                 ScrollView {
                     LazyVStack(spacing: 3) {
                         if thread.isEmpty {
-                            Text("Сообщения E2E-зашифрованы и идут напрямую — узлы их не читают.")
+                            Text(loc.t("chat.e2eNote"))
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.muted)
                                 .multilineTextAlignment(.center)
@@ -34,10 +35,10 @@ struct ChatDetailView: View {
                                 .contextMenu {
                                     Button {
                                         UIPasteboard.general.string = m.text
-                                    } label: { Label("Копировать", systemImage: "doc.on.doc") }
+                                    } label: { Label(loc.t("common.copy"), systemImage: "doc.on.doc") }
                                     Button(role: .destructive) {
                                         mesh.deleteMessage(m.id, in: contact.userId)
-                                    } label: { Label("Удалить", systemImage: "trash") }
+                                    } label: { Label(loc.t("common.delete"), systemImage: "trash") }
                                 }
                         }
                         Color.clear.frame(height: 6).id("bottom")
@@ -85,10 +86,10 @@ struct ChatDetailView: View {
     /// Growing multiline field on iOS 16+, plain field on iOS 15.
     @ViewBuilder private var messageField: some View {
         if #available(iOS 16.0, *) {
-            TextField("Сообщение", text: $draft, axis: .vertical)
+            TextField(loc.t("chat.message"), text: $draft, axis: .vertical)
                 .lineLimit(1...6)
         } else {
-            TextField("Сообщение", text: $draft)
+            TextField(loc.t("chat.message"), text: $draft)
         }
     }
 
@@ -147,7 +148,7 @@ struct ChatDetailView: View {
             draft = ""
             sendError = ""
         } else {
-            sendError = "Не удалось отправить: контакт несовместим (другой тип ключа)."
+            sendError = loc.t("chat.sendError")
         }
     }
 }

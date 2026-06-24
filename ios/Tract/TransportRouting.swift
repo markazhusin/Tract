@@ -8,8 +8,8 @@ enum TransportKind: String {
 
     var title: String {
         switch self {
-        case .localMesh: return "Локальный меш"
-        case .internetP2P: return "Интернет (P2P)"
+        case .localMesh: return L("route.localMesh")
+        case .internetP2P: return L("route.internetP2P")
         }
     }
 }
@@ -26,10 +26,10 @@ enum RouteQuality: Int, Comparable {
 
     var label: String {
         switch self {
-        case .offline: return "не в сети"
-        case .relay: return "ретранслятор"
-        case .internetDirect: return "в сети"
-        case .localMesh: return "рядом"
+        case .offline: return L("route.offline")
+        case .relay: return L("route.relay")
+        case .internetDirect: return L("route.online")
+        case .localMesh: return L("route.nearby")
         }
     }
 

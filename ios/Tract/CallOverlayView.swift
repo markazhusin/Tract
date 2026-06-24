@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CallOverlayView: View {
     @EnvironmentObject var call: CallService
+    @EnvironmentObject var loc: AppLanguage
 
     private var title: String {
         switch call.phase {
@@ -16,10 +17,10 @@ struct CallOverlayView: View {
 
     private var subtitle: String {
         switch call.phase {
-        case .outgoing: return "Вызов…"
-        case .incoming: return "Входящий звонок по мешу"
-        case .connected: return "Соединено • без сервера"
-        case .ended(let r): return r.isEmpty ? "Звонок завершён" : r
+        case .outgoing: return loc.t("call.outgoing")
+        case .incoming: return loc.t("call.incomingMesh")
+        case .connected: return loc.t("call.connected")
+        case .ended(let r): return r.isEmpty ? loc.t("call.ended") : r
         case .idle: return ""
         }
     }
@@ -46,7 +47,7 @@ struct CallOverlayView: View {
                     Text(subtitle).font(.system(size: 15)).foregroundStyle(Theme.muted)
                 }
                 if call.micDenied {
-                    Text("Нет доступа к микрофону — включите в Настройках iOS")
+                    Text(loc.t("call.micDenied"))
                         .font(.system(size: 13)).foregroundStyle(Theme.danger)
                         .multilineTextAlignment(.center).padding(.horizontal, 40)
                 }
@@ -63,17 +64,17 @@ struct CallOverlayView: View {
         switch call.phase {
         case .incoming:
             HStack(spacing: 70) {
-                CallButton(icon: "phone.down.fill", color: Theme.danger, label: "Отклонить") { call.decline() }
-                CallButton(icon: "phone.fill", color: Theme.online, label: "Принять") { call.accept() }
+                CallButton(icon: "phone.down.fill", color: Theme.danger, label: loc.t("call.decline")) { call.decline() }
+                CallButton(icon: "phone.fill", color: Theme.online, label: loc.t("call.accept")) { call.accept() }
             }
         case .outgoing, .connected:
             HStack(spacing: 50) {
                 if case .connected = call.phase {
                     CallButton(icon: call.muted ? "mic.slash.fill" : "mic.fill",
                                color: call.muted ? Theme.warn : Theme.panel,
-                               label: call.muted ? "Вкл. микр." : "Выкл. микр.") { call.toggleMute() }
+                               label: call.muted ? loc.t("call.micOn") : loc.t("call.micOff")) { call.toggleMute() }
                 }
-                CallButton(icon: "phone.down.fill", color: Theme.danger, label: "Завершить") { call.hangUp() }
+                CallButton(icon: "phone.down.fill", color: Theme.danger, label: loc.t("call.hangup")) { call.hangUp() }
             }
         case .ended, .idle:
             EmptyView()

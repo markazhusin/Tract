@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AuthView: View {
     @EnvironmentObject var identity: IdentityStore
+    @EnvironmentObject var loc: AppLanguage
 
     enum Mode { case register, login }
     @State private var mode: Mode = .register
@@ -35,8 +36,8 @@ struct AuthView: View {
                             .font(.system(size: 30, weight: .bold))
                             .foregroundStyle(Theme.text)
                         Text(mode == .register
-                             ? "Создайте аккаунт — ключ генерируется на устройстве. Без сервера, работает офлайн."
-                             : "Введите пароль, чтобы разблокировать аккаунт на этом устройстве.")
+                             ? loc.t("auth.register.sub")
+                             : loc.t("auth.login.sub"))
                             .font(.system(size: 14))
                             .foregroundStyle(Theme.muted)
                             .multilineTextAlignment(.center)
@@ -45,14 +46,14 @@ struct AuthView: View {
 
                     VStack(spacing: 12) {
                         if mode == .register {
-                            field(icon: "person", placeholder: "Имя", text: $name)
+                            field(icon: "person", placeholder: loc.t("auth.name"), text: $name)
                                 .focused($focused, equals: .name)
                                 .textInputAutocapitalization(.words)
                         }
-                        field(icon: "lock", placeholder: "Пароль", text: $password, secure: true)
+                        field(icon: "lock", placeholder: loc.t("auth.password"), text: $password, secure: true)
                             .focused($focused, equals: .password)
                         if mode == .register {
-                            field(icon: "lock.rotation", placeholder: "Повторите пароль", text: $confirm, secure: true)
+                            field(icon: "lock.rotation", placeholder: loc.t("auth.confirm"), text: $confirm, secure: true)
                                 .focused($focused, equals: .confirm)
                         }
 
@@ -66,7 +67,7 @@ struct AuthView: View {
                         Button(action: submit) {
                             HStack {
                                 if busy { ProgressView().tint(Theme.onAccent) }
-                                Text(mode == .register ? "Создать аккаунт" : "Войти")
+                                Text(mode == .register ? loc.t("auth.create") : loc.t("auth.login"))
                                     .font(.system(size: 17, weight: .semibold))
                             }
                             .frame(maxWidth: .infinity)
@@ -84,7 +85,7 @@ struct AuthView: View {
                     Button {
                         withAnimation { switchMode() }
                     } label: {
-                        Text(mode == .register ? "У меня уже есть аккаунт" : "Создать новый аккаунт")
+                        Text(mode == .register ? loc.t("auth.haveAccount") : loc.t("auth.newAccount"))
                             .font(.system(size: 15, weight: .medium))
                             .foregroundStyle(Theme.accent)
                     }
@@ -128,25 +129,25 @@ struct AuthView: View {
         focused = nil
         if mode == .register {
             let trimmed = name.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { error = "Введите имя"; return }
-            guard password.count >= 6 else { error = "Пароль должен быть не короче 6 символов"; return }
-            guard password == confirm else { error = "Пароли не совпадают"; return }
+            guard !trimmed.isEmpty else { error = loc.t("auth.err.name"); return }
+            guard password.count >= 6 else { error = loc.t("auth.err.short"); return }
+            guard password == confirm else { error = loc.t("auth.err.mismatch"); return }
             busy = true
             do {
                 try identity.createAccount(displayName: trimmed, password: password)
             } catch {
-                self.error = "Не удалось создать аккаунт"
+                self.error = loc.t("auth.err.create")
             }
             busy = false
         } else {
-            guard !password.isEmpty else { error = "Введите пароль"; return }
+            guard !password.isEmpty else { error = loc.t("auth.err.pwd"); return }
             busy = true
             do {
                 try identity.login(password: password)
             } catch let e as IdentityError {
-                self.error = e.errorDescription ?? "Не удалось войти"
+                self.error = e.errorDescription ?? loc.t("auth.err.login")
             } catch {
-                self.error = "Не удалось войти"
+                self.error = loc.t("auth.err.login")
             }
             busy = false
         }

@@ -3,6 +3,7 @@
 <img src="assets/logo.png" alt="Tract" width="360" />
 
 ### A serverless, censorship-resistant P2P messenger
+#### with quantum tamper-evidence encryption (611protocol)
 
 [Transports](#transports-chosen-automatically-as-a-cascade) ·
 [611protocol](#611protocol--the-encryption-stack-quantum-tamper-evidence-over-classical-e2e) ·
@@ -436,6 +437,10 @@ building it. **Help with development is just as welcome as money** — read the 
 open issues/PRs, port transports, test on devices.
 
 **Donate (crypto):**
+
+**[❤️ Boosty — boosty.to/marco611/donate](https://boosty.to/marco611/donate)** — the easiest way to support (card / subscription).
+
+Or crypto:
 
 | Method | Address |
 |---|---|

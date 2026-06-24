@@ -5,12 +5,14 @@ struct AddContactView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var node: NodeConfig
     @EnvironmentObject var identity: IdentityStore
+    @EnvironmentObject var loc: AppLanguage
     @Environment(\.dismiss) private var dismiss
 
     @State private var input = ""
     @State private var status = ""
     @State private var busy = false
     @State private var copied = false
+    @State private var showScanner = false
 
     private var myId: String { identity.identity?.userId ?? "" }
     private var myPk: String { identity.identity?.publicKeyHex ?? "" }
@@ -33,7 +35,7 @@ struct AddContactView: View {
                                     .background(.white)
                                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             }
-                            Text("Ваш ID").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                            Text(loc.t("add.yourId")).font(.system(size: 13)).foregroundStyle(Theme.muted)
                             Text(myId)
                                 .font(.system(size: 20, weight: .bold, design: .monospaced))
                                 .foregroundStyle(Theme.accent)
@@ -42,7 +44,7 @@ struct AddContactView: View {
                                 copied = true
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
                             } label: {
-                                Label(copied ? "Скопировано" : "Скопировать ID",
+                                Label(copied ? loc.t("add.copied") : loc.t("add.copyId"),
                                       systemImage: copied ? "checkmark" : "doc.on.doc")
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(Theme.accent)
@@ -53,12 +55,23 @@ struct AddContactView: View {
                         .padding(.vertical, 18)
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
+                        // Scan someone's QR (works offline).
+                        Button { showScanner = true } label: {
+                            Label(loc.t("add.scanQR"), systemImage: "qrcode.viewfinder")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Theme.onAccent)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
                         // Add someone by their ID.
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("ДОБАВИТЬ ПО ID")
+                            Text(loc.t("add.byId").uppercased())
                                 .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Theme.muted)
                             HStack(spacing: 10) {
-                                TextField("@id или tract-ссылка", text: $input)
+                                TextField(loc.t("add.placeholder"), text: $input)
                                     .font(.system(size: 16))
                                     .foregroundStyle(Theme.text)
                                     .textInputAutocapitalization(.never)
@@ -84,16 +97,46 @@ struct AddContactView: View {
                     .padding(18)
                 }
             }
-            .navigationTitle("Новый контакт")
+            .navigationTitle(loc.t("add.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
+                    Button(loc.t("common.done")) { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
         }
         .navigationViewStyle(.stack)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showScanner) {
+            ZStack(alignment: .top) {
+                QRScannerView(
+                    onScan: { value in showScanner = false; handleScanned(value) },
+                    onError: { _ in showScanner = false; status = loc.t("add.scanError") }
+                )
+                .ignoresSafeArea()
+                HStack {
+                    Spacer()
+                    Button(loc.t("common.done")) { showScanner = false }
+                        .foregroundStyle(.white).padding()
+                }
+            }
+        }
+    }
+
+    /// Handle a scanned payload: accept a `tract:<id>:<pk>` code (offline-capable) or
+    /// a bare @id, then look it up and add the contact.
+    private func handleScanned(_ value: String) {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        input = v
+        busy = true
+        status = loc.t("add.searching")
+        Task {
+            let ok = await mesh.lookupContact(by: v, node: node)
+            await MainActor.run {
+                busy = false
+                if ok { dismiss() } else { status = loc.t("add.notFound") }
+            }
+        }
     }
 
     private var canAdd: Bool {
@@ -103,17 +146,17 @@ struct AddContactView: View {
     private func add() {
         let raw = input
         guard node.isConfigured || raw.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("tract:") else {
-            status = "Сеть ещё подключается — повторите через пару секунд."
+            status = loc.t("add.connecting")
             return
         }
         busy = true
-        status = "Ищу контакт…"
+        status = loc.t("add.searching")
         Task {
             let ok = await mesh.lookupContact(by: raw, node: node)
             await MainActor.run {
                 busy = false
                 if ok { dismiss() }
-                else { status = "Не найдено. Контакт должен быть онлайн хотя бы раз — или добавьте по его QR / tract-ссылке." }
+                else { status = loc.t("add.notFound") }
             }
         }
     }

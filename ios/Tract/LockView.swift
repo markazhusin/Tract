@@ -62,6 +62,7 @@ struct PinPad: View {
 
 struct LockView: View {
     @EnvironmentObject var lock: AppLock
+    @EnvironmentObject var loc: AppLanguage
     @State private var pin = ""
     @State private var error = false
 
@@ -72,7 +73,7 @@ struct LockView: View {
             VStack(spacing: 28) {
                 Spacer()
                 Image(systemName: "lock.fill").font(.system(size: 34)).foregroundStyle(Theme.accent)
-                Text("Введите код-пароль").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text)
+                Text(loc.t("lock.enter")).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text)
                 PinDots(count: pin.count, error: error)
                 Spacer()
                 PinPad(onDigit: add, onDelete: del)
@@ -102,6 +103,7 @@ struct LockView: View {
 
 struct PasscodeSetupView: View {
     @EnvironmentObject var lock: AppLock
+    @EnvironmentObject var loc: AppLanguage
     @Environment(\.dismiss) private var dismiss
 
     @State private var first = ""
@@ -115,12 +117,12 @@ struct PasscodeSetupView: View {
             VStack(spacing: 26) {
                 Spacer()
                 Image(systemName: "lock.shield.fill").font(.system(size: 32)).foregroundStyle(Theme.accent)
-                Text(confirming ? "Повторите код" : "Придумайте код")
+                Text(confirming ? loc.t("lock.repeat") : loc.t("lock.create"))
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text)
                 PinDots(count: confirming ? confirm.count : first.count, error: error)
                 Spacer()
                 PinPad(onDigit: add, onDelete: del)
-                Button("Отмена") { dismiss() }.foregroundStyle(Theme.muted).padding(.top, 4)
+                Button(loc.t("common.cancel")) { dismiss() }.foregroundStyle(Theme.muted).padding(.top, 4)
                 Spacer()
             }
             .padding(.bottom, 24)

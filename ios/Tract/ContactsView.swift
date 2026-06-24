@@ -71,16 +71,17 @@ struct ContactRow: View {
 
 struct ContactStatusRow: View {
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var loc: AppLanguage
     let contact: Contact
 
     private var route: RouteQuality { mesh.route(for: contact.userId) }
     private var isNearby: Bool { route == .localMesh }
 
     private var status: (text: String, color: Color) {
-        if isNearby { return ("рядом", Theme.online) }
-        if route == .internetDirect { return ("в сети", route.color) }
+        if isNearby { return (loc.t("status.nearby"), Theme.online) }
+        if route == .internetDirect { return (loc.t("status.online"), route.color) }
         if let ls = contact.lastSeen { return (ContactsView.lastSeenText(ls), Theme.muted) }
-        return ("был(а) недавно", Theme.muted)
+        return (loc.t("status.seen.recently"), Theme.muted)
     }
 
     var body: some View {
@@ -143,7 +144,7 @@ struct ContactsView: View {
                         ScrollView {
                             LazyVStack(spacing: 0) {
                                 if !nearbyOnly.isEmpty {
-                                    sectionHeader("Рядом")
+                                    sectionHeader(loc.t("contacts.nearby"))
                                     ForEach(nearbyOnly) { c in
                                         NavigationLink(destination: ChatDetailView(contact: c)) {
                                             ContactRow(contact: c, showPreview: false)
@@ -162,7 +163,7 @@ struct ContactsView: View {
                                         .buttonStyle(.plain)
                                         .contextMenu {
                                             Button(role: .destructive) { mesh.deleteContact(c.userId) } label: {
-                                                Label("Удалить контакт", systemImage: "trash")
+                                                Label(loc.t("common.delete"), systemImage: "trash")
                                             }
                                         }
                                     }
@@ -192,10 +193,10 @@ struct ContactsView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             EmptyHint(icon: "person.2",
-                      title: "Пока никого",
-                      subtitle: "Добавьте контакт по ID или дождитесь устройство рядом по мешу.")
+                      title: loc.t("contacts.empty.title"),
+                      subtitle: loc.t("contacts.empty.sub"))
             Button { showAdd = true } label: {
-                Label("Добавить по ID", systemImage: "plus")
+                Label(loc.t("common.addById"), systemImage: "plus")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.onAccent)
                     .padding(.horizontal, 18).padding(.vertical, 11)
@@ -236,13 +237,13 @@ struct ContactsView: View {
     static func lastSeenText(_ date: Date) -> String {
         let cal = Calendar.current
         let secs = Date().timeIntervalSince(date)
-        if secs < 60 { return "был(а) только что" }
-        if secs < 3600 { return "был(а) \(Int(secs / 60)) мин назад" }
+        if secs < 60 { return L("status.seen.justnow") }
+        if secs < 3600 { return String(format: L("status.seen.minsAgo"), Int(secs / 60)) }
         let f = DateFormatter()
-        if cal.isDateInToday(date) { f.dateFormat = "HH:mm"; return "был(а) в \(f.string(from: date))" }
-        if cal.isDateInYesterday(date) { f.dateFormat = "HH:mm"; return "был(а) вчера в \(f.string(from: date))" }
+        if cal.isDateInToday(date) { f.dateFormat = "HH:mm"; return String(format: L("status.seen.todayAt"), f.string(from: date)) }
+        if cal.isDateInYesterday(date) { f.dateFormat = "HH:mm"; return String(format: L("status.seen.yesterdayAt"), f.string(from: date)) }
         f.dateFormat = "dd.MM.yy"
-        return "был(а) \(f.string(from: date))"
+        return String(format: L("status.seen.onDate"), f.string(from: date))
     }
 }
 

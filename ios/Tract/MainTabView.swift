@@ -110,6 +110,7 @@ struct BottomBar: View {
 
 struct SearchSheet: View {
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var loc: AppLanguage
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var showAdd = false
@@ -128,10 +129,10 @@ struct SearchSheet: View {
                 Theme.bg.ignoresSafeArea()
                 if results.isEmpty {
                     VStack(spacing: 16) {
-                        EmptyHint(icon: "magnifyingglass", title: "Ничего не найдено",
-                                  subtitle: "Добавьте контакт по его ID.")
+                        EmptyHint(icon: "magnifyingglass", title: loc.t("search.empty.title"),
+                                  subtitle: loc.t("search.empty.sub"))
                         Button { showAdd = true } label: {
-                            Label("Добавить по ID", systemImage: "plus")
+                            Label(loc.t("common.addById"), systemImage: "plus")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(Theme.onAccent)
                                 .padding(.horizontal, 18).padding(.vertical, 11)
@@ -152,8 +153,8 @@ struct SearchSheet: View {
                     }
                 }
             }
-            .searchable(text: $query, prompt: "Поиск")
-            .navigationTitle("Поиск")
+            .searchable(text: $query, prompt: loc.t("common.search"))
+            .navigationTitle(loc.t("common.search"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -161,7 +162,7 @@ struct SearchSheet: View {
                         .foregroundStyle(Theme.accent)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
+                    Button(loc.t("common.done")) { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
             .sheet(isPresented: $showAdd) { AddContactView() }

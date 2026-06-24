@@ -34,16 +34,16 @@ struct CallsView: View {
             if call.history.isEmpty {
                 VStack(spacing: 16) {
                     EmptyHint(icon: "phone",
-                              title: "Журнал звонков пуст",
-                              subtitle: "Звоните из чата или кнопкой «Новый звонок». Рядом — по мешу, по интернету — напрямую через WebRTC.")
+                              title: loc.t("calls.empty.title"),
+                              subtitle: loc.t("calls.empty.sub"))
                     newCallButton
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
                         Picker("", selection: $filterMissed) {
-                            Text("Все").tag(false)
-                            Text("Пропущенные").tag(true)
+                            Text(loc.t("calls.all")).tag(false)
+                            Text(loc.t("calls.missed")).tag(true)
                         }
                         .pickerStyle(.segmented)
                         .padding(.horizontal, 10)
@@ -52,7 +52,7 @@ struct CallsView: View {
                         newCallRow
 
                         if groups.isEmpty {
-                            Text("Пропущенных звонков нет")
+                            Text(loc.t("calls.noMissed"))
                                 .font(.system(size: 14))
                                 .foregroundStyle(Theme.muted)
                                 .padding(.top, 36)
@@ -63,12 +63,12 @@ struct CallsView: View {
                                         .contextMenu {
                                             if reachable(g.head) {
                                                 Button { callBack(g.head) } label: {
-                                                    Label("Позвонить", systemImage: "phone")
+                                                    Label(loc.t("common.call"), systemImage: "phone")
                                                 }
                                             }
                                             Button(role: .destructive) {
                                                 call.deleteHistory(ids: g.ids)
-                                            } label: { Label("Удалить", systemImage: "trash") }
+                                            } label: { Label(loc.t("common.delete"), systemImage: "trash") }
                                         }
                                     if g.id != groups.last?.id { RowDivider(leading: 71) }
                                 }
@@ -91,10 +91,10 @@ struct CallsView: View {
             }
         }
         .sheet(isPresented: $showNewCall) { NewCallSheet() }
-        .confirmationDialog("Очистить весь журнал звонков?",
+        .confirmationDialog(loc.t("calls.clearQ"),
                             isPresented: $showClearConfirm, titleVisibility: .visible) {
-            Button("Очистить", role: .destructive) { call.clearHistory() }
-            Button("Отмена", role: .cancel) {}
+            Button(loc.t("calls.clear"), role: .destructive) { call.clearHistory() }
+            Button(loc.t("common.cancel"), role: .cancel) {}
         }
     }
 
@@ -109,7 +109,7 @@ struct CallsView: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Theme.online)
                 }
-                Text("Новый звонок")
+                Text(loc.t("calls.new"))
                     .font(.system(size: 16.5, weight: .semibold))
                     .foregroundStyle(Theme.online)
                 Spacer()
@@ -124,7 +124,7 @@ struct CallsView: View {
 
     private var newCallButton: some View {
         Button { showNewCall = true } label: {
-            Label("Новый звонок", systemImage: "phone.fill")
+            Label(loc.t("calls.new"), systemImage: "phone.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.onAccent)
                 .padding(.horizontal, 18).padding(.vertical, 11)
@@ -171,7 +171,7 @@ struct CallsView: View {
         let cal = Calendar.current
         let f = DateFormatter()
         if cal.isDateInToday(date) { f.dateFormat = "HH:mm" }
-        else if cal.isDateInYesterday(date) { return "вчера" }
+        else if cal.isDateInYesterday(date) { return L("calls.yesterday") }
         else { f.dateFormat = "dd.MM" }
         return f.string(from: date)
     }
@@ -186,6 +186,7 @@ struct CallsView: View {
 
 struct CallLogRow: View {
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var loc: AppLanguage
     let group: CallLogGroup
     let onCall: () -> Void
 
@@ -197,8 +198,8 @@ struct CallLogRow: View {
     private var accent: Color { head.missed ? Theme.danger : Theme.muted }
 
     private var detailText: String {
-        var parts: [String] = [head.missed ? "Пропущенный" : (head.outgoing ? "Исходящий" : "Входящий")]
-        parts.append(head.viaMesh ? "по мешу" : "по интернету")
+        var parts: [String] = [head.missed ? loc.t("calls.kind.missed") : (head.outgoing ? loc.t("calls.kind.outgoing") : loc.t("calls.kind.incoming"))]
+        parts.append(head.viaMesh ? loc.t("calls.via.mesh") : loc.t("calls.via.internet"))
         if head.connected, head.duration >= 1 { parts.append(CallsView.durationText(head.duration)) }
         return parts.joined(separator: " · ")
     }
@@ -253,6 +254,7 @@ struct NewCallSheet: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var call: CallService
     @EnvironmentObject var node: NodeConfig
+    @EnvironmentObject var loc: AppLanguage
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
@@ -274,8 +276,8 @@ struct NewCallSheet: View {
                 Theme.bg.ignoresSafeArea()
                 if mesh.contacts.isEmpty {
                     EmptyHint(icon: "person.2",
-                              title: "Нет контактов",
-                              subtitle: "Добавьте контакт по ID, чтобы позвонить.")
+                              title: loc.t("calls.noContacts.title"),
+                              subtitle: loc.t("calls.noContacts.sub"))
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
@@ -310,12 +312,12 @@ struct NewCallSheet: View {
                     }
                 }
             }
-            .searchable(text: $query, prompt: "Поиск")
-            .navigationTitle("Новый звонок")
+            .searchable(text: $query, prompt: loc.t("common.search"))
+            .navigationTitle(loc.t("calls.new"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Готово") { dismiss() }.foregroundStyle(Theme.accent)
+                    Button(loc.t("common.done")) { dismiss() }.foregroundStyle(Theme.accent)
                 }
             }
         }

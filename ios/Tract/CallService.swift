@@ -116,7 +116,7 @@ final class CallService: ObservableObject {
         cancellable = mesh.$peerCount.sink { [weak self] count in
             guard let self else { return }
             if count == 0, self.mode == .mesh, self.phase.isActive {
-                self.teardown(reason: "Соединение потеряно")
+                self.teardown(reason: L("call.reason.lost"))
             }
         }
     }
@@ -175,7 +175,7 @@ final class CallService: ObservableObject {
             phase = .outgoing(name: contact.displayName)
             startDHTOutgoing(contact)
         } else {
-            phase = .ended(reason: "Нет связи")
+            phase = .ended(reason: L("call.reason.noconn"))
             finishCallRecord()        // a placed call that never connected
             autoClearEnded()
         }
@@ -268,7 +268,7 @@ final class CallService: ObservableObject {
         case "call":   // control: decline / end
             let action = payload["action"] as? String ?? ""
             guard internetViaDHT, cid == callId || callId.isEmpty else { return }
-            if action == "decline", phase.isActive { teardown(reason: "Звонок отклонён") }
+            if action == "decline", phase.isActive { teardown(reason: L("call.reason.declined")) }
             if action == "end", phase.isActive { teardown(reason: "") }
         default: break
         }
@@ -308,7 +308,7 @@ final class CallService: ObservableObject {
             return
         }
         await MainActor.run {
-            self.phase = .ended(reason: "Абонент не в сети")
+            self.phase = .ended(reason: L("call.reason.offline"))
             self.finishCallRecord()
             self.autoClearEnded()
         }
@@ -420,7 +420,7 @@ final class CallService: ObservableObject {
         session.onAbort = { [weak self] reason in
             DispatchQueue.main.async {
                 guard let self, self.phase.isActive else { return }
-                self.teardown(reason: reason.isEmpty ? "Канал скомпрометирован" : reason)
+                self.teardown(reason: reason.isEmpty ? L("call.reason.compromised") : reason)
             }
         }
         bb84 = session
@@ -472,7 +472,7 @@ final class CallService: ObservableObject {
                 startQKD(asAlice: true)   // caller = Alice
             }
         case "decline":
-            if phase.isActive { teardown(reason: "Звонок отклонён") }
+            if phase.isActive { teardown(reason: L("call.reason.declined")) }
         case "end":
             if phase.isActive { teardown(reason: "") }
         default: break
@@ -544,7 +544,7 @@ final class CallService: ObservableObject {
                 if !internetViaStream { startQKD(asAlice: true) }   // caller = Alice
             }
         case "decline":
-            if phase.isActive { teardown(reason: "Звонок отклонён") }
+            if phase.isActive { teardown(reason: L("call.reason.declined")) }
         case "end":
             if phase.isActive { teardown(reason: "") }
         default: break
@@ -561,7 +561,7 @@ final class CallService: ObservableObject {
         }
         rtc.onClosed = { [weak self] in
             guard let self else { return }
-            if self.mode == .internet, self.phase.isActive { self.teardown(reason: "Связь прервана") }
+            if self.mode == .internet, self.phase.isActive { self.teardown(reason: L("call.reason.dropped")) }
         }
         webrtc = rtc
     }

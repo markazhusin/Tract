@@ -6,6 +6,7 @@ import CoreImage.CIFilterBuiltins
 /// sheet, not a one-tap alert), so it can't be hit by accident.
 struct ProfileView: View {
     @EnvironmentObject var identity: IdentityStore
+    @EnvironmentObject var loc: AppLanguage
     @State private var copied = false
 
     private var id: Identity? { identity.identity }
@@ -37,13 +38,13 @@ struct ProfileView: View {
                                 .background(.white)
                                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
-                        Text("Ваш ID").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        Text(loc.t("add.yourId")).font(.system(size: 13)).foregroundStyle(Theme.muted)
                         Text(myId)
                             .font(.system(size: 19, weight: .bold, design: .monospaced))
                             .foregroundStyle(Theme.accent)
                             .textSelection(.enabled)
                         Button(action: copyId) {
-                            Label(copied ? "Скопировано" : "Скопировать ID",
+                            Label(copied ? loc.t("add.copied") : loc.t("add.copyId"),
                                   systemImage: copied ? "checkmark" : "doc.on.doc")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(Theme.accent)
@@ -61,7 +62,7 @@ struct ProfileView: View {
                         AccountDeletionView()
                     } label: {
                         HStack {
-                            Text("Управление аккаунтом")
+                            Text(loc.t("profile.manage"))
                                 .font(.system(size: 14))
                                 .foregroundStyle(Theme.muted)
                             Spacer()
@@ -81,7 +82,7 @@ struct ProfileView: View {
                 .padding(.top, 8)
             }
         }
-        .navigationTitle("Мой профиль")
+        .navigationTitle(loc.t("profile.title"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -109,10 +110,11 @@ struct ProfileView: View {
 /// no recovery — the account is just a private key on this device.
 struct AccountDeletionView: View {
     @EnvironmentObject var identity: IdentityStore
+    @EnvironmentObject var loc: AppLanguage
     @State private var confirmText = ""
     @State private var finalConfirm = false
 
-    private let phrase = "УДАЛИТЬ"
+    private var phrase: String { loc.t("profile.deleteWord") }
     private var canDelete: Bool {
         confirmText.trimmingCharacters(in: .whitespaces).uppercased() == phrase
     }
@@ -127,11 +129,11 @@ struct AccountDeletionView: View {
                             Image(systemName: "key.fill")
                                 .font(.system(size: 15))
                                 .foregroundStyle(Theme.warn)
-                            Text("Аккаунт — это криптоключ")
+                            Text(loc.t("profile.keyTitle"))
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(Theme.text)
                         }
-                        Text("Ваш ID и переписка существуют только на этом устройстве. Удаление стирает приватный ключ безвозвратно — вернуть ни ID, ни историю будет нельзя. Серверов с резервной копией не существует.")
+                        Text(loc.t("profile.keyBody"))
                             .font(.system(size: 13.5))
                             .foregroundStyle(Theme.muted)
                             .fixedSize(horizontal: false, vertical: true)
@@ -140,7 +142,7 @@ struct AccountDeletionView: View {
                     .background(Theme.panel, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Чтобы подтвердить, введите слово «\(phrase)»")
+                        Text(loc.t("profile.confirmWord"))
                             .font(.system(size: 13.5))
                             .foregroundStyle(Theme.muted)
                         TextField(phrase, text: $confirmText)
@@ -157,7 +159,7 @@ struct AccountDeletionView: View {
                     }
 
                     Button { finalConfirm = true } label: {
-                        Text("Удалить аккаунт навсегда")
+                        Text(loc.t("profile.deleteForever"))
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(canDelete ? .white : Theme.muted)
                             .frame(maxWidth: .infinity)
@@ -172,13 +174,13 @@ struct AccountDeletionView: View {
                 .padding(.horizontal, 14).padding(.top, 12)
             }
         }
-        .navigationTitle("Управление аккаунтом")
+        .navigationTitle(loc.t("profile.manage"))
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Удалить аккаунт навсегда?", isPresented: $finalConfirm, titleVisibility: .visible) {
-            Button("Удалить", role: .destructive) { identity.deleteAccount() }
-            Button("Отмена", role: .cancel) {}
+        .confirmationDialog(loc.t("profile.deleteQ"), isPresented: $finalConfirm, titleVisibility: .visible) {
+            Button(loc.t("common.delete"), role: .destructive) { identity.deleteAccount() }
+            Button(loc.t("common.cancel"), role: .cancel) {}
         } message: {
-            Text("Ключ будет стёрт с этого устройства без возможности восстановления.")
+            Text(loc.t("profile.deleteNote"))
         }
     }
 }
