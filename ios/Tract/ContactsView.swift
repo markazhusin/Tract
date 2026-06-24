@@ -113,6 +113,7 @@ struct ContactStatusRow: View {
 
 struct ContactsView: View {
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var loc: AppLanguage
     @State private var showAdd = false
 
     /// Nearby devices that are not (yet) contacts.
@@ -181,7 +182,7 @@ struct ContactsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(title: "Контакты") {
+            ScreenHeader(title: loc.t("contacts.title")) {
                 CircleGlassButton(systemName: "person.badge.plus") { showAdd = true }
             }
         }

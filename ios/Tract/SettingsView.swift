@@ -14,17 +14,19 @@ struct SettingsView: View {
     @EnvironmentObject var node: NodeConfig
     @EnvironmentObject var lock: AppLock
     @EnvironmentObject var notifications: NotificationService
+    @EnvironmentObject var loc: AppLanguage
     @ObservedObject private var dht = DHTRendezvous.shared
     @State private var showPasscodeSetup = false
+    @State private var showLanguage = false
 
     private var id: Identity? { identity.identity }
 
     private var meshState: (LinkState, String) {
-        if !mesh.meshEnabled { return (.off, "Выключен") }
-        if mesh.meshError != nil { return (.error, "Нет доступа") }
-        if !mesh.running { return (.off, "Не запущен") }
-        if mesh.peerCount > 0 { return (.on, "\(mesh.peerCount) рядом") }
-        return (.dev, "Поиск…")
+        if !mesh.meshEnabled { return (.off, loc.t("settings.transport.off")) }
+        if mesh.meshError != nil { return (.error, loc.t("settings.transport.noaccess")) }
+        if !mesh.running { return (.off, loc.t("settings.transport.notrunning")) }
+        if mesh.peerCount > 0 { return (.on, "\(mesh.peerCount) \(loc.t("settings.transport.nearbyCount"))") }
+        return (.dev, loc.t("settings.transport.searching"))
     }
 
     // Transport is now exactly two real links — everything else (mesh calls,
@@ -36,17 +38,17 @@ struct SettingsView: View {
         // BitTorrent DHT. Don't get stuck on "Поиск узла…" — the DHT path needs no node.
         let net: (LinkState, String)
         if node.isConfigured {
-            net = (.on, "Подключён (узел)")
+            net = (.on, loc.t("settings.transport.connectedNode"))
         } else if dht.ready {
-            net = (.on, "Через DHT")
+            net = (.on, loc.t("settings.transport.viaDHT"))
         } else {
-            net = (.dev, "Подключение…")
+            net = (.dev, loc.t("settings.transport.connecting"))
         }
         return [
             TransportItem(icon: "dot.radiowaves.left.and.right", color: Theme.online,
-                          title: "Рядом (Wi-Fi + Bluetooth)", status: m.1, state: m.0),
+                          title: loc.t("settings.transport.nearby"), status: m.1, state: m.0),
             TransportItem(icon: "globe", color: Color(hex: "#5b9cf2"),
-                          title: "Интернет (P2P)", status: net.1, state: net.0),
+                          title: loc.t("settings.transport.internet"), status: net.1, state: net.0),
         ]
     }
 
@@ -60,7 +62,7 @@ struct SettingsView: View {
                     // Транспорт — единственное место со статусом связи. Маршрут
                     // выбирается сам, поэтому здесь только два реальных канала.
                     VStack(alignment: .leading, spacing: 7) {
-                        sectionTitle("Транспорт")
+                        sectionTitle(loc.t("settings.section.transport"))
                         GroupCard {
                             ForEach(Array(transports.enumerated()), id: \.offset) { idx, t in
                                 TransportRow(icon: t.icon, iconColor: t.color,
@@ -80,7 +82,7 @@ struct SettingsView: View {
                                         text: "Узел сети не найден. Без запущенной ноды (tract-node рядом в той же Wi-Fi или вручную) интернет-звонки и доставка офлайн недоступны — работает только связь рядом по мешу.",
                                         action: nil)
                         }
-                        Text("Маршрут выбирается автоматически: рядом → меш (Wi-Fi/Bluetooth, без сервера); иначе → интернет P2P; не пробилось → ретранслятор. Звонки и чаты идут по тому же каналу, напрямую и зашифрованно (E2E). Меш работает, пока приложение открыто.")
+                        Text(loc.t("settings.transport.hint"))
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.muted)
                             .padding(.horizontal, 6)
@@ -88,17 +90,17 @@ struct SettingsView: View {
 
                     // Уведомления — раздельные переключатели для чатов и звонков.
                     VStack(alignment: .leading, spacing: 7) {
-                        sectionTitle("Уведомления")
+                        sectionTitle(loc.t("settings.section.notif"))
                         GroupCard {
                             toggleRow(icon: "bubble.left.fill", tint: Color(hex: "#36c5c0"),
-                                      title: "Сообщения", isOn: $notifications.chatsEnabled)
+                                      title: loc.t("settings.notif.messages"), isOn: $notifications.chatsEnabled)
                             RowDivider()
                             toggleRow(icon: "phone.fill", tint: Color(hex: "#5b9cf2"),
-                                      title: "Звонки", isOn: $notifications.callsEnabled)
+                                      title: loc.t("settings.notif.calls"), isOn: $notifications.callsEnabled)
                         }
                         Text(notifications.authorized
-                             ? "Приходят, когда приложение свёрнуто. Если iOS полностью выгрузила приложение из памяти, доставить уведомление без сервера push нельзя."
-                             : "Уведомления выключены в настройках iOS — включите их для Tract, чтобы получать сигналы о сообщениях и звонках.")
+                             ? loc.t("settings.notif.on")
+                             : loc.t("settings.notif.off"))
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.muted)
                             .padding(.horizontal, 6)
@@ -107,21 +109,23 @@ struct SettingsView: View {
                     // Приватность и сеть — раньше дублировалось в «шторке» на экране
                     // чатов; теперь единственное место.
                     VStack(alignment: .leading, spacing: 7) {
-                        sectionTitle("Приватность и сеть")
+                        sectionTitle(loc.t("settings.section.privacy"))
                         GroupCard {
+                            languageRow
+                            RowDivider()
                             toggleRow(icon: "dot.radiowaves.left.and.right", tint: Theme.online,
-                                      title: "Поиск рядом",
-                                      subtitle: "Находить устройства по Wi-Fi/Bluetooth без интернета.",
+                                      title: loc.t("settings.privacy.nearby"),
+                                      subtitle: loc.t("settings.privacy.nearby.sub"),
                                       isOn: $mesh.meshEnabled)
                             RowDivider()
                             toggleRow(icon: "eye.slash.fill", tint: Color(hex: "#c77dff"),
-                                      title: "Невидимость",
-                                      subtitle: "Вас не видно рядом и в сети, но устройство продолжает передавать чужие сообщения, как курьер.",
+                                      title: loc.t("settings.privacy.stealth"),
+                                      subtitle: loc.t("settings.privacy.stealth.sub"),
                                       isOn: $mesh.stealth)
                             RowDivider()
                             toggleRow(icon: "arrow.triangle.2.circlepath", tint: Color(hex: "#f4a259"),
-                                      title: "Резервный сигналинг",
-                                      subtitle: "Сторонний канал (GetStream) на крайний случай — когда нет ни узла, ни DHT (например, VPN режет UDP). Выключите для полностью бессерверной работы: меш + узлы + DHT.",
+                                      title: loc.t("settings.privacy.reserve"),
+                                      subtitle: loc.t("settings.privacy.reserve.sub"),
                                       isOn: $mesh.streamReserveEnabled)
                             RowDivider()
                             HStack(spacing: 13) {
@@ -130,8 +134,8 @@ struct SettingsView: View {
                                     .overlay(Image(systemName: "lock.fill")
                                         .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text("Код-пароль").font(.system(size: 17)).foregroundStyle(Theme.text)
-                                    Text("Запрашивать код при входе и после сворачивания.")
+                                    Text(loc.t("settings.privacy.passcode")).font(.system(size: 17)).foregroundStyle(Theme.text)
+                                    Text(loc.t("settings.privacy.passcode.sub"))
                                         .font(.system(size: 12.5)).foregroundStyle(Theme.muted)
                                 }
                                 Spacer(minLength: 8)
@@ -147,12 +151,12 @@ struct SettingsView: View {
                     // Аккаунт — ID живёт только здесь, внутри «Мой профиль».
                     GroupCard {
                         NavigationLink(destination: ProfileView()) {
-                            SettingsRow(icon: "person.crop.circle", iconColor: Color(hex: "#e56565"), title: "Мой профиль")
+                            SettingsRow(icon: "person.crop.circle", iconColor: Color(hex: "#e56565"), title: loc.t("settings.profile"))
                         }
                         .buttonStyle(.plain)
                         RowDivider()
                         Button { identity.lock() } label: {
-                            SettingsRow(icon: "lock.fill", iconColor: Theme.muted, title: "Заблокировать", showChevron: false)
+                            SettingsRow(icon: "lock.fill", iconColor: Theme.muted, title: loc.t("settings.lock"), showChevron: false)
                         }.buttonStyle(.plain)
                     }
 
@@ -163,9 +167,10 @@ struct SettingsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(title: "Настройки")
+            ScreenHeader(title: loc.t("settings.title"))
         }
         .sheet(isPresented: $showPasscodeSetup) { PasscodeSetupView() }
+        .sheet(isPresented: $showLanguage) { LanguagePickerView(asSheet: true) }
     }
 
     // Tappable header → profile. No raw ID here: it lives only inside «Мой профиль».
@@ -180,7 +185,7 @@ struct SettingsView: View {
                     Image(systemName: "checkmark.shield.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.accent)
-                    Text("Локальный аккаунт")
+                    Text(loc.t("settings.localAccount"))
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.muted)
                     Image(systemName: "chevron.right")
@@ -190,6 +195,29 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var languageRow: some View {
+        Button { showLanguage = true } label: {
+            HStack(spacing: 13) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(hex: "#36c5c0")).frame(width: 30, height: 30)
+                    .overlay(Image(systemName: "globe")
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(loc.t("settings.language")).font(.system(size: 17)).foregroundStyle(Theme.text)
+                    Text(loc.t("settings.language.sub")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                }
+                Spacer(minLength: 8)
+                Text("\(loc.lang.flag) \(loc.lang.nativeName)")
+                    .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted.opacity(0.5))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

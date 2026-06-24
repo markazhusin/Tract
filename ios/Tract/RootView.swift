@@ -6,12 +6,18 @@ struct RootView: View {
     @EnvironmentObject var call: CallService
     @EnvironmentObject var node: NodeConfig
     @EnvironmentObject var lock: AppLock
+    @EnvironmentObject var loc: AppLanguage
 
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
 
-            if identity.identity == nil {
+            if !loc.chosen {
+                // First launch: pick a language before anything else.
+                LanguagePickerView()
+                    .transition(.opacity)
+                    .zIndex(30)
+            } else if identity.identity == nil {
                 AuthView()
                     .transition(.opacity)
             } else {
@@ -33,6 +39,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.2), value: lock.isLocked)
         .animation(.easeInOut(duration: 0.25), value: identity.identity)
         .animation(.easeInOut(duration: 0.25), value: call.phase)
+        .animation(.easeInOut(duration: 0.25), value: loc.chosen)
         .onAppear {
             mesh.node = node
             call.configure(mesh: mesh, node: node)

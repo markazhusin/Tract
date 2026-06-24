@@ -16,6 +16,7 @@ struct CallsView: View {
     @EnvironmentObject var mesh: MeshService
     @EnvironmentObject var call: CallService
     @EnvironmentObject var node: NodeConfig
+    @EnvironmentObject var loc: AppLanguage
 
     @State private var showNewCall = false
     @State private var filterMissed = false
@@ -80,7 +81,7 @@ struct CallsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(title: "Звонки") {
+            ScreenHeader(title: loc.t("calls.title")) {
                 HStack(spacing: 8) {
                     if !call.history.isEmpty {
                         CircleGlassButton(systemName: "ellipsis") { showClearConfirm = true }

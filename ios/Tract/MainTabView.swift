@@ -3,12 +3,12 @@ import SwiftUI
 enum Tab: Int, CaseIterable {
     case contacts, calls, chats, settings
 
-    var title: String {
+    var titleKey: String {
         switch self {
-        case .contacts: return "Контакты"
-        case .calls: return "Звонки"
-        case .chats: return "Чаты"
-        case .settings: return "Настройки"
+        case .contacts: return "tab.contacts"
+        case .calls: return "tab.calls"
+        case .chats: return "tab.chats"
+        case .settings: return "tab.settings"
         }
     }
 
@@ -55,6 +55,7 @@ struct MainTabView: View {
 // which also enables horizontal swipe navigation between tabs.
 
 struct BottomBar: View {
+    @EnvironmentObject var loc: AppLanguage
     @Binding var tab: Tab
     @Binding var showSearch: Bool
     var unread: Int
@@ -79,7 +80,7 @@ struct BottomBar: View {
                                         .offset(x: 13, y: -10)
                                 }
                             }
-                            Text(t.title).font(.system(size: 10, weight: .medium))
+                            Text(loc.t(t.titleKey)).font(.system(size: 10, weight: .medium))
                         }
                         .foregroundStyle(tab == t ? Theme.accent : Theme.muted)
                         .frame(maxWidth: .infinity)

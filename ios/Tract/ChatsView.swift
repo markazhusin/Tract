@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChatsView: View {
     @EnvironmentObject var mesh: MeshService
+    @EnvironmentObject var loc: AppLanguage
     @State private var showAdd = false
 
     private var nearbySubtitle: AnyView? {
@@ -9,7 +10,7 @@ struct ChatsView: View {
         return AnyView(
             HStack(spacing: 6) {
                 Circle().fill(Theme.online).frame(width: 7, height: 7)
-                Text("рядом: \(mesh.peerCount)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                Text("\(loc.t("nearby.count")) \(mesh.peerCount)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
             }
         )
     }
@@ -21,10 +22,10 @@ struct ChatsView: View {
             if mesh.contacts.isEmpty {
                 VStack(spacing: 16) {
                     EmptyHint(icon: "bubble.left.and.bubble.right",
-                              title: "Нет чатов",
-                              subtitle: "Добавьте контакт по ID кнопкой вверху или дождитесь устройство рядом по мешу.")
+                              title: loc.t("chats.empty.title"),
+                              subtitle: loc.t("chats.empty.sub"))
                     Button { showAdd = true } label: {
-                        Label("Добавить по ID", systemImage: "plus")
+                        Label(loc.t("common.addById"), systemImage: "plus")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 18).padding(.vertical, 11)
@@ -57,7 +58,7 @@ struct ChatsView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            ScreenHeader(title: "Чаты", subtitle: nearbySubtitle) {
+            ScreenHeader(title: loc.t("chats.title"), subtitle: nearbySubtitle) {
                 CircleGlassButton(systemName: "square.and.pencil") { showAdd = true }
             }
         }

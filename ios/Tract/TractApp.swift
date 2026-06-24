@@ -8,6 +8,7 @@ struct TractApp: App {
     @StateObject private var node = NodeConfig()
     @StateObject private var lock = AppLock()
     @StateObject private var notifications = NotificationService.shared
+    @StateObject private var loc = AppLanguage.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -19,6 +20,7 @@ struct TractApp: App {
                 .environmentObject(node)
                 .environmentObject(lock)
                 .environmentObject(notifications)
+                .environmentObject(loc)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
                 .onAppear { notifications.requestAuthorization() }
