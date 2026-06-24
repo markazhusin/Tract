@@ -1,9 +1,33 @@
-# Tract
+<div align="center">
 
-A local-first P2P messenger. **Open entry, no admins.** Your identity is a
-cryptographic key: the ID is derived from the public key automatically — it can't
-be claimed, faked, or taken away. The display name is arbitrary — it's just a
-label, not an address.
+<img src="assets/logo.png" alt="Tract" width="360" />
+
+### A serverless, censorship-resistant P2P messenger
+
+[Transports](#transports-chosen-automatically-as-a-cascade) ·
+[611protocol](#611protocol--the-encryption-stack-quantum-tamper-evidence-over-classical-e2e) ·
+[DHT rendezvous](#rendezvous-without-a-signaling-server-dht) ·
+[Run a node](#a-node-anywhere--no-hosting) ·
+[Roadmap](#roadmap) ·
+[Support](#support-development)
+
+![license](https://img.shields.io/badge/license-AGPLv3-blue)
+![platforms](https://img.shields.io/badge/platforms-iOS%20·%20macOS%20·%20Linux%20·%20Windows-111)
+![serverless](https://img.shields.io/badge/serverless-mesh%20%2B%20DHT-success)
+![Tor](https://img.shields.io/badge/Tor-onion%20%2B%20bridges-7d4698)
+
+**Follow the build:**
+[💬 Telegram @marco_611](https://t.me/marco_611) ·
+[📣 Channel @tractmesh](https://t.me/tractmesh) ·
+[🗨 GitHub Discussions](https://github.com/markazhusin/Tract/discussions)
+
+</div>
+
+---
+
+**Open entry, no admins.** Your identity is a cryptographic key: the ID is derived
+from the public key automatically — it can't be claimed, faked, or taken away. The
+display name is arbitrary — it's just a label, not an address.
 
 Message and call contents are **end-to-end encrypted on the device**. A server (a
 node) is only ever a "switchboard" for the internet (introduce two participants,
