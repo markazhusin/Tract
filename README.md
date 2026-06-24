@@ -142,6 +142,10 @@ see ciphertext). The quantum layer adds something a normal messenger doesn't: a 
 call actively *detects interception* and tears itself down if the channel is being
 tampered with.
 
+> **Full specification:** [`docs/611protocol.md`](docs/611protocol.md) — primitives,
+> ceremony, wire format, threat model, and measured QBER separation (honest ~0% vs
+> intercept-resend ~25%).
+
 > **Is there anything like this elsewhere?** To our knowledge, **no shipping
 > messenger combines a BB84 quantum-key-distribution ceremony with a fully
 > serverless (mesh + DHT) end-to-end P2P transport.** Pieces exist separately —
