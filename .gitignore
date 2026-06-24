@@ -44,10 +44,6 @@ data/
 # Go build output
 tract-server
 
-# Local agent/IDE tooling (not part of the app)
-.claude/
-.kilo/
-
 # Stray binary docs (the Markdown manifest is kept, these are not)
 *.pdf
 *.docx
