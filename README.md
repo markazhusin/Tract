@@ -109,11 +109,13 @@ the network depends on no single provider:
 - **GetStream reserve** (signaling, **not** media) — the last step of the cascade:
   the same offer/answer/ICE travel over Stream Chat when there's neither a node nor
   the DHT. It's the only path that survives VPN UDP filtering **without** a node, so
-  it's kept — but it's **turned off** in the app (Settings → "Reserve signaling") for
-  fully serverless operation, and on the server by an empty `STREAM_API_SECRET`. **The
-  Stream secret never reaches the client**: the node mints a short per-user JWT at
-  `GET /getstream/token`, and the client only ever sees that token and the public
-  API key. Configure with `STREAM_API_KEY`/`STREAM_API_SECRET`/`STREAM_APP_ID`.
+  it's kept — but it's **off by default** (it only turns on when you set the env
+  below) and can also be disabled in the app (Settings → "Reserve signaling") for
+  fully serverless operation. **The Stream secret never lives in source or reaches
+  the client**: it comes only from the node's environment; the node mints a short
+  per-user JWT at `GET /getstream/token`, and the client only ever sees that token and
+  the public API key. Enable per-deploy with
+  `STREAM_API_KEY` + `STREAM_API_SECRET` + `STREAM_APP_ID`.
 
 > **Honest about decentralization.** A truly "serverless" messenger doesn't exist:
 > rendezvous, NAT traversal, and offline delivery must be done by *someone*. Tract

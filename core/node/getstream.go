@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"time"
 
@@ -17,20 +18,19 @@ import (
 // and app_packets over a Stream channel instead of (or in addition to) a node.
 //
 // SECURITY: the Stream API SECRET can mint a token for ANY user, so it lives ONLY
-// on the node and is never embedded in a client binary. The node mints a short,
-// per-user JWT on request; clients use that token + the (public) API key. Override
-// per-deploy with STREAM_API_KEY / STREAM_API_SECRET / STREAM_APP_ID; clearing
-// STREAM_API_SECRET disables the feature.
-const (
-	streamAPIKey    = "8pt33s7k243a"
-	streamAPISecret = ""
-	streamAppID     = "1644225"
-)
-
+// on the node, comes EXCLUSIVELY from the environment, and is NEVER committed to
+// source (a public repo would otherwise leak it). With no STREAM_API_SECRET set the
+// GetStream reserve is simply OFF — which is the default; it's an optional fallback,
+// not required for the mesh/node/DHT paths. Self-hosters who want it set all three:
+//
+//	STREAM_API_KEY=...  STREAM_API_SECRET=...  STREAM_APP_ID=...
+//
+// The API key and app id are public by design (clients use them); only the secret
+// is sensitive, and it never has a hardcoded default.
 func streamConfig() (apiKey, secret, appID string, enabled bool) {
-	apiKey = envOr("STREAM_API_KEY", streamAPIKey)
-	secret = envOr("STREAM_API_SECRET", streamAPISecret)
-	appID = envOr("STREAM_APP_ID", streamAppID)
+	apiKey = strings.TrimSpace(os.Getenv("STREAM_API_KEY"))
+	secret = strings.TrimSpace(os.Getenv("STREAM_API_SECRET"))
+	appID = strings.TrimSpace(os.Getenv("STREAM_APP_ID"))
 	return apiKey, secret, appID, secret != "" && apiKey != ""
 }
 
