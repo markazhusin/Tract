@@ -59,6 +59,10 @@ final class CallService: ObservableObject {
     private var mode: CallMode = .mesh
     /// For an internet call, whether signaling goes over the DHT (no node) vs a node.
     private var internetViaDHT = false
+    /// For an internet call, whether signaling goes over the GetStream reserve
+    /// (last-resort: peer not locatable on any node, but reachable cross-node /
+    /// behind a VPN that filters the DHT's UDP). Mutually exclusive with `internetViaDHT`.
+    private var internetViaStream = false
     private var callId = ""
     private var remotePub = ""            // remote contact public key (for DHT E2E)
     private var dhtOfferSDP: String?      // a received DHT offer, awaiting accept
@@ -127,6 +131,9 @@ final class CallService: ObservableObject {
         guard let node else { return }
         let sig = SignalingClient(node: node, peerId: Self.stablePeerId)
         sig.onSignal = { [weak self] from, type, payload in self?.handleSignal(from: from, type: type, payload: payload) }
+        // Watch every contact's GetStream backup channel for inbound calls, so a
+        // call lands even when our node path is down / the caller is on another node.
+        sig.contactsProvider = { [weak self] in self?.mesh?.contacts.map { $0.userId } ?? [] }
         sig.start(userId: identity.userId, displayName: identity.displayName, publicKeyHex: identity.publicKeyHex)
         signaling = sig
     }
@@ -146,6 +153,9 @@ final class CallService: ObservableObject {
         peerUserId = contact.userId
         remoteName = contact.displayName
         remotePeerId = nil
+        internetViaDHT = false
+        internetViaStream = false
+        remotePub = contact.publicKeyHex
         beginCallRecord(outgoing: true, userId: contact.userId, name: contact.displayName)
 
         if mesh?.reachability(of: contact.userId) == .localMesh {
@@ -264,19 +274,44 @@ final class CallService: ObservableObject {
         }
     }
 
+    /// Place an internet call, cascading through transports so it never gives up
+    /// while ANY path exists: node (fast, ~1-2s) → DHT (node-less) → GetStream
+    /// reserve (HTTPS, survives VPN/UDP filtering). The recipient watches all three
+    /// inbound, so whichever we use lands.
     private func internetInvite(_ contact: Contact, _ sig: SignalingClient) async {
-        guard let peer = await sig.findPeer(userId: contact.userId),
-              let rpid = peer["peerId"] as? String else {
+        // 1) Peer registered on our node → fastest path.
+        if let peer = await sig.findPeer(userId: contact.userId),
+           let rpid = peer["peerId"] as? String {
+            await MainActor.run { self.remotePeerId = rpid; self.internetViaStream = false }
+            await sig.sendSignal(toPeerId: rpid, toUserId: contact.userId, type: "call",
+                                 payload: ["action": "invite", "fromName": myName, "fromUserId": myId])
+            return
+        }
+        // 2) Not on this node — fall back to the node-less DHT rendezvous.
+        if dht.ready {
             await MainActor.run {
-                self.phase = .ended(reason: "Абонент не в сети")
-                self.finishCallRecord()
-                self.autoClearEnded()
+                self.internetViaDHT = true
+                self.startDHTOutgoing(contact)
             }
             return
         }
-        await MainActor.run { self.remotePeerId = rpid }
-        await sig.sendSignal(toPeerId: rpid, toUserId: contact.userId, type: "call",
-                             payload: ["action": "invite", "fromName": myName])
+        // 3) DHT unavailable (e.g. a VPN filtering UDP) — last resort: signal over
+        //    the GetStream reserve, addressed by userId via the deterministic channel.
+        if sig.streamReady {
+            await MainActor.run {
+                self.internetViaStream = true
+                self.remotePeerId = Self.stablePeerId   // placeholder; Stream addresses by userId
+            }
+            await sig.sendViaStream(toUserId: contact.userId, type: "call",
+                                    payload: ["action": "invite", "fromName": myName,
+                                              "fromUserId": myId, "via": "stream"])
+            return
+        }
+        await MainActor.run {
+            self.phase = .ended(reason: "Абонент не в сети")
+            self.finishCallRecord()
+            self.autoClearEnded()
+        }
     }
 
     // MARK: Incoming actions
@@ -300,13 +335,12 @@ final class CallService: ObservableObject {
                 // BB84 skipped on the DHT path (too many round-trips); the call is
                 // still E2E via DTLS-SRTP. See DHTRendezvous header.
             } else {
-                if let sig = signaling, let rpid = remotePeerId {
-                    Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
-                                                payload: ["action": "accept"]) }
-                }
+                sendSig("call", ["action": "accept"])
                 startInternetMedia(asCaller: false)
                 phase = .connected(name: name)
-                startQKD(asAlice: false)   // answerer = Bob
+                // BB84 over the GetStream reserve would need too many slow round-trips;
+                // run it only on the node path. The call is still E2E via DTLS-SRTP.
+                if !internetViaStream { startQKD(asAlice: false) }   // answerer = Bob
             }
         }
     }
@@ -339,9 +373,8 @@ final class CallService: ObservableObject {
                 let payload: [String: Any] = ["callId": callId, "action": action,
                                               "ts": Int64(Date().timeIntervalSince1970)]
                 Task { await dht.sendCall(toUserId: toUser, toPub: pub, type: "control", payload: payload) }
-            } else if let sig = signaling, let rpid = remotePeerId {
-                Task { await sig.sendSignal(toPeerId: rpid, toUserId: peerUserId ?? "", type: "call",
-                                            payload: ["action": action]) }
+            } else {
+                sendSig("call", ["action": action])
             }
         }
     }
@@ -350,6 +383,20 @@ final class CallService: ObservableObject {
         var dict: [String: Any] = ["t": "call", "action": action, "from": myId, "fromName": myName]
         if let to = peerUserId { dict["to"] = to }
         mesh?.sendControl(dict)
+    }
+
+    /// Route one internet (non-DHT) trickle signaling message over the active path:
+    /// the GetStream reserve when the call fell through to the stream transport, else
+    /// the node (whose `sendSignal` itself falls back to GetStream on a transport
+    /// error). Centralised so offer/answer/ICE/control/qkd all honour the transport.
+    private func sendSig(_ type: String, _ payload: Any) {
+        guard let sig = signaling else { return }
+        let toUser = peerUserId ?? ""
+        if internetViaStream {
+            Task { await sig.sendViaStream(toUserId: toUser, type: type, payload: payload) }
+        } else if let rpid = remotePeerId {
+            Task { await sig.sendSignal(toPeerId: rpid, toUserId: toUser, type: type, payload: payload) }
+        }
     }
 
     // MARK: BB84 quantum key agreement
@@ -384,9 +431,7 @@ final class CallService: ObservableObject {
     private func sendQKD(_ msg: [String: Any]) {
         switch mode {
         case .internet:
-            if let sig = signaling, let rpid = remotePeerId {
-                Task { await sig.sendSignal(toPeerId: rpid, toUserId: self.peerUserId ?? "", type: "qkd", payload: msg) }
-            }
+            sendSig("qkd", msg)
         case .mesh:
             var dict: [String: Any] = ["t": "qkd", "from": myId, "d": msg]
             if let to = peerUserId { dict["to"] = to }
@@ -440,14 +485,14 @@ final class CallService: ObservableObject {
         switch type {
         case "call":
             guard let dict = payload as? [String: Any], let action = dict["action"] as? String else { return }
-            handleInternetControl(action: action, fromPeerId: from, name: dict["fromName"] as? String ?? "Контакт")
+            handleInternetControl(action: action, fromPeerId: from, dict: dict)
         case "offer":
             guard let sdp = payload as? String else { return }
             ensureWebRTC(asCaller: false)
             webrtc?.setRemote(sdp: sdp, type: .offer) { [weak self] in
                 self?.webrtc?.createAnswer { answer in
-                    guard let self, let answer, let sig = self.signaling, let rpid = self.remotePeerId else { return }
-                    Task { await sig.sendSignal(toPeerId: rpid, toUserId: self.peerUserId ?? "", type: "answer", payload: answer) }
+                    guard let self, let answer else { return }
+                    self.sendSig("answer", answer)
                 }
             }
         case "answer":
@@ -464,17 +509,29 @@ final class CallService: ObservableObject {
         }
     }
 
-    private func handleInternetControl(action: String, fromPeerId: String, name: String) {
+    private func handleInternetControl(action: String, fromPeerId: String, dict: [String: Any]) {
+        let name = dict["fromName"] as? String ?? "Контакт"
         switch action {
         case "invite":
             if phase.isActive {
                 if let sig = signaling {
-                    Task { await sig.sendSignal(toPeerId: fromPeerId, toUserId: "", type: "call", payload: ["action": "decline"]) }
+                    let toUser = dict["fromUserId"] as? String ?? ""
+                    if (dict["via"] as? String) == "stream", !toUser.isEmpty {
+                        Task { await sig.sendViaStream(toUserId: toUser, type: "call", payload: ["action": "decline"]) }
+                    } else {
+                        Task { await sig.sendSignal(toPeerId: fromPeerId, toUserId: toUser, type: "call", payload: ["action": "decline"]) }
+                    }
                 }
                 return
             }
             mode = .internet
+            internetViaDHT = false
+            // Reply over the same transport the invite arrived on (stream addresses by
+            // userId; the node by peerId). `fromUserId` lets us address either + map
+            // the call to a known contact.
+            internetViaStream = (dict["via"] as? String) == "stream"
             remotePeerId = fromPeerId
+            if let fromUser = dict["fromUserId"] as? String, !fromUser.isEmpty { peerUserId = fromUser }
             remoteName = name
             beginCallRecord(outgoing: false, userId: peerUserId ?? "", name: name)
             phase = .incoming(from: fromPeerId, name: name)
@@ -484,7 +541,7 @@ final class CallService: ObservableObject {
                 markCallConnected()
                 phase = .connected(name: remoteName)
                 startInternetMedia(asCaller: true)
-                startQKD(asAlice: true)   // caller = Alice
+                if !internetViaStream { startQKD(asAlice: true) }   // caller = Alice
             }
         case "decline":
             if phase.isActive { teardown(reason: "Звонок отклонён") }
@@ -500,8 +557,7 @@ final class CallService: ObservableObject {
         guard webrtc == nil else { return }
         let rtc = WebRTCCallEngine()
         rtc.onLocalIce = { [weak self] cand in
-            guard let self, let sig = self.signaling, let rpid = self.remotePeerId else { return }
-            Task { await sig.sendSignal(toPeerId: rpid, toUserId: self.peerUserId ?? "", type: "ice", payload: cand.wireDict) }
+            self?.sendSig("ice", cand.wireDict)
         }
         rtc.onClosed = { [weak self] in
             guard let self else { return }
@@ -523,8 +579,8 @@ final class CallService: ObservableObject {
                         self.webrtc?.configure(iceServers: ice)
                         if asCaller {
                             self.webrtc?.createOffer { sdp in
-                                guard let sdp, let rpid = self.remotePeerId else { return }
-                                Task { await sig.sendSignal(toPeerId: rpid, toUserId: self.peerUserId ?? "", type: "offer", payload: sdp) }
+                                guard let sdp else { return }
+                                self.sendSig("offer", sdp)
                             }
                         }
                     }
@@ -564,6 +620,7 @@ final class CallService: ObservableObject {
         peerUserId = nil
         remotePeerId = nil
         internetViaDHT = false
+        internetViaStream = false
         callId = ""
         remotePub = ""
         dhtOfferSDP = nil

@@ -18,11 +18,27 @@ final class SignalingClient {
     /// in parallel always; used for sending when the node path fails. Bootstrapped
     /// lazily from the node (the only holder of the Stream secret).
     private var stream: StreamSignalingFallback?
-    private var streamReady = false
 
     /// Delivered on the main queue: (fromPeerId, type, payload). `payload` is a
     /// String for offer/answer SDP, or [String:Any] for ICE / app packets.
     var onSignal: ((String, String, Any) -> Void)?
+
+    /// Supplies the userIds of our contacts so their GetStream backup channels are
+    /// polled for INCOMING signaling even before we've sent them anything — a node
+    /// being down (or a peer registered on a different node) then can't drop a call.
+    var contactsProvider: (() -> [String])?
+
+    /// Whether the GetStream reserve transport is bootstrapped AND the user hasn't
+    /// opted out. Off → the cascade is fully serverless (mesh + node + DHT only),
+    /// with no dependency on any third-party account.
+    var streamReady: Bool { streamReserveEnabled && streamReadyFlag }
+    private var streamReadyFlag = false
+
+    /// Opt-out for the third-party GetStream reserve (default on). Read live so the
+    /// Settings toggle takes effect without a restart.
+    private var streamReserveEnabled: Bool {
+        (UserDefaults.standard.object(forKey: "tract.streamReserve") as? Bool) ?? true
+    }
 
     init(node: NodeConfig, peerId: String) {
         self.node = node
@@ -137,6 +153,16 @@ final class SignalingClient {
 
     // MARK: Signaling
 
+    /// Send signaling DIRECTLY over the GetStream reserve (addressed by userId, not
+    /// peerId). Used as the last-resort call transport when a peer can't be located
+    /// on any node but both sides watch the deterministic per-pair channel — works
+    /// over HTTPS, so it survives VPNs / UDP filtering that can sink the DHT.
+    func sendViaStream(toUserId: String, type: String, payload: Any) async {
+        guard streamReserveEnabled, !toUserId.isEmpty else { return }
+        stream?.register(peerUserId: toUserId)
+        await stream?.send(toUserId: toUserId, fromPeerId: peerId, type: type, payload: payload)
+    }
+
     func sendSignal(toPeerId: String, toUserId: String, type: String, payload: Any) async {
         // Remember the peer so its backup channel is polled for replies.
         if !toUserId.isEmpty { stream?.register(peerUserId: toUserId) }
@@ -146,8 +172,11 @@ final class SignalingClient {
                 "roomId": node.roomId, "type": type, "payload": payload
             ])
         } catch {
-            // Node path failed — fall back to the GetStream reserve transport.
-            await stream?.send(toUserId: toUserId, fromPeerId: peerId, type: type, payload: payload)
+            // Node path failed — fall back to the GetStream reserve transport, unless
+            // the user opted out of it (then we stay fully serverless).
+            if streamReserveEnabled {
+                await stream?.send(toUserId: toUserId, fromPeerId: peerId, type: type, payload: payload)
+            }
         }
     }
 
@@ -163,11 +192,23 @@ final class SignalingClient {
     /// still reach us. Best-effort; never blocks the primary path.
     private func streamLoop() async {
         while running {
-            if !streamReady, node.baseURL != nil {
-                await stream?.bootstrap()
-                streamReady = stream?.isEnabled ?? false
+            guard streamReserveEnabled else {           // opted out → stay serverless
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                continue
             }
-            if streamReady { await stream?.pollAll() }
+            if !streamReadyFlag, node.baseURL != nil {
+                await stream?.bootstrap()
+                streamReadyFlag = stream?.isEnabled ?? false
+            }
+            if streamReadyFlag {
+                // Always watch every contact's backup channel for inbound signaling,
+                // so a call/offer reaches us even if our node path is down or the
+                // caller is registered on a different node.
+                for uid in contactsProvider?() ?? [] where !uid.isEmpty {
+                    stream?.register(peerUserId: uid)
+                }
+                await stream?.pollAll()
+            }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }

@@ -78,6 +78,7 @@ struct ContactStatusRow: View {
 
     private var status: (text: String, color: Color) {
         if isNearby { return ("рядом", Theme.online) }
+        if route == .internetDirect { return ("в сети", route.color) }
         if let ls = contact.lastSeen { return (ContactsView.lastSeenText(ls), Theme.muted) }
         return ("был(а) недавно", Theme.muted)
     }
@@ -86,8 +87,8 @@ struct ContactStatusRow: View {
         HStack(spacing: 13) {
             ZStack(alignment: .bottomTrailing) {
                 Avatar(name: contact.displayName, seed: contact.userId, size: 52)
-                if isNearby {
-                    Circle().fill(Theme.online)
+                if route != .offline {
+                    Circle().fill(route.color)
                         .frame(width: 13, height: 13)
                         .overlay(Circle().strokeBorder(Theme.bg, lineWidth: 2.5))
                 }

@@ -119,6 +119,11 @@ struct SettingsView: View {
                                       subtitle: "Вас не видно рядом и в сети, но устройство продолжает передавать чужие сообщения, как курьер.",
                                       isOn: $mesh.stealth)
                             RowDivider()
+                            toggleRow(icon: "arrow.triangle.2.circlepath", tint: Color(hex: "#f4a259"),
+                                      title: "Резервный сигналинг",
+                                      subtitle: "Сторонний канал (GetStream) на крайний случай — когда нет ни узла, ни DHT (например, VPN режет UDP). Выключите для полностью бессерверной работы: меш + узлы + DHT.",
+                                      isOn: $mesh.streamReserveEnabled)
+                            RowDivider()
                             HStack(spacing: 13) {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(Color(hex: "#5b9cf2")).frame(width: 30, height: 30)

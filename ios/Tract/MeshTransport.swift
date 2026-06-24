@@ -38,6 +38,11 @@ final class MeshTransport: NSObject {
     private(set) var displayName: String = ""
     private(set) var publicKeyHex: String = ""
 
+    /// Number of peers with a live, connected mesh session right now. Routing keys
+    /// off this (not stale discovery flags) so we never "send into the void" when a
+    /// nearby device was discovered but its Bluetooth/Wi-Fi session has since dropped.
+    var connectedPeerCount: Int { session.connectedPeers.count }
+
     /// Stealth: don't advertise our identity (we won't appear as a nearby contact),
     /// but keep connecting + relaying — an invisible courier node.
     var stealth: Bool = false

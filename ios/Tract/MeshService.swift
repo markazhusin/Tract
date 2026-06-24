@@ -16,6 +16,11 @@ struct Contact: Identifiable, Equatable, Hashable, Codable {
     /// When we last observed this contact online (mesh discovery). Drives the
     /// "был(а) …" last-seen subtitle. Optional → old saved data decodes fine.
     var lastSeen: Date? = nil
+    /// When we last observed this contact reachable over the INTERNET (node peer
+    /// registry or DHT presence beacon). Distinct from `online` (which is mesh-only)
+    /// so "в сети" reflects the contact's real reachability, not just our own
+    /// connectivity. Optional → old saved data decodes fine.
+    var netSeen: Date? = nil
 }
 
 struct ChatMessage: Identifiable, Equatable, Codable {
@@ -71,6 +76,7 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
     var onAudio: ((Data, String) -> Void)?
 
     private var inboxRunning = false
+    private var presenceRunning = false
     private var processedPacketIds = Set<String>()
 
     /// Stealth: invisible to nearby/network discovery, but still relays others'
@@ -80,6 +86,13 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
             UserDefaults.standard.set(stealth, forKey: "tract.stealth")
             transport.setStealth(stealth)
         }
+    }
+
+    /// Opt-out for the third-party GetStream reserve signaling. On by default (it's a
+    /// last-resort path for the narrow case of no node + a VPN filtering the DHT's
+    /// UDP). Off → fully serverless: only mesh, self-hostable nodes, and the DHT.
+    @Published var streamReserveEnabled: Bool = (UserDefaults.standard.object(forKey: "tract.streamReserve") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(streamReserveEnabled, forKey: "tract.streamReserve") }
     }
 
     /// Nearby discovery on/off (the mesh). When off we don't advertise/browse.
@@ -133,6 +146,7 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
                                   publicKeyHex: identity.publicKeyHex)
         }
         startInboxLoop()
+        startPresenceLoop()
         wireDHT()
     }
 
@@ -175,21 +189,29 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
     // MARK: Route (UI + send selection)
 
-    /// Nearby mesh peer → local mesh (best); otherwise internet — via a node if one
-    /// is configured, else node-lessly over the BitTorrent DHT (when it's ready).
+    /// How we can actually reach THIS contact right now. Nearby mesh peer with a
+    /// live session → local mesh (best). Otherwise "в сети" only if we've observed
+    /// the contact reachable over the internet recently (node registry / DHT beacon)
+    /// — not merely because WE have connectivity. Else offline ("был(а) …").
     func route(for userId: String) -> RouteQuality {
-        if running, let c = contacts.first(where: { $0.userId == userId }), c.online { return .localMesh }
-        if node?.isConfigured == true { return .internetDirect }
-        if DHTRendezvous.shared.ready { return .internetDirect }
+        if running, let c = contacts.first(where: { $0.userId == userId }),
+           c.online, transport.connectedPeerCount > 0 { return .localMesh }
+        if let c = contacts.first(where: { $0.userId == userId }), let ns = c.netSeen,
+           Date().timeIntervalSince(ns) < Self.presenceTTL { return .internetDirect }
         return .offline
     }
+
+    /// A contact is considered "в сети" over the internet if observed within this
+    /// window (presence is polled every ~12s; this gives a couple of misses' grace).
+    private static let presenceTTL: TimeInterval = 75
 
     // MARK: AppTransport (kept for the router; mesh-only)
 
     var kind: TransportKind { .localMesh }
     var isAvailable: Bool { running }
     func reachability(of userId: String) -> RouteQuality {
-        if running, let c = contacts.first(where: { $0.userId == userId }), c.online { return .localMesh }
+        if running, let c = contacts.first(where: { $0.userId == userId }),
+           c.online, transport.connectedPeerCount > 0 { return .localMesh }
         return .offline
     }
     func send(_ framed: Data, to userId: String, reliable: Bool) {
@@ -295,7 +317,15 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         }
 
         let pid = UUID().uuidString
-        if route(for: contact.userId) == .localMesh {
+
+        // Deliver over EVERY transport that's actually up, not just the "best" one —
+        // the mesh flood is best-effort (a discovered peer may have dropped, or sits
+        // several hops away), so we also push the same packet over the internet when
+        // available. The recipient dedups on `pid`, so it shows exactly once. This is
+        // why a message "проходит" even when Bluetooth is flaky.
+        let meshUp = meshEnabled && transport.connectedPeerCount > 0
+
+        if meshUp {
             let packet: [String: Any] = [
                 "id": pid, "to": contact.userId, "from": id.userId, "fromName": id.displayName,
                 "fromPk": id.publicKeyHex, "box": box, "ttl": meshTTL
@@ -306,16 +336,20 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
                 transport.broadcast(framed, reliable: true)
                 courierEnqueue(id: pid, frame: framed)   // carry it to peers that connect later
             }
-        } else if node?.isConfigured == true {
+        }
+
+        if node?.isConfigured == true {
             let userId = contact.userId
             Task { await self.sendAppPacket(toUserId: userId, box: box, pid: pid) }
-        } else {
+        } else if DHTRendezvous.shared.ready {
             // No node — deliver into the recipient's DHT inbox (E2E, store-and-forward).
             // sendText re-encrypts with the X25519 shared key itself, so pass plaintext.
             let userId = contact.userId, pub = contact.publicKeyHex
             Task { await DHTRendezvous.shared.sendText(toUserId: userId, toPub: pub, text: trimmed, pid: pid) }
         }
 
+        // If nothing is up the message is still stored (shown as sent ✓); it simply
+        // can't leave the device until a path appears.
         append(ChatMessage(pid: pid, text: trimmed, fromMe: true, time: Date()), to: contact.userId, preview: trimmed, bumpUnread: false)
         save()
         return true
@@ -369,6 +403,68 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
         guard !inboxRunning else { return }
         inboxRunning = true
         Task { await inboxLoop() }
+    }
+
+    // MARK: Presence (per-contact internet reachability)
+
+    private func startPresenceLoop() {
+        guard !presenceRunning else { return }
+        presenceRunning = true
+        Task { await presenceLoop() }
+    }
+
+    /// Poll each contact's real internet reachability so "в сети" reflects the
+    /// CONTACT's presence, not our own connectivity. Two independent signals:
+    ///   • the node's peer registry (`/peers/by-user`) — online if registered & not
+    ///     hiding; carries the node's `lastSeen`.
+    ///   • the DHT presence beacon (`isOnline`) — works node-lessly.
+    /// Either one marks the contact reachable; both feed `lastSeen` for "был(а) …".
+    private func presenceLoop() async {
+        while running {
+            let snapshot = contacts.map { (userId: $0.userId, pub: $0.publicKeyHex) }
+            for c in snapshot {
+                var online = false
+                var seenAt: Date? = nil
+                if let (isOn, ls) = await nodePresence(userId: c.userId) {
+                    if isOn { online = true; seenAt = ls ?? Date() }
+                }
+                if !online, DHTRendezvous.shared.ready,
+                   await DHTRendezvous.shared.isOnline(userId: c.userId) {
+                    online = true; seenAt = Date()
+                }
+                if online {
+                    await MainActor.run { self.markNetSeen(c.userId, at: seenAt ?? Date()) }
+                }
+            }
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+        }
+        presenceRunning = false
+    }
+
+    /// Ask the node whether a user is currently registered. Returns nil if the node
+    /// is unreachable (so we don't clobber presence), else (online, lastSeen).
+    private func nodePresence(userId: String) async -> (online: Bool, lastSeen: Date?)? {
+        guard let base = node?.baseURL, let room = node?.roomId,
+              var comps = URLComponents(url: base.appendingPathComponent("peers/by-user/\(userId)"),
+                                        resolvingAgainstBaseURL: false) else { return nil }
+        comps.queryItems = [URLQueryItem(name: "roomId", value: room)]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url); req.timeoutInterval = 8
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let peer = obj["peer"] as? [String: Any] else { return (false, nil) }
+        let hidden = (peer["hideOnline"] as? Bool) ?? false
+        if hidden { return (false, nil) }
+        let ls = (peer["lastSeen"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        return (true, ls)
+    }
+
+    /// Record an internet-presence observation: drives "в сети" and "был(а) …".
+    private func markNetSeen(_ userId: String, at date: Date) {
+        guard let i = contacts.firstIndex(where: { $0.userId == userId }) else { return }
+        contacts[i].netSeen = date
+        if (contacts[i].lastSeen ?? .distantPast) < date { contacts[i].lastSeen = date }
     }
 
     private func inboxLoop() async {
@@ -467,7 +563,13 @@ final class MeshService: ObservableObject, MeshTransportDelegate, AppTransport {
 
         let to = obj["to"] as? String ?? ""
         if let id = identity, to == id.userId {
-            // Addressed to us: decrypt and show.
+            // Addressed to us: decrypt and show. Dedup on `pid` ACROSS transports
+            // (mesh + node + DHT all share this set) so a message we receive over
+            // two paths at once is shown exactly once.
+            if !pid.isEmpty {
+                if processedPacketIds.contains(pid) { return }
+                processedPacketIds.insert(pid)
+            }
             guard let box = obj["box"] as? String, let fromPk = obj["fromPk"] as? String,
                   let from = obj["from"] as? String,
                   let key = Crypto.sharedKey(my: id.privateKey, theirHex: fromPk),
