@@ -3,6 +3,7 @@ module tract-signaling
 go 1.21
 
 require (
+	github.com/cretz/bine v0.2.0
 	github.com/gin-contrib/cors v1.5.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/grandcat/zeroconf v1.0.0

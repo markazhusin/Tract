@@ -316,7 +316,16 @@ anonymity:
 - **Anonymous tunnel** — `npm run share` brings up a node and a public
   `*.trycloudflare.com` URL **with no account and no domain of your own**. Hand that
   address to the other person (paste/QR) — it lives as long as the terminal is open.
-- **Tor hidden service** — a `.onion` address: no IP, no jurisdiction, no hosting.
+- **Tor hidden service (built in) — no open ports, ISP-opaque.** If a `tor` binary
+  is present, the node automatically publishes itself as a Tor v3 onion service and
+  serves the same API over it. **No inbound port to forward, scan, or block**, and to
+  the network operator the traffic looks like ordinary Tor — they can't tell a node
+  is running. The `.onion` address is printed on start and is **stable across
+  restarts** (the key is kept in `./data/tor`); share it once (paste/QR). Controls:
+  `TRACT_TOR=0` to disable, `TOR_BINARY=/path/to/tor` to point at a specific binary.
+  Install Tor with `brew install tor` / `apt install tor`. This runs an *external*
+  tor over its control port (no CGO), so the node stays a single static binary; if no
+  tor is found the node just logs a hint and runs normally on TCP.
 - **Your own public IP / VPS** — if you need a permanent node.
 
 The node listens on `PORT` (default `8877`) and writes to `./data` (identity blobs
@@ -411,7 +420,8 @@ a **node → DHT → GetStream cascade** and a TURN relay for NAT; **presence by
 contact's real reachability** (node + DHT beacon); multi-hop relay and a
 store-and-forward courier over the mesh; the BB84 ceremony on calls; auto node
 discovery; read receipts (✓✓); a disableable third-party reserve (fully serverless
-mode).
+mode); **built-in Tor onion reachability for the node** (no open ports, ISP-opaque,
+stable address).
 
 **Limitations / in progress:** push notifications and a call to a **closed/evicted**
 app (needs APNs/PushKit — a local node can't wake the OS); a 100% serverless call

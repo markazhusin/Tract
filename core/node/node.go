@@ -178,6 +178,11 @@ func Start(ctx context.Context, opts Options) error {
 
 	log.Printf("[Tract Signaling] listening on http://0.0.0.0:%s", opts.Port)
 
+	// Publish a Tor v3 onion so the node is reachable with NO open ports and
+	// ISP-opaquely. Best-effort and optional: serves the same handler over .onion;
+	// if no tor binary is present it logs a hint and the node runs normally on TCP.
+	startOnion(ctx, opts.DataDir, opts.Port, router)
+
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("serve: %w", err)
 	}
