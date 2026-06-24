@@ -123,7 +123,34 @@ the network depends on no single provider:
 > hands out its own TURN and tokens), add it to the seeds — and no third parties are
 > needed.
 
-## BB84 — quantum channel protection (the call collapses if compromised)
+## 611protocol — the encryption stack (quantum tamper-evidence over classical E2E)
+
+Tract's encryption is a layered stack we call **611protocol**: a quantum
+key-distribution *tamper-evidence ceremony* placed **on top of** a conventional
+end-to-end pipeline, so a live call has two independent guarantees instead of one.
+
+```
+611protocol  =  [ classical E2E ]  +  [ quantum tamper-evidence on top ]
+
+  classical E2E:  Curve25519 (X25519)  →  HKDF-SHA256  →  AES-256-GCM
+                  (sealed on the device before anything leaves it)
+  quantum layer:  BB84 QKD ceremony per call  →  QBER check  →  collapse on tampering
+```
+
+The classical layer keeps content confidential end-to-end (the node/DHT only ever
+see ciphertext). The quantum layer adds something a normal messenger doesn't: a live
+call actively *detects interception* and tears itself down if the channel is being
+tampered with.
+
+> **Is there anything like this elsewhere?** To our knowledge, **no shipping
+> messenger combines a BB84 quantum-key-distribution ceremony with a fully
+> serverless (mesh + DHT) end-to-end P2P transport.** Pieces exist separately —
+> mesh messengers (Briar, Meshtastic), E2E messengers (Signal), QKD in telecom lab
+> hardware — but the *combination*, as a tamper-evidence ceremony on a consumer
+> serverless app, we have not found in the wild. (If you know of one, tell us — this
+> is an honest "to our knowledge", not a marketing absolute.)
+
+### How the quantum layer works
 
 Before talking, the two sides run a **BB84 quantum key-distribution ceremony** on
 top of the already-encrypted signaling channel (`internal/quantum/bb84.go`, ports in
@@ -143,6 +170,32 @@ drop the link than continue a compromised one.
 > a CSPRNG, just as on a real device.
 
 ---
+
+## Planned transports
+
+The protocol is one; the physical channel is an implementation detail. The app
+shouldn't know or care which radio carries a packet. Today it runs on the local mesh
+(Wi-Fi/Bluetooth) and the internet (node/DHT/WebRTC); the planned transport substrate
+underneath is broader — each new channel physically extends reach:
+
+| Transport | Role | Status |
+|---|---|---|
+| **Wi-Fi mesh 802.11s** | primary urban channel (150–300 Mbit/s, 100–300 m/node) — video, sync | planned (today: MultipeerConnectivity mesh) |
+| **Bluetooth LE 5.0** | last mile / offline, up to 7 hops | partial (mesh today) |
+| **LoRa 430/868 MHz** | long-range fallback (~50 kbit/s, **5–50 km**) — messages cross a whole city with no towers, works when everything else is down | **needs hardware: rooftop antennas + LoRa gateways (ESP32 + LoRa module, ~$15–30, Meshtastic-style) — requires funding** |
+| **Ethernet / fiber (Yggdrasil)** | backbone; a home router becomes a gigabit node | planned |
+| **Laser FSO** | rooftop-to-rooftop up to 5 km, up to 1 Gbit/s; legally not radio, no spectrum licence | planned |
+| **Satellite (Starlink / OneWeb)** | gateway beyond ground jurisdiction — **one terminal per district** | planned |
+| **Tor / I2P** | onion routing used as *a* channel, not a dependency — hides source and destination | partial (planned for node reachability) |
+| **Store-and-forward** | people as protocol: when there's no channel at all, a phone physically carries packets between towns and syncs on contact with any node | partial (mesh courier today) |
+
+The channel is auto-selected per task: video over Wi-Fi, a message over LoRa, a
+payload that "arrives physically" when there is no link at all. Works offline,
+supports the internet, doesn't depend on it.
+
+> **This needs funding.** LoRa antennas/gateways and always-on relay hardware (OpenWrt
+> routers, Raspberry Pi nodes) are physical things that cost money. See
+> [Support development](#support-development).
 
 ## Quick start
 
@@ -287,6 +340,62 @@ The node hands these to clients via `GET /ice`.
 | `groups.json`, `avatars/` | Groups, avatars (legacy web) |
 
 ---
+
+## Roadmap
+
+Honest about "everyone at once": that's not how this rolls out, and the whole
+strategy depends on admitting it. A mesh has a physical limit — it only works where
+there are enough nodes within radio range. So the only path that works is **local
+density first, then expansion**: not the whole world at once, but islands that grow
+into an archipelago, then a continent.
+
+- **Phase 0 — Seed (now).** Device-to-device over BT / Wi-Fi with no infrastructure
+  (two phones nearby are already a network); internet via a node or node-lessly over
+  the DHT. Calls and chat work today. *This is the current MVP.*
+- **Phase 1 — Local density.** Beachheads where motivation meets a tolerant
+  environment: weak-connectivity areas, privacy-minded communities, campuses,
+  festivals, makers, disaster zones. Goal: critical mass on a small footprint so the
+  mesh sustains itself. Distribute via App Store / Play for reach, plus an Android
+  APK and F-Droid for a block-resistant branch.
+- **Phase 2 — Hardware backbone.** Phones give intermittent coverage; always-on
+  relays give permanent coverage: **OpenWrt routers** (firmware adds 802.11s mesh +
+  Yggdrasil + an IPFS node + the protocol), **LoRa gateways** (ESP32 + LoRa, rooftop
+  backbone for messages), **Raspberry Pi / mini-PC nodes**. *Needs funding for
+  hardware.*
+- **Phase 3 — Linking islands.** Long-range transports connect local meshes: LoRa
+  across a city, FSO links between rooftops, a satellite gateway per district,
+  Tor / Yggdrasil tunnels where the internet exists.
+- **Phase 4 — Organic growth.** Once the network gives real daily value (free
+  communication, content), growth is self-sustaining — every new node physically
+  widens coverage.
+
+**Firmware & updates without providers:** build on OpenWrt; sign images with a
+threshold (M-of-N) signature in a public transparency log (defense against a targeted
+backdoor); distribute images over the network itself + IPFS + mirrors, not from one
+server. After install, the app updates itself **over the mesh** P2P — removal from the
+stores doesn't kill it. A phone with the app can hand the installer to a neighbour over
+BT / Wi-Fi, so each device seeds the next.
+
+## Support development
+
+Tract is built by **one developer, with no funding** — and, bluntly, no money to put
+it on the App Store or to buy the LoRa antennas, gateways, and relay hardware the next
+phases need. If Tract is useful to you, or you want this kind of infrastructure to
+exist, please consider supporting it. **Help with development is just as welcome as
+money** — see the code, open issues/PRs, port transports, test on devices.
+
+Donations (crypto is borderless and needs no account or platform approval — fill in
+your own addresses):
+
+| Method | Address |
+|---|---|
+| **Monero (XMR)** — privacy-preserving | `<your-xmr-address>` |
+| **Bitcoin (BTC)** | `<your-btc-address>` |
+| **USDT (TRC-20)** | `<your-usdt-trc20-address>` |
+| **TON** | `<your-ton-address>` |
+
+> Fiat donation platforms (GitHub Sponsors, Ko-fi, Liberapay, Buy Me a Coffee) vary in
+> regional availability; Liberapay and crypto are the most widely reachable.
 
 ## Status
 
