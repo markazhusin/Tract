@@ -326,6 +326,17 @@ anonymity:
   Install Tor with `brew install tor` / `apt install tor`. This runs an *external*
   tor over its control port (no CGO), so the node stays a single static binary; if no
   tor is found the node just logs a hint and runs normally on TCP.
+  - **Where Tor itself is blocked — bridges, automatically and indefinitely.** If a
+    direct Tor connection can't bootstrap (the network blocks Tor), the node retries
+    **forever** using pluggable-transport bridges: **Snowflake** primarily — a WebRTC
+    transport whose broker keeps handing out *fresh* volunteer proxies, so there is no
+    fixed address to block — plus **obfs4**. Each retry pulls a new working path.
+    Needs the PT clients (`brew install snowflake obfs4proxy` /
+    `apt install snowflake-client obfs4proxy`); override with
+    `SNOWFLAKE_CLIENT`/`OBFS4PROXY`. Force bridges from the start with
+    `TRACT_TOR_BRIDGES=1`. (Verified that Snowflake breaks through a network that caps
+    direct Tor; full bootstrap then depends on the volunteer proxy you're assigned,
+    which is why it keeps fetching fresh ones.)
 - **Your own public IP / VPS** — if you need a permanent node.
 
 The node listens on `PORT` (default `8877`) and writes to `./data` (identity blobs
